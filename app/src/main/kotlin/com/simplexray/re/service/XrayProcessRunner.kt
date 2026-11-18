@@ -399,7 +399,7 @@ internal class XrayProcessRunner(
 
     private fun stampLogLine(line: String): String {
         val message = GO_LOG_TIMESTAMP_PREFIX.replaceFirst(line, "")
-        return if (message === line) line else "${LocalDateTime.now().format(logTimestampFormat)} $message"
+        return if (message === line) line else formatAppLogLine(message)
     }
 
     companion object {
@@ -408,5 +408,8 @@ internal class XrayProcessRunner(
         private const val STARTUP_PROBE_INTERVAL_MS: Long = 500
         private val GO_LOG_TIMESTAMP_PREFIX = Regex("""^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(\.\d+)? """)
         private val logTimestampFormat = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss.SSS", Locale.US)
+
+        fun formatAppLogLine(message: String): String =
+            "${LocalDateTime.now().format(logTimestampFormat)} $message"
     }
 }
