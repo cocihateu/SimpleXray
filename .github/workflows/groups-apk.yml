@@ -1,0 +1,62 @@
+name: Build SimpleXray Groups APK
+
+on:
+  push:
+    branches: [groups-apk]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: |
+            21
+            25
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 9.9.1
+
+      - name: Install Android build tools
+        run: |
+          ndk_version="$(sed -n 's/^NDK_VERSION=//p' version.properties | tr -d '\r')"
+          sdkmanager "platforms;android-37.2" "build-tools;36.0.0" "ndk;$ndk_version" "cmake;3.22.1"
+
+      - name: Prepare arm64 Xray and bundled routing data
+        run: |
+          version="$(sed -n 's/^XRAY_CORE_VERSION=//p' version.properties | tr -d '\r')"
+          zip="$RUNNER_TEMP/xray-android.zip"
+          curl -fsSL "https://github.com/XTLS/Xray-core/releases/download/$version/Xray-android-arm64-v8a.zip" -o "$zip"
+          mkdir -p third_party/xray-prebuilt/arm64-v8a
+          unzip -p "$zip" xray > third_party/xray-prebuilt/arm64-v8a/libxray.so
+          chmod +x third_party/xray-prebuilt/arm64-v8a/libxray.so
+          curl -fsSL https://github.com/XTLS/Xray-rules-dat/releases/latest/download/geoip-lite.dat -o app/src/main/assets/geoip.dat
+          curl -fsSL https://github.com/XTLS/Xray-rules-dat/releases/latest/download/geosite.dat -o app/src/main/assets/geosite.dat
+
+      - name: Build SimpleTUN for Android
+        working-directory: third_party/simpletun
+        run: zig build android
+
+      - name: Assemble signed debug APK
+        run: gradle :app:assembleDebug -x :app:ensureXrayCore
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SimpleXray-Groups-arm64-v8a
+          path: app/build/outputs/apk/debug/SimpleXray-Groups-arm64-v8a.apk
+          if-no-files-found: error
