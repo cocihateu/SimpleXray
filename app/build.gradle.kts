@@ -1,9 +1,4 @@
 import java.util.Properties
-import java.net.URI
-import java.net.HttpURLConnection
-import java.net.URLConnection
-import java.security.MessageDigest
-import java.util.zip.ZipFile
 import com.google.protobuf.gradle.proto
 
 plugins {
@@ -64,7 +59,12 @@ fun computeVersionCode(versionName: String): Int {
 }
 
 val versionProps = Properties().apply {
-    file("$rootDir/version.properties").inputStream().use { load(it) }
+    file("$rootDir/version.properties").useLines { lines ->
+        lines.filter { it.startsWith("NDK_VERSION=") }
+            .forEach { line ->
+                setProperty(line.substringBefore('='), line.substringAfter('='))
+            }
+    }
 }
 
 val appVersionName = if (project.hasProperty("appVerName")) {
@@ -88,7 +88,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.simplexray.re"
+        applicationId = "com.simplexray.groups"
         versionCode = appVersionCode
         versionName = appVersionName
         targetSdk = 37
@@ -176,8 +176,7 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
-            // Never ship the removed mipstack experiment even if a stale
-            // local artifact is left in the ignored jniLibs directory.
+            // Ship the supported native backends from their configured source directories.
             excludes += "**/libmipstun.so"
         }
         resources {
@@ -210,7 +209,7 @@ android {
     androidComponents {
         onVariants(selector().all()) { variant ->
             variant.outputs.forEach { output ->
-                (output as com.android.build.api.variant.VariantOutput).outputFileName.set("simplexray-arm64-v8a.apk")
+                (output as com.android.build.api.variant.VariantOutput).outputFileName.set("SimpleXray-Groups-arm64-v8a.apk")
             }
         }
     }
@@ -223,6 +222,7 @@ android {
 
     sourceSets {
         getByName("main") {
+            jniLibs.srcDir(rootProject.file("third_party/xray-prebuilt"))
             java {
                 directories.add("src/main/java")
                 directories.add("build/generated/source/proto/main/java")
@@ -273,9 +273,6 @@ dependencies {
     implementation(libs.miuix.squircle)
     implementation(libs.miuix.icons)
     implementation(libs.miuix.nav)
-    implementation(libs.miuix.material)
-    implementation(libs.miuix.glass)
-    implementation(libs.miuix.glass.icons)
     implementation(libs.scripta.editor)
     testImplementation(libs.junit)
     testImplementation(libs.org.json)
@@ -292,109 +289,9 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
     }
 }
 
-val xrayVersion = versionProps.getProperty("XRAY_CORE_VERSION")?.trim() ?: "v26.9.30"
-val xrayZipSha256 = versionProps.getProperty("XRAY_CORE_ZIP_SHA256")?.trim()?.lowercase()
-    ?: error("XRAY_CORE_ZIP_SHA256 is missing from version.properties")
-require(xrayZipSha256.matches(Regex("^[0-9a-f]{64}$"))) {
-    "XRAY_CORE_ZIP_SHA256 must be a 64-character lowercase hex SHA-256"
-}
-val targetJniFile = layout.projectDirectory.file("src/main/jniLibs/arm64-v8a/libxray.so")
-val cachedLibXray = layout.buildDirectory.file("xray-core-cache/$xrayVersion-${xrayZipSha256.take(12)}/libxray.so")
-
 val ensureXrayCore = tasks.register("ensureXrayCore") {
     group = "build"
-    description = "Ensures the verified Xray prebuilt matches version.properties"
-
-    val version = xrayVersion
-    val expectedZipSha = xrayZipSha256
-    val cachedFile = cachedLibXray.get().asFile
-    val targetFile = targetJniFile.asFile
-
-    inputs.property("xrayVersion", version)
-    inputs.property("xrayZipSha256", expectedZipSha)
-    outputs.file(cachedFile)
-    outputs.file(targetFile)
-
-    doLast {
-        if (cachedFile.exists()) {
-            if (!targetFile.exists() || targetFile.length() != cachedFile.length()) {
-                targetFile.parentFile?.mkdirs()
-                cachedFile.copyTo(targetFile, overwrite = true)
-                targetFile.setExecutable(true)
-            }
-            return@doLast
-        }
-
-        println("Downloading Xray-core $version for arm64-v8a...")
-        val downloadUrl = "https://github.com/XTLS/Xray-core/releases/download/$version/Xray-android-arm64-v8a.zip"
-        val zipFile = File(cachedFile.parentFile, "xray-$version.zip")
-        cachedFile.parentFile?.mkdirs()
-
-        try {
-            val connection = URI(downloadUrl).toURL().openConnection() as HttpURLConnection
-            connection.instanceFollowRedirects = true
-            connection.connectTimeout = 15000
-            connection.readTimeout = 60000
-
-            var currentConn: URLConnection = connection
-            var redirects = 0
-            while (redirects < 5) {
-                if (currentConn is HttpURLConnection) {
-                    val code = currentConn.responseCode
-                    if (code in 301..308) {
-                        val location = currentConn.getHeaderField("Location") ?: break
-                        currentConn.disconnect()
-                        currentConn = URI(location).toURL().openConnection()
-                        redirects++
-                        continue
-                    }
-                }
-                break
-            }
-
-            currentConn.getInputStream().use { input ->
-                zipFile.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            }
-
-            val digest = MessageDigest.getInstance("SHA-256")
-            zipFile.inputStream().use { input ->
-                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read <= 0) break
-                    digest.update(buffer, 0, read)
-                }
-            }
-            val actualZipSha = digest.digest().joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
-            if (!actualZipSha.equals(expectedZipSha, ignoreCase = true)) {
-                throw GradleException(
-                    "Xray archive SHA-256 mismatch for $version: expected $expectedZipSha, got $actualZipSha"
-                )
-            }
-
-            ZipFile(zipFile).use { zip ->
-                val entry = zip.getEntry("xray") ?: error("Entry 'xray' not found in downloaded archive")
-                zip.getInputStream(entry).use { entryIn ->
-                    cachedFile.outputStream().use { fileOut ->
-                        entryIn.copyTo(fileOut)
-                    }
-                }
-            }
-            zipFile.delete()
-            cachedFile.setExecutable(true)
-
-            targetFile.parentFile?.mkdirs()
-            cachedFile.copyTo(targetFile, overwrite = true)
-            targetFile.setExecutable(true)
-            println("Successfully verified and installed libxray.so ($version)")
-        } catch (e: Exception) {
-            zipFile.delete()
-            cachedFile.delete()
-            throw GradleException("Failed to download or extract Xray-core $version: ${e.message}", e)
-        }
-    }
+    description = "Xray is supplied by the Windows toolchain in third_party/xray-prebuilt"
 }
 
 tasks.named("preBuild").configure {
@@ -419,4 +316,3 @@ if (project.hasProperty("exportLicenses")) {
         commandLine("python3", "tools/update_licenses.py")
     }
 }
-

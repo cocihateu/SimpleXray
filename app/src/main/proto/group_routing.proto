@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package xray.app.router.command;
+option java_package = "com.xray.app.router.command";
+option java_multiple_files = true;
+
+message OverrideBalancerTargetRequest {
+  string balancerTag = 1;
+  string target = 2;
+}
+
+message OverrideBalancerTargetResponse {}
+
+service RoutingService {
+  rpc OverrideBalancerTarget(OverrideBalancerTargetRequest) returns (OverrideBalancerTargetResponse) {}
+}

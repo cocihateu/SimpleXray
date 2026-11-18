@@ -74,13 +74,12 @@ import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.SnackbarHostState
 import top.yukonga.miuix.kmp.basic.Surface
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.glass.GlassBottomSheet
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Close
+import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import com.simplexray.re.ui.components.ConfirmOverlayDialog
-import com.simplexray.re.ui.scaffold.LocalLayerBackdrop
 import java.io.File
 
 private const val TAG = "ConfigScreen"
@@ -100,13 +99,16 @@ fun ConfigScreen(
     val isMasterDetailSupported = isLandscape && with(LocalDensity.current) {
         LocalWindowInfo.current.containerSize.width >= 840.dp.roundToPx()
     }
-    val topPadding = paddingValues.calculateTopPadding()
     val bottomPadding = paddingValues.calculateBottomPadding().coerceAtLeast(12.dp)
 
     val files by mainViewModel.configFiles.collectAsStateWithLifecycle()
     val selectedFile by mainViewModel.selectedConfigFile.collectAsStateWithLifecycle()
     var selectedFileForDetail by remember { mutableStateOf<File?>(null) }
     var isEditorExpanded by remember { mutableStateOf(false) }
+    var showSubscriptionSheet by remember { mutableStateOf(false) }
+    val openSubscriptionSheet = {
+        showSubscriptionSheet = true
+    }
 
     BackHandler(enabled = isEditorExpanded) {
         isEditorExpanded = false
@@ -138,7 +140,7 @@ fun ConfigScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = 480.dp)
-                    .padding(start = 24.dp, end = 24.dp, top = topPadding + 24.dp, bottom = bottomPadding + 12.dp)
+                    .padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = bottomPadding + 12.dp)
                     .verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
@@ -179,6 +181,11 @@ fun ConfigScreen(
                             summary = stringResource(R.string.import_from_local_file_summary),
                             onClick = { filePickerLauncher.launch(arrayOf("*/*")) }
                         )
+                        ArrowPreference(
+                            title = stringResource(R.string.subscription_title),
+                            summary = stringResource(R.string.subscription_entry_summary),
+                            onClick = openSubscriptionSheet
+                        )
                     }
                 }
             }
@@ -207,6 +214,7 @@ fun ConfigScreen(
                         onDeleteConfigClick = onDeleteConfigClick,
                         onCreateNewConfigFileAndEdit = onCreateNewConfigFileAndEdit,
                         onImportConfigFromClipboard = onImportConfigFromClipboard,
+                        onImportSubscription = openSubscriptionSheet,
                         mainViewModel = mainViewModel,
                         listState = listState,
                         isWideScreen = true,
@@ -219,7 +227,7 @@ fun ConfigScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .padding(top = topPadding, start = if (isEditorExpanded) 0.dp else 8.dp)
+                    .padding(start = if (isEditorExpanded) 0.dp else 8.dp)
             ) {
                 if (selectedFileForDetail != null) {
                     val activeFile = selectedFileForDetail!!
@@ -283,10 +291,18 @@ fun ConfigScreen(
             onDeleteConfigClick = onDeleteConfigClick,
             onCreateNewConfigFileAndEdit = onCreateNewConfigFileAndEdit,
             onImportConfigFromClipboard = onImportConfigFromClipboard,
+            onImportSubscription = openSubscriptionSheet,
             mainViewModel = mainViewModel,
             listState = listState,
             isWideScreen = false,
             paddingValues = paddingValues
+        )
+    }
+
+    if (showSubscriptionSheet) {
+        MihomoSubscriptionSheet(
+            mainViewModel = mainViewModel,
+            onDismiss = { showSubscriptionSheet = false }
         )
     }
 }
@@ -303,12 +319,12 @@ private fun ConfigListPane(
     onDeleteConfigClick: (File) -> Unit,
     onCreateNewConfigFileAndEdit: () -> Unit,
     onImportConfigFromClipboard: () -> Unit,
+    onImportSubscription: () -> Unit,
     mainViewModel: MainViewModel,
     listState: LazyListState,
     isWideScreen: Boolean,
     paddingValues: PaddingValues = PaddingValues()
 ) {
-    val topPadding = paddingValues.calculateTopPadding() + 12.dp
     val bottomPadding = paddingValues.calculateBottomPadding().coerceAtLeast(12.dp)
     val showDeleteDialog = remember { mutableStateOf<File?>(null) }
     var showAddConfigSheet by remember { mutableStateOf(false) }
@@ -375,7 +391,7 @@ private fun ConfigListPane(
     Column(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.fillMaxHeight(),
-            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = topPadding, bottom = bottomPadding),
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = bottomPadding),
             state = listState
         ) {
             item(key = "add_config_item") {
@@ -523,10 +539,9 @@ private fun ConfigListPane(
     }
 
     if (showAddConfigSheet) {
-        GlassBottomSheet(
+        OverlayBottomSheet(
             title = stringResource(R.string.add_config_profile),
             show = true,
-            backdrop = LocalLayerBackdrop.current,
             onDismissRequest = { showAddConfigSheet = false },
             startAction = {
                 IconButton(onClick = { showAddConfigSheet = false }) {
@@ -560,6 +575,14 @@ private fun ConfigListPane(
                         onClick = {
                             showAddConfigSheet = false
                             filePickerLauncher.launch(arrayOf("*/*"))
+                        }
+                    )
+                    ArrowPreference(
+                        title = stringResource(R.string.subscription_title),
+                        summary = stringResource(R.string.subscription_entry_summary),
+                        onClick = {
+                            showAddConfigSheet = false
+                            onImportSubscription()
                         }
                     )
                 }

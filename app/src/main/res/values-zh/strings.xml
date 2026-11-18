@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="app_name" translatable="false">SimpleXray Groups</string>
     <!-- SOCKS 本地入站设置 -->
     <string name="socks_address">SOCKS 入站地址</string>
     <string name="socks_address_summary">Xray 本地 SOCKS5 代理服务的绑定监听 IP 地址</string>

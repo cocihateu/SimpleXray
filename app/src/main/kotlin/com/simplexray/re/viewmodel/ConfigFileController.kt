@@ -26,6 +26,7 @@ internal class ConfigFileController(
     private val isVpnEnabled: () -> Boolean,
     private val sendEvent: (MainViewUiEvent) -> Unit,
     private val onConfigSelected: (File?) -> Unit,
+    private val onConfigRefreshed: () -> Unit,
 ) {
     private val _configFiles = MutableStateFlow<List<File>>(emptyList())
     val configFiles: StateFlow<List<File>> = _configFiles.asStateFlow()
@@ -224,6 +225,7 @@ internal class ConfigFileController(
         _selectedConfigFile.value = file
         prefs.selectedConfigPath = file?.absolutePath
         if (changed) onConfigSelected(file)
+        onConfigRefreshed()
     }
 
     companion object {

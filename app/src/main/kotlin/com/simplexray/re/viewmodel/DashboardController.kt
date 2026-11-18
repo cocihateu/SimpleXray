@@ -1,19 +1,28 @@
 package com.simplexray.re.viewmodel
 
+import android.content.Context
 import android.util.Log
 import com.simplexray.re.common.ConfigUtils
 import com.simplexray.re.common.CoreStatsClient
 import com.simplexray.re.common.TcpPing
+import com.simplexray.re.common.config.GroupProfile
+import com.simplexray.re.common.config.GroupProfileStore
 import com.simplexray.re.prefs.Preferences
+import com.simplexray.re.service.GroupRuntimeStatus
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -22,6 +31,7 @@ import java.io.File
 private const val TAG = "DashboardController"
 
 internal class DashboardController(
+    context: Context,
     private val prefs: Preferences,
     private val scope: CoroutineScope,
     private val selectedConfig: StateFlow<File?>,
@@ -31,6 +41,11 @@ internal class DashboardController(
     private var coreStatsClient: CoreStatsClient? = null
     private val statsClientLock = Any()
     private var latencyTestJob: Job? = null
+    private val groupProfileStore = GroupProfileStore(context)
+    private val groupProfileLock = Any()
+    private var groupProfileRefreshJob: Job? = null
+    private var groupProfileObservationJob: Job? = null
+    private var groupProfilePath: String? = null
 
     private val _coreStatsState = MutableStateFlow(CoreStatsState())
     val coreStatsState: StateFlow<CoreStatsState> = _coreStatsState.asStateFlow()
@@ -40,6 +55,19 @@ internal class DashboardController(
 
     private val _outboundLatency = MutableStateFlow<Map<String, OutboundLatency>>(emptyMap())
     val outboundLatency: StateFlow<Map<String, OutboundLatency>> = _outboundLatency.asStateFlow()
+
+    private val _groupProfile = MutableStateFlow(
+        GroupProfile(groups = emptyList(), targetStrategies = emptyMap())
+    )
+    val groupProfile: StateFlow<GroupProfile> = _groupProfile.asStateFlow()
+
+    val activeGroupNodes: StateFlow<Map<String, String>> = combine(
+        selectedConfig,
+        GroupRuntimeStatus.activePath,
+        GroupRuntimeStatus.activeNodes,
+    ) { file, activePath, nodes ->
+        if (file != null && file.absolutePath == activePath) nodes else emptyMap()
+    }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
 
     fun reset() {
         _coreStatsState.value = CoreStatsState()
@@ -98,13 +126,72 @@ internal class DashboardController(
     }
 
     suspend fun refreshOutboundNodes() {
-        val file = selectedConfig.value ?: return
-        val content = withContext(Dispatchers.IO) {
-            runCatching { file.readText() }.getOrNull()
-        } ?: return
-        val nodes = ConfigUtils.extractOutbounds(content)
-        _outboundNodes.value = nodes
-        Log.d(TAG, "Refreshed ${nodes.size} outbound nodes from ${file.name}")
+        refreshConfig()?.join()
+    }
+
+    fun refreshConfig(): Job? = synchronized(groupProfileLock) {
+        groupProfileRefreshJob?.cancel()
+        groupProfileObservationJob?.cancel()
+        groupProfileRefreshJob = null
+        groupProfileObservationJob = null
+        groupProfilePath = null
+        _outboundNodes.value = emptyList()
+        _groupProfile.value = GroupProfile(groups = emptyList(), targetStrategies = emptyMap())
+
+        val file = selectedConfig.value ?: return@synchronized null
+        val path = file.absolutePath
+        val job = scope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+            val refreshJob = currentCoroutineContext()[Job]
+            val content = runCatching { file.readText() }.getOrElse { e ->
+                Log.e(TAG, "Error reading config file: ${file.name}", e)
+                return@launch
+            }
+            val nodes = ConfigUtils.extractOutbounds(content)
+            val nodeTags = nodes.map { it.tag }
+            synchronized(groupProfileLock) {
+                if (groupProfileRefreshJob === refreshJob) {
+                    val profile = groupProfileStore.load(path, nodeTags)
+                    if (selectedConfig.value?.absolutePath == path) {
+                        _outboundNodes.value = nodes
+                        _groupProfile.value = profile
+                        groupProfilePath = path
+                        groupProfileObservationJob = scope.launch(Dispatchers.IO) {
+                            groupProfileStore.observe(path, nodeTags).collect {
+                                synchronized(groupProfileLock) {
+                                    if (groupProfileRefreshJob === refreshJob) {
+                                        // Resolve queued notifications from current storage under the save lock.
+                                        val updated = groupProfileStore.load(path, nodeTags)
+                                        if (selectedConfig.value?.absolutePath == path) {
+                                            _groupProfile.value = updated
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Log.d(TAG, "Refreshed ${nodes.size} outbound nodes from ${file.name}")
+                    }
+                }
+            }
+        }
+        groupProfileRefreshJob = job
+        job.start()
+        job
+    }
+
+    fun saveGroupProfile(profile: GroupProfile) {
+        synchronized(groupProfileLock) {
+            val path = groupProfilePath
+            val nodeTags = _outboundNodes.value.map { it.tag }
+            if (path != null && selectedConfig.value?.absolutePath == path &&
+                profile.isValid(nodeTags.toSet())
+            ) {
+                groupProfileStore.save(path, profile)
+                val updated = groupProfileStore.load(path, nodeTags)
+                if (selectedConfig.value?.absolutePath == path) {
+                    _groupProfile.value = updated
+                }
+            }
+        }
     }
 
     suspend fun testOutboundLatency() {

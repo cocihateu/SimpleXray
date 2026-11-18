@@ -15,6 +15,7 @@ import com.simplexray.re.common.ConfigUtils
 import com.simplexray.re.common.SocksAuthenticatorInstaller
 import com.simplexray.re.common.ROUTE_APP_LIST
 import com.simplexray.re.common.ThemeMode
+import com.simplexray.re.common.config.GroupProfile
 import com.simplexray.re.data.source.FileManager
 import com.simplexray.re.prefs.LogLevel
 import com.simplexray.re.prefs.Preferences
@@ -59,6 +60,7 @@ class MainViewModel(application: Application) :
             { isVpnEnabled() },
             { _uiEvent.trySend(it) },
             { file -> settingsController.syncSocksCredentialsFromConfig(file?.absolutePath) },
+            { dashboardController.refreshConfig() },
         )
     }
 
@@ -70,6 +72,21 @@ class MainViewModel(application: Application) :
             viewModelScope,
             { isVpnEnabled() },
             { message -> showSnackbar(message) },
+        )
+    }
+
+    private val mihomoSubscriptionController by lazy {
+        MihomoSubscriptionController(
+            application,
+            prefs,
+            fileManager,
+            viewModelScope,
+            configFileController.selectedConfigFile,
+            { isVpnEnabled() },
+            { file ->
+                configFileController.updateSelectedConfigFile(file)
+                configFileController.refreshConfigFileList()
+            },
         )
     }
 
@@ -100,8 +117,9 @@ class MainViewModel(application: Application) :
         )
     }
 
-    private val dashboardController by lazy {
+    private val dashboardController: DashboardController by lazy {
         DashboardController(
+            application,
             prefs,
             viewModelScope,
             configFileController.selectedConfigFile,
@@ -139,6 +157,12 @@ class MainViewModel(application: Application) :
     val outboundLatency: StateFlow<Map<String, OutboundLatency>>
         get() = dashboardController.outboundLatency
 
+    val groupProfile: StateFlow<GroupProfile>
+        get() = dashboardController.groupProfile
+
+    val activeGroupNodes: StateFlow<Map<String, String>>
+        get() = dashboardController.activeGroupNodes
+
     val isServiceEnabled: StateFlow<Boolean>
         get() = vpnServiceController.isServiceEnabled
 
@@ -157,6 +181,9 @@ class MainViewModel(application: Application) :
 
     val selectedConfigFile: StateFlow<File?>
         get() = configFileController.selectedConfigFile
+
+    val mihomoSubscriptionState: StateFlow<MihomoSubscriptionState>
+        get() = mihomoSubscriptionController.state
 
     val geoipDownloadProgress: StateFlow<String?>
         get() = ruleFileController.geoipDownloadProgress
@@ -264,6 +291,8 @@ class MainViewModel(application: Application) :
      */
     suspend fun refreshOutboundNodes() = dashboardController.refreshOutboundNodes()
 
+    fun saveGroupProfile(profile: GroupProfile) = dashboardController.saveGroupProfile(profile)
+
     /**
      * Latency-tests every TCP-capable outbound endpoint (1-RTT TCP connect,
      * independent of the core). Called when the dashboard is shown and on
@@ -276,6 +305,10 @@ class MainViewModel(application: Application) :
     fun refreshLatency() = dashboardController.refreshLatency()
 
     suspend fun importConfigFromClipboard(): String? = configFileController.importConfigFromClipboard()
+
+    fun importMihomoSubscriptionUrl(url: String) = mihomoSubscriptionController.importUrl(url)
+
+    fun importMihomoSubscriptionFile(uri: Uri) = mihomoSubscriptionController.importFile(uri)
 
     fun deleteConfigFile(file: File) = configFileController.deleteConfigFile(file)
 

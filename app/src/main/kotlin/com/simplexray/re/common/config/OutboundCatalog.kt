@@ -8,7 +8,7 @@ import java.net.Inet6Address
 import java.net.InetAddress
 
 internal object OutboundCatalog {
-    private val EXCLUDED_OUTBOUND_PROTOCOLS = setOf("freedom", "blackhole", "dns")
+    private val EXCLUDED_OUTBOUND_PROTOCOLS = setOf("freedom", "direct", "blackhole", "block", "dns", "loopback")
 
     // UDP-only protocols that cannot be latency-tested via TCP connect.
     private val UDP_ONLY_OUTBOUND_PROTOCOLS = setOf("wireguard", "hysteria", "hysteria2")

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="outbound_groups">出站组</string>
+    <string name="outbound_group_create">创建组</string>
+    <string name="outbound_group_empty">创建命名组，组合节点、内置目标和嵌套组。</string>
+    <string name="outbound_group_edit">编辑组 %1$s</string>
+    <string name="outbound_group_name">组名（如 S）</string>
+    <string name="outbound_group_primary">首选目标</string>
+    <string name="outbound_group_fallbacks">有序备用目标</string>
+    <string name="outbound_group_primary_only">跟随首选目标。</string>
+    <string name="outbound_group_live_leaf">实时生效节点</string>
+    <string name="outbound_group_live_idle">空闲 / 等待实时状态</string>
+    <string name="outbound_group_interval_seconds">备用目标检查间隔（秒）</string>
+    <string name="outbound_group_recovery_interval_seconds">首选目标恢复检查间隔（秒）</string>
+    <string name="outbound_group_recovery_hint">首选目标健康时依据业务失败信号感知故障；仅在使用备用目标期间执行首选目标恢复检查。</string>
+    <string name="outbound_group_trust_seconds">信任时长（秒）</string>
+    <string name="outbound_group_target_node">节点：%1$s</string>
+    <string name="outbound_group_target_builtin">内置：%1$s</string>
+    <string name="outbound_group_target_group">组：%1$s</string>
+    <string name="outbound_group_ordered_target">%1$d. %2$s</string>
+    <string name="outbound_group_select_target">选择节点、内置目标或组</string>
+    <string name="outbound_group_fallback_target">备用目标</string>
+    <string name="outbound_group_add_fallback">添加备用目标</string>
+    <string name="outbound_group_fallback_order_hint">按尝试顺序添加节点、内置目标或组。</string>
+    <string name="outbound_group_move_up">上移 %1$s</string>
+    <string name="outbound_group_move_down">下移 %1$s</string>
+    <string name="outbound_group_remove_fallback">移除 %1$s</string>
+    <string name="outbound_group_validation_hint">完善组设置，并将嵌套组连接为无环结构。</string>
+    <string name="outbound_group_target_strategy">目标策略</string>
+    <string name="outbound_group_strategy_original">保留原配置（配置默认值）</string>
+    <string name="outbound_group_strategy_force_ip">ForceIP（强制 IP）</string>
+    <string name="outbound_group_strategy_as_is">AsIs（保持原样）</string>
+</resources>

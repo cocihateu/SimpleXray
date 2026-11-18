@@ -1,5 +1,6 @@
 package com.simplexray.re.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -14,10 +15,14 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -34,6 +39,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.simplexray.re.R
 import com.simplexray.re.common.ConfigUtils
+import com.simplexray.re.common.config.GroupProfile
+import com.simplexray.re.common.config.OutboundGroup
 import com.simplexray.re.common.formatBytes
 import com.simplexray.re.common.formatNumber
 import com.simplexray.re.common.formatUptime
@@ -50,6 +57,7 @@ import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 private const val LatencyStaleSeconds = 60L
@@ -63,15 +71,17 @@ fun DashboardScreen(
     val coreStats by mainViewModel.coreStatsState.collectAsStateWithLifecycle()
     val outboundNodes by mainViewModel.outboundNodes.collectAsStateWithLifecycle()
     val outboundLatency by mainViewModel.outboundLatency.collectAsStateWithLifecycle()
+    val groupProfile by mainViewModel.groupProfile.collectAsStateWithLifecycle()
+    val activeGroupNodes by mainViewModel.activeGroupNodes.collectAsStateWithLifecycle()
     val isServiceEnabled by mainViewModel.isServiceEnabled.collectAsStateWithLifecycle()
+    val nodeTags = remember(outboundNodes) { outboundNodes.map { it.tag }.toSet() }
+    var showGroupEditor by remember { mutableStateOf(false) }
+    var editingGroup by remember { mutableStateOf<OutboundGroup?>(null) }
     val lifecycleOwner = LocalLifecycleOwner.current
 
     LaunchedEffect(Unit) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             mainViewModel.refreshOutboundNodes()
-            launch {
-                mainViewModel.testOutboundLatency()
-            }
             launch {
                 while (isActive) {
                     mainViewModel.updateCoreStats()
@@ -84,7 +94,6 @@ fun DashboardScreen(
     val isWideScreen = with(LocalDensity.current) {
         LocalWindowInfo.current.containerSize.width >= 600.dp.roundToPx()
     }
-    val topPadding = paddingValues.calculateTopPadding() + 12.dp
     val bottomPadding = paddingValues.calculateBottomPadding().coerceAtLeast(12.dp)
 
     Box(
@@ -97,7 +106,7 @@ fun DashboardScreen(
                 .then(
                     if (isWideScreen) Modifier.widthIn(max = 840.dp) else Modifier
                 ),
-            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = topPadding, bottom = bottomPadding)
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = bottomPadding)
         ) {
             item {
                 SmallTitle(text = stringResource(id = R.string.traffic_info))
@@ -174,6 +183,57 @@ fun DashboardScreen(
                 Spacer(modifier = Modifier.height(12.dp))
             }
 
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    SmallTitle(
+                        text = stringResource(R.string.outbound_groups),
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(
+                        onClick = {
+                            editingGroup = null
+                            showGroupEditor = true
+                        },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = stringResource(R.string.outbound_group_create),
+                            tint = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                if (groupProfile.groups.isEmpty()) {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = stringResource(R.string.outbound_group_empty),
+                            modifier = Modifier.padding(16.dp),
+                            style = MiuixTheme.textStyles.body2,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+            }
+            items(groupProfile.groups, key = { "outbound_group:${it.tag}" }) { group ->
+                OutboundGroupCard(
+                    group = group,
+                    activeLeaf = activeGroupNodes[group.tag],
+                    onEdit = {
+                        editingGroup = group
+                        showGroupEditor = true
+                    }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            item {
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
             if (outboundNodes.isNotEmpty()) {
                 item {
                     Row(
@@ -197,11 +257,25 @@ fun DashboardScreen(
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                 }
-                items(outboundNodes, key = { it.tag }) { node ->
+                items(outboundNodes, key = { "outbound_node:${it.tag}" }) { node ->
                     OutboundNodeCard(
                         node = node,
                         latency = outboundLatency[node.tag],
-                        serviceEnabled = isServiceEnabled
+                        serviceEnabled = isServiceEnabled,
+                        targetStrategy = groupProfile.targetStrategies[node.tag],
+                        onTargetStrategyChange = { strategy ->
+                            val targetStrategies = if (strategy == null) {
+                                groupProfile.targetStrategies - node.tag
+                            } else {
+                                groupProfile.targetStrategies + (node.tag to strategy)
+                            }
+                            mainViewModel.saveGroupProfile(
+                                GroupProfile(
+                                    groups = groupProfile.groups,
+                                    targetStrategies = targetStrategies
+                                )
+                            )
+                        }
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                 }
@@ -210,6 +284,19 @@ fun DashboardScreen(
                 }
             }
         }
+    }
+
+    if (showGroupEditor) {
+        OutboundGroupEditor(
+            profile = groupProfile,
+            nodeTags = nodeTags,
+            group = editingGroup,
+            onSave = { profile ->
+                mainViewModel.saveGroupProfile(profile)
+                showGroupEditor = false
+            },
+            onDismiss = { showGroupEditor = false }
+        )
     }
 }
 
@@ -236,10 +323,101 @@ fun StatRow(label: String, value: String) {
 }
 
 @Composable
+private fun OutboundGroupCard(
+    group: OutboundGroup,
+    activeLeaf: String?,
+    onEdit: () -> Unit
+) {
+    val fallbackSummary = if (group.fallbacks.isEmpty()) {
+        stringResource(R.string.outbound_group_primary_only)
+    } else {
+        group.fallbacks.mapIndexed { index, target ->
+            stringResource(
+                R.string.outbound_group_ordered_target,
+                index + 1,
+                outboundGroupTargetLabel(target)
+            )
+        }.joinToString("\n")
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onEdit)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = group.tag,
+                    style = MiuixTheme.textStyles.title4,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = onEdit) {
+                    Icon(
+                        painter = painterResource(R.drawable.edit),
+                        contentDescription = stringResource(R.string.outbound_group_edit, group.tag),
+                        tint = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                    )
+                }
+            }
+            OutboundGroupDetail(
+                label = stringResource(R.string.outbound_group_primary),
+                value = outboundGroupTargetLabel(group.primary)
+            )
+            OutboundGroupDetail(
+                label = stringResource(R.string.outbound_group_live_leaf),
+                value = activeLeaf ?: stringResource(R.string.outbound_group_live_idle)
+            )
+            OutboundGroupDetail(
+                label = stringResource(R.string.outbound_group_fallbacks),
+                value = fallbackSummary
+            )
+            StatRow(
+                label = stringResource(R.string.outbound_group_interval_seconds),
+                value = group.intervalSeconds.toString()
+            )
+            StatRow(
+                label = stringResource(R.string.outbound_group_recovery_interval_seconds),
+                value = group.recoveryIntervalSeconds.toString()
+            )
+            StatRow(
+                label = stringResource(R.string.outbound_group_trust_seconds),
+                value = group.trustSeconds.toString()
+            )
+        }
+    }
+}
+
+@Composable
+private fun OutboundGroupDetail(label: String, value: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+    ) {
+        Text(
+            text = label,
+            style = MiuixTheme.textStyles.body2,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+        )
+        Text(
+            text = value,
+            style = MiuixTheme.textStyles.body1,
+            color = MiuixTheme.colorScheme.onSurface
+        )
+    }
+}
+
+@Composable
 private fun OutboundNodeCard(
     node: ConfigUtils.OutboundInfo,
     latency: OutboundLatency?,
-    serviceEnabled: Boolean
+    serviceEnabled: Boolean,
+    targetStrategy: String?,
+    onTargetStrategyChange: (String?) -> Unit
 ) {
     val nowSeconds = System.currentTimeMillis() / 1000
     val stale = latency != null && nowSeconds - latency.lastTryTime > LatencyStaleSeconds
@@ -258,31 +436,55 @@ private fun OutboundNodeCard(
     }
 
     Card(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = node.tag,
+                        fontSize = MiuixTheme.textStyles.body1.fontSize,
+                        color = MiuixTheme.colorScheme.onSurface,
+                        maxLines = 1
+                    )
+                    Text(
+                        text = node.protocol,
+                        fontSize = MiuixTheme.textStyles.body2.fontSize,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        maxLines = 1
+                    )
+                }
                 Text(
-                    text = node.tag,
+                    text = text,
                     fontSize = MiuixTheme.textStyles.body1.fontSize,
-                    color = MiuixTheme.colorScheme.onSurface,
-                    maxLines = 1
-                )
-                Text(
-                    text = node.protocol,
-                    fontSize = MiuixTheme.textStyles.body2.fontSize,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    maxLines = 1
+                    color = color,
+                    fontFamily = FontFamily.Monospace
                 )
             }
-            Text(
-                text = text,
-                fontSize = MiuixTheme.textStyles.body1.fontSize,
-                color = color,
-                fontFamily = FontFamily.Monospace
+            OverlayDropdownPreference(
+                title = stringResource(R.string.outbound_group_target_strategy),
+                items = listOf(
+                    stringResource(R.string.outbound_group_strategy_original),
+                    stringResource(R.string.outbound_group_strategy_force_ip),
+                    stringResource(R.string.outbound_group_strategy_as_is)
+                ),
+                selectedIndex = when (targetStrategy) {
+                    "ForceIP" -> 1
+                    "AsIs" -> 2
+                    else -> 0
+                },
+                onSelectedIndexChange = { index ->
+                    onTargetStrategyChange(
+                        when (index) {
+                            1 -> "ForceIP"
+                            2 -> "AsIs"
+                            else -> null
+                        }
+                    )
+                }
             )
         }
     }

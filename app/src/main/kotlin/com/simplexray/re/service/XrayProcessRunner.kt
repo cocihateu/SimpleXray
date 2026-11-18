@@ -10,6 +10,7 @@ import android.util.Log
 import com.simplexray.re.common.ConfigUtils
 import com.simplexray.re.common.ConfigUtils.extractPortsFromJson
 import com.simplexray.re.common.CoreStatsClient
+import com.simplexray.re.common.config.GroupProfileStore
 import com.simplexray.re.data.source.LogFileManager
 import com.simplexray.re.prefs.Preferences
 import com.simplexray.re.prefs.TunnelMode
@@ -18,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.File
 import java.io.IOException
@@ -77,6 +79,7 @@ internal class XrayProcessRunner(
     private var job: Job? = null
     private var startAttempt = 0
     private var scope: CoroutineScope? = null
+    @Volatile private var groupSession: GroupCoreSession? = null
 
     fun resetAttempt() {
         startAttempt = 0
@@ -94,6 +97,7 @@ internal class XrayProcessRunner(
     }
 
     fun kill() {
+        groupSession?.close()
         process?.destroy()
         process = null
         val currentPid = pid
@@ -120,6 +124,7 @@ internal class XrayProcessRunner(
         var currentProcess: Process? = null
         var currentPid = -1
         var reader: BufferedReader? = null
+        var session: GroupCoreSession? = null
 
         try {
             val prefs = Preferences(application)
@@ -147,11 +152,6 @@ internal class XrayProcessRunner(
             val rawConfigContent = runCatching { configFile.readText() }.getOrDefault("")
             Log.d(tag, "Loaded raw user config: ${configFile.name}, ${rawConfigContent.length} chars")
 
-            ConfigUtils.parseConfigError(rawConfigContent)?.let { parseErr ->
-                callbacks.onStartFailure("Failed to parse config (${configFile.name}): $parseErr")
-                return
-            }
-
             val sanitizedConfigContent = ConfigUtils.sanitizeConfig(rawConfigContent, prefs)
 
             val isYaml = configFile.extension.lowercase() in listOf("yaml", "yml")
@@ -165,7 +165,20 @@ internal class XrayProcessRunner(
             prefs.apiPort = apiPort
             prefs.apiAddress = "127.0.0.1"
 
-            val finalConfigContent = ConfigUtils.injectStatsServiceIntoSanitized(prefs, sanitizedConfigContent)
+            val configWithApi = ConfigUtils.injectStatsServiceIntoSanitized(prefs, sanitizedConfigContent)
+            val nodes = ConfigUtils.extractOutbounds(sanitizedConfigContent).map { it.tag }
+            val finalConfigContent = if (nodes.isEmpty()) configWithApi else {
+                val store = GroupProfileStore(application)
+                val profile = store.load(selectedConfigPath, nodes)
+                val usedPorts = (ports + apiPort + prefs.httpPort).toMutableSet()
+                fun allocatePort(): Int = requireNotNull(findAvailablePort(usedPorts)) {
+                    "No local port available for outbound groups"
+                }.also { usedPorts.add(it) }
+                val groups = OutboundGroupConfig(nodes, profile, allocatePort(), ::allocatePort)
+                session = GroupCoreSession(store, selectedConfigPath, groups, apiPort)
+                groupSession = session
+                JSONObject(configWithApi).also { groups.inject(it, application.filesDir, application.cacheDir) }.toString()
+            }
             Log.d(tag, "Injected final config (${finalConfigContent.length} chars) ready for stdin ($format)")
 
             val useXrayTun = prefs.tunnelMode == TunnelMode.XrayTun && !prefs.disableVpn
@@ -241,6 +254,7 @@ internal class XrayProcessRunner(
                             isStarted = true
                             startAttempt = 0
                             Log.d(tag, "Xray core ready (gRPC API reachable), updating VpnStateHub.")
+                            session?.start(scope) { restart(scope) }
                             callbacks.onCoreReady()
                             break
                         }
@@ -273,12 +287,14 @@ internal class XrayProcessRunner(
             while (line != null) {
                 val batch = mutableListOf<String>()
                 val stampedLine = stampLogLine(line)
+                session?.acceptLog(line)
                 Log.d(tag, "XrayLog: $stampedLine")
                 batch.add(stampedLine)
                 callbacks.emitLog(stampedLine)
 
                 while (activeReader.ready() && batch.size < 50) {
                     val nextLine = activeReader.readLine() ?: break
+                    session?.acceptLog(nextLine)
                     val stampedNext = stampLogLine(nextLine)
                     Log.d(tag, "XrayLog: $stampedNext")
                     batch.add(stampedNext)
@@ -311,6 +327,7 @@ internal class XrayProcessRunner(
                 callbacks.onStartFailure("Error executing native Xray: ${e.message}")
             }
         } finally {
+            session?.close()
             runCatching { reader?.close() }
             runCatching { stdoutPfd?.close() }
             Log.d(tag, "Native Xray process task finished.")
@@ -391,7 +408,5 @@ internal class XrayProcessRunner(
         private const val STARTUP_PROBE_INTERVAL_MS: Long = 500
         private val GO_LOG_TIMESTAMP_PREFIX = Regex("""^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(\.\d+)? """)
         private val logTimestampFormat = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss.SSS", Locale.US)
-        fun formatAppLogLine(message: String): String =
-            "${LocalDateTime.now().format(logTimestampFormat)} $message"
     }
 }

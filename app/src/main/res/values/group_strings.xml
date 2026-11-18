@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="outbound_groups">Outbound groups</string>
+    <string name="outbound_group_create">Create group</string>
+    <string name="outbound_group_empty">Create a named group to organize nodes, built-in targets, and nested groups.</string>
+    <string name="outbound_group_edit">Edit group %1$s</string>
+    <string name="outbound_group_name">Group name (e.g. S)</string>
+    <string name="outbound_group_primary">Primary</string>
+    <string name="outbound_group_fallbacks">Ordered fallbacks</string>
+    <string name="outbound_group_primary_only">Follow the primary target.</string>
+    <string name="outbound_group_live_leaf">Live leaf</string>
+    <string name="outbound_group_live_idle">Idle / awaiting live status</string>
+    <string name="outbound_group_interval_seconds">Standby check interval (seconds)</string>
+    <string name="outbound_group_recovery_interval_seconds">Primary recovery check interval (seconds)</string>
+    <string name="outbound_group_recovery_hint">A healthy primary uses business-failure signals to detect failures. Recovery checks run only while the group uses a fallback.</string>
+    <string name="outbound_group_trust_seconds">Trust period (seconds)</string>
+    <string name="outbound_group_target_node">Node: %1$s</string>
+    <string name="outbound_group_target_builtin">Built-in: %1$s</string>
+    <string name="outbound_group_target_group">Group: %1$s</string>
+    <string name="outbound_group_ordered_target">%1$d. %2$s</string>
+    <string name="outbound_group_select_target">Select a node, built-in target, or group</string>
+    <string name="outbound_group_fallback_target">Fallback target</string>
+    <string name="outbound_group_add_fallback">Add fallback</string>
+    <string name="outbound_group_fallback_order_hint">Add nodes, built-in targets, or groups in the order they should be tried.</string>
+    <string name="outbound_group_move_up">Move %1$s up</string>
+    <string name="outbound_group_move_down">Move %1$s down</string>
+    <string name="outbound_group_remove_fallback">Remove %1$s</string>
+    <string name="outbound_group_validation_hint">Complete the group settings and keep nested group links cycle-free.</string>
+    <string name="outbound_group_target_strategy">Target strategy</string>
+    <string name="outbound_group_strategy_original">Preserve original (config default)</string>
+    <string name="outbound_group_strategy_force_ip">ForceIP</string>
+    <string name="outbound_group_strategy_as_is">AsIs</string>
+</resources>
