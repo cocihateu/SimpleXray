@@ -10,6 +10,8 @@
 <sub>Android 14+ (API 34) | arm64-v8a | MPL-2.0</sub>
 </div>
 
+**Groups 分支**可在「配置 → 导入 Mihomo 订阅」中从 URL 或本地 YAML 导入节点与分组。Xray 负责分流，使用 Shadowsocks UDP-over-TCP 或 obfs 等选项的节点通过本地 Mihomo 转发。以下为基础版说明。
+
 SimpleXray 是 Xray-core 的 Android 前端与启动器。它接受完整的 JSON/YAML 配置，在 Android 环境中完成必要适配后，通过 `VpnService` 启动内核；不解析分享链接与订阅。
 
 本仓库基于上游 [SimpleXray](https://github.com/lhear/SimpleXray)。除保留其完整配置模式外，本分支主要增加可选 TUN 数据面、重写的配置处理流程、规则文件管理、Miuix 界面与基准测试工具。

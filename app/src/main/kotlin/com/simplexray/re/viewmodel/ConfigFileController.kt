@@ -31,7 +31,9 @@ internal class ConfigFileController(
     private val _configFiles = MutableStateFlow<List<File>>(emptyList())
     val configFiles: StateFlow<List<File>> = _configFiles.asStateFlow()
 
-    private val _selectedConfigFile = MutableStateFlow<File?>(null)
+    private val _selectedConfigFile = MutableStateFlow<File?>(
+        prefs.selectedConfigPath?.let { File(it) }
+    )
     val selectedConfigFile: StateFlow<File?> = _selectedConfigFile.asStateFlow()
 
     var editingFilePath: String? = null
@@ -177,55 +179,64 @@ internal class ConfigFileController(
     }
 
     private suspend fun rebuildConfigFileList() {
-        val filesDir = application.filesDir
-        val actualFiles =
-            filesDir.listFiles { file -> file.isFile && file.isConfigFile() && file.name != "extra_api.json" }?.toList()
+        val actualFiles = withContext(Dispatchers.IO) {
+            application.filesDir.listFiles { file ->
+                file.isFile && file.isConfigFile() && file.name != "extra_api.json"
+            }?.toList()
                 ?: emptyList()
-        val actualFilesByName = actualFiles.associateBy { it.name }
-        val savedOrder = prefs.configFilesOrder
+        }
+        withContext(Dispatchers.Main.immediate) {
+            val actualFilesByName = actualFiles.associateBy { it.name }
+            val savedOrder = prefs.configFilesOrder
 
-        val newOrder = mutableListOf<File>()
-        val remainingActualFileNames = actualFilesByName.toMutableMap()
+            val newOrder = mutableListOf<File>()
+            val remainingActualFileNames = actualFilesByName.toMutableMap()
 
-        savedOrder.forEach { filename ->
-            actualFilesByName[filename]?.let { file ->
-                newOrder.add(file)
-                remainingActualFileNames.remove(filename)
+            savedOrder.forEach { filename ->
+                actualFilesByName[filename]?.let { file ->
+                    newOrder.add(file)
+                    remainingActualFileNames.remove(filename)
+                }
             }
-        }
 
-        newOrder.addAll(remainingActualFileNames.values.filter { it !in newOrder })
+            newOrder.addAll(remainingActualFileNames.values.filter { it !in newOrder })
 
-        _configFiles.value = newOrder
-        prefs.configFilesOrder = newOrder.map { it.name }
+            _configFiles.value = newOrder
+            prefs.configFilesOrder = newOrder.map { it.name }
 
-        val currentSelectedPath = prefs.selectedConfigPath
-        var fileToSelect: File? = null
+            val currentSelectedPath = prefs.selectedConfigPath
+            var fileToSelect: File? = null
 
-        if (currentSelectedPath != null) {
-            val foundSelected = newOrder.find { it.absolutePath == currentSelectedPath }
-            if (foundSelected != null) {
-                fileToSelect = foundSelected
+            if (currentSelectedPath != null) {
+                val foundSelected = newOrder.find { it.absolutePath == currentSelectedPath }
+                if (foundSelected != null) {
+                    fileToSelect = foundSelected
+                }
             }
-        }
 
-        if (fileToSelect == null) {
-            fileToSelect = newOrder.firstOrNull()
-        }
+            if (fileToSelect == null) {
+                fileToSelect = newOrder.firstOrNull()
+            }
 
-        setSelectedConfig(fileToSelect)
+            setSelectedConfig(fileToSelect)
+        }
     }
 
     fun updateSelectedConfigFile(file: File?) {
-        setSelectedConfig(file)
+        scope.launch(Dispatchers.Main.immediate) {
+            setSelectedConfig(file)
+        }
     }
 
     private fun setSelectedConfig(file: File?) {
         val changed = _selectedConfigFile.value?.absolutePath != file?.absolutePath
-        _selectedConfigFile.value = file
         prefs.selectedConfigPath = file?.absolutePath
-        if (changed) onConfigSelected(file)
-        onConfigRefreshed()
+        _selectedConfigFile.value = file
+        if (changed) {
+            onConfigSelected(file)
+        } else {
+            onConfigRefreshed()
+        }
     }
 
     companion object {

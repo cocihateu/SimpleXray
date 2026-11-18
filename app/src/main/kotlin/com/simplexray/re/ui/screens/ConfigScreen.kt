@@ -14,13 +14,20 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -59,6 +66,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.simplexray.re.R
+import com.simplexray.re.ui.scaffold.LocalLayerBackdrop
 import com.simplexray.re.viewmodel.ConfigEditViewModel
 import com.simplexray.re.viewmodel.MainViewModel
 import kotlinx.coroutines.delay
@@ -74,9 +82,9 @@ import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.SnackbarHostState
 import top.yukonga.miuix.kmp.basic.Surface
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.glass.GlassBottomSheet
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Close
-import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import com.simplexray.re.ui.components.ConfirmOverlayDialog
@@ -99,7 +107,11 @@ fun ConfigScreen(
     val isMasterDetailSupported = isLandscape && with(LocalDensity.current) {
         LocalWindowInfo.current.containerSize.width >= 840.dp.roundToPx()
     }
-    val bottomPadding = paddingValues.calculateBottomPadding().coerceAtLeast(12.dp)
+    val safePadding = WindowInsets.safeDrawing.asPaddingValues()
+    val topPadding = paddingValues.calculateTopPadding()
+        .coerceAtLeast(safePadding.calculateTopPadding())
+    val bottomPadding = paddingValues.calculateBottomPadding()
+        .coerceAtLeast(safePadding.calculateBottomPadding() + 12.dp)
 
     val files by mainViewModel.configFiles.collectAsStateWithLifecycle()
     val selectedFile by mainViewModel.selectedConfigFile.collectAsStateWithLifecycle()
@@ -133,14 +145,16 @@ fun ConfigScreen(
 
     if (files.isEmpty()) {
         Box(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
             contentAlignment = Alignment.Center
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = 480.dp)
-                    .padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = bottomPadding + 12.dp)
+                    .padding(start = 24.dp, end = 24.dp, top = topPadding + 24.dp, bottom = bottomPadding + 12.dp)
                     .verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
@@ -191,7 +205,11 @@ fun ConfigScreen(
             }
         }
     } else if (isMasterDetailSupported) {
-        Row(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+        ) {
             if (!isEditorExpanded) {
                 Box(
                     modifier = Modifier
@@ -227,7 +245,14 @@ fun ConfigScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .padding(start = if (isEditorExpanded) 0.dp else 8.dp)
+                    .padding(
+                        start = if (isEditorExpanded) 0.dp else 8.dp,
+                        top = topPadding,
+                        bottom = safePadding.calculateBottomPadding()
+                    )
+                    .consumeWindowInsets(
+                        PaddingValues(top = topPadding, bottom = safePadding.calculateBottomPadding())
+                    )
             ) {
                 if (selectedFileForDetail != null) {
                     val activeFile = selectedFileForDetail!!
@@ -325,7 +350,11 @@ private fun ConfigListPane(
     isWideScreen: Boolean,
     paddingValues: PaddingValues = PaddingValues()
 ) {
-    val bottomPadding = paddingValues.calculateBottomPadding().coerceAtLeast(12.dp)
+    val safePadding = WindowInsets.safeDrawing.asPaddingValues()
+    val topPadding = paddingValues.calculateTopPadding()
+        .coerceAtLeast(safePadding.calculateTopPadding()) + 12.dp
+    val bottomPadding = paddingValues.calculateBottomPadding()
+        .coerceAtLeast(safePadding.calculateBottomPadding() + 12.dp)
     val showDeleteDialog = remember { mutableStateOf<File?>(null) }
     var showAddConfigSheet by remember { mutableStateOf(false) }
 
@@ -388,10 +417,14 @@ private fun ConfigListPane(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+    ) {
         LazyColumn(
             modifier = Modifier.fillMaxHeight(),
-            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = bottomPadding),
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = topPadding, bottom = bottomPadding),
             state = listState
         ) {
             item(key = "add_config_item") {
@@ -539,9 +572,10 @@ private fun ConfigListPane(
     }
 
     if (showAddConfigSheet) {
-        OverlayBottomSheet(
+        GlassBottomSheet(
             title = stringResource(R.string.add_config_profile),
             show = true,
+            backdrop = LocalLayerBackdrop.current,
             onDismissRequest = { showAddConfigSheet = false },
             startAction = {
                 IconButton(onClick = { showAddConfigSheet = false }) {

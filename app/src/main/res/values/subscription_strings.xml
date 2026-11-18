@@ -7,7 +7,7 @@
     <string name="subscription_import_file">Choose local YAML file</string>
     <string name="subscription_merge_target">Merge nodes and groups into %1$s. Keep its rules, DNS and Lua configuration.</string>
     <string name="subscription_create_target">Create a configuration using the app template, imported nodes and groups.</string>
-    <string name="subscription_policy_hint">The first member is primary; remaining members are ordered fallbacks. App health-based failover replaces select manual choice, url-test latency ranking and load-balance distribution. Nested groups stay linked. Source intervals are retained; app trust and recovery defaults are 120 and 300 seconds. Source policy options are declared in the import summary.</string>
+    <string name="subscription_policy_hint">First target is primary; the rest are ordered fallbacks. Source policies use health-based failover. Nesting and intervals stay; trust/recovery defaults: 120/300 s.</string>
     <string name="subscription_policy_mapped">%1$s (%2$s) maps to primary plus ordered health-based fallbacks.</string>
     <string name="subscription_policy_options">%1$s: App group policy and presentation replace these source options: %2$s.</string>
     <string name="subscription_source_sections">Destination configuration supplies settings for these source sections: %1$s.</string>

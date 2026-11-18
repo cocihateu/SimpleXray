@@ -6,11 +6,17 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -70,6 +76,7 @@ fun DashboardScreen(
 ) {
     val coreStats by mainViewModel.coreStatsState.collectAsStateWithLifecycle()
     val outboundNodes by mainViewModel.outboundNodes.collectAsStateWithLifecycle()
+    val outboundLoadError by mainViewModel.outboundLoadError.collectAsStateWithLifecycle()
     val outboundLatency by mainViewModel.outboundLatency.collectAsStateWithLifecycle()
     val groupProfile by mainViewModel.groupProfile.collectAsStateWithLifecycle()
     val activeGroupNodes by mainViewModel.activeGroupNodes.collectAsStateWithLifecycle()
@@ -94,10 +101,16 @@ fun DashboardScreen(
     val isWideScreen = with(LocalDensity.current) {
         LocalWindowInfo.current.containerSize.width >= 600.dp.roundToPx()
     }
-    val bottomPadding = paddingValues.calculateBottomPadding().coerceAtLeast(12.dp)
+    val safePadding = WindowInsets.safeDrawing.asPaddingValues()
+    val topPadding = paddingValues.calculateTopPadding()
+        .coerceAtLeast(safePadding.calculateTopPadding()) + 12.dp
+    val bottomPadding = paddingValues.calculateBottomPadding()
+        .coerceAtLeast(safePadding.calculateBottomPadding() + 12.dp)
 
     Box(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
         contentAlignment = Alignment.TopCenter
     ) {
         LazyColumn(
@@ -106,8 +119,21 @@ fun DashboardScreen(
                 .then(
                     if (isWideScreen) Modifier.widthIn(max = 840.dp) else Modifier
                 ),
-            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = bottomPadding)
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = topPadding, bottom = bottomPadding)
         ) {
+            outboundLoadError?.let { message ->
+                item {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = message,
+                            modifier = Modifier.padding(16.dp),
+                            style = MiuixTheme.textStyles.body2,
+                            color = MiuixTheme.colorScheme.error
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+            }
             item {
                 SmallTitle(text = stringResource(id = R.string.traffic_info))
                 Card(modifier = Modifier.fillMaxWidth()) {
@@ -207,7 +233,7 @@ fun DashboardScreen(
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                if (groupProfile.groups.isEmpty()) {
+                if (groupProfile.groups.isEmpty() && outboundLoadError == null) {
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Text(
                             text = stringResource(R.string.outbound_group_empty),

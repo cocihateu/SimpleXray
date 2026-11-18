@@ -6,7 +6,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.Inet6Address
 
-/** Maps subscription fields to the Xray-core 26.11.9 outbound configuration contract. */
+/** Builds an Xray outbound or retains the Mihomo wire options for its local adapter. */
 internal object MihomoProxyConverter {
     private val baseKeys = setOf(
         "name", "type", "server", "port", "udp", "tfo", "mptcp", "interface-name",
@@ -46,7 +46,9 @@ internal object MihomoProxyConverter {
             "vless" -> setOf("uuid", "flow", "encryption")
             "vmess" -> setOf("uuid", "alterId", "cipher")
             "trojan" -> setOf("password")
-            "shadowsocks" -> setOf("password", "cipher")
+            "shadowsocks" -> setOf(
+                "password", "cipher", "udp-over-tcp", "udp-over-tcp-version", "plugin", "plugin-opts",
+            )
             "http" -> setOf("username", "password", "headers")
             else -> setOf("username", "password")
         }
@@ -56,12 +58,33 @@ internal object MihomoProxyConverter {
         val port = fields.integer("port", 0)
         if (port !in 1..65535) fields.typeError("port")
 
+        // These wire options belong to the original Mihomo dialer.
+        val shadowsocksExtensions = protocol == "shadowsocks" &&
+            (fields.boolean("udp-over-tcp") || fields.has("udp-over-tcp-version") ||
+                fields.has("plugin") || fields.has("plugin-opts") || fields.has("client-fingerprint"))
+        if (shadowsocksExtensions || fields.boolean("skip-cert-verify") ||
+            (fields.has("udp") && fields.boolean("udp") == false)
+        ) {
+            when (protocol) {
+                "shadowsocks" -> {
+                    fields.requiredText("cipher")
+                    fields.requiredText("password")
+                }
+                "trojan" -> fields.requiredText("password")
+                "vmess", "vless" -> fields.requiredText("uuid")
+            }
+            val mihomoType = when (protocol) {
+                "shadowsocks" -> "ss"
+                "socks" -> "socks5"
+                else -> protocol
+            }
+            val settings = JSONObject(fields.json.toString()).put("type", mihomoType)
+            return JSONObject().put("tag", tag).put("protocol", "mihomo").put("settings", settings)
+        }
+
         if (fields.has("udp")) {
             val udp = fields.boolean("udp")
             if (protocol == "http" && udp) fields.capability("udp", "http-udp")
-            if (protocol != "http" && udp == false) {
-                fields.capability("udp", "outbound-udp-control")
-            }
         }
 
         val endpoint = JSONObject().put("address", address).put("port", port)
@@ -260,9 +283,6 @@ internal object MihomoProxyConverter {
     }
 
     private fun security(fields: MihomoFields, protocol: String, address: String, stream: JSONObject) {
-        if (fields.boolean("skip-cert-verify")) {
-            fields.capability("skip-cert-verify", "tls-verification")
-        }
         val reality = fields.objectValue("reality-opts")
         val tls = fields.boolean("tls", protocol == "trojan")
         val transportHost = stream.optJSONObject("wsSettings")?.optString("host")

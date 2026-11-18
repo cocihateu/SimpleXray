@@ -10,7 +10,7 @@
 <sub>Android 14+ (API 34) | arm64-v8a | MPL-2.0</sub>
 </div>
 
-SimpleXray is an Android launcher and frontend for Xray-core. It accepts complete JSON or YAML configurations, applies Android-specific normalization, and executes the result under `VpnService`. It does not parse share links or subscriptions.
+SimpleXray Groups accepts complete Xray JSON or YAML configurations. In **Config → Import Mihomo subscription**, a subscription URL or local YAML file supplies nodes and groups. Xray routes connections, with a local Mihomo adapter handling nodes that use options such as Shadowsocks UDP-over-TCP or obfs.
 
 This repository is a personal fork of [SimpleXray](https://github.com/lhear/SimpleXray). It keeps the upstream full-configuration model and adds a selectable TUN data plane, a reworked configuration pipeline, rule-file management, a Miuix-based interface, and benchmark tooling.
 

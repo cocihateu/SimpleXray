@@ -7,7 +7,7 @@
     <string name="subscription_import_file">选择本地 YAML 文件</string>
     <string name="subscription_merge_target">将节点与组合并到 %1$s，保留其规则、DNS 与 Lua 配置。</string>
     <string name="subscription_create_target">使用应用模板、导入节点与组创建配置。</string>
-    <string name="subscription_policy_hint">列表首项为首选，其余项按顺序备用。select 手动选择、url-test 延迟排序和 load-balance 负载分配统一映射为应用健康检测与故障转移。嵌套组保持关联，保留源检查间隔，应用默认信任时长与恢复间隔为 120 秒和 300 秒。原策略选项将在导入摘要中说明。</string>
+    <string name="subscription_policy_hint">首项首选，其余按序备用。源策略统一映射为健康检测与故障转移，保留嵌套和检查间隔；信任/恢复默认 120/300 秒。</string>
     <string name="subscription_policy_mapped">%1$s（%2$s）映射为首选与有序健康备用目标。</string>
     <string name="subscription_policy_options">%1$s：以下源选项由应用组策略与界面展示替代：%2$s。</string>
     <string name="subscription_source_sections">以下源配置节采用目标配置中的设置：%1$s。</string>

@@ -6,6 +6,9 @@ We gratefully acknowledge the contributions of these projects.
 ## Core & Native Components
 
 - [Xray-core](https://github.com/XTLS/Xray-core) v26.11.9 | Under Mozilla Public License 2.0
+- [mihomo](https://github.com/MetaCubeX/mihomo/tree/v1.19.34) v1.19.34 | Under GNU General Public License 3.0
+  - The official Android ARM64 executable is packaged as `libmihomo.so`. APK assets in `licenses/mihomo/` include the GPL text, provenance/source notice, and matching tagged source archive; the workflow also publishes the `mihomo-v1.19.34-source` artifact.
+  - [Official release](https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.34) · [Matching source archive](https://github.com/MetaCubeX/mihomo/archive/refs/tags/v1.19.34.tar.gz) · [Bundled notice](../app/src/main/assets/licenses/mihomo/NOTICE.txt)
 - [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) 2.20.0 (75dbc1e) | Under MIT License
 - [compose-miuix-ui](https://github.com/compose-miuix-ui/miuix) | Under Apache License 2.0
 - [scripta](https://github.com/YuKongA/scripta) | Under Apache License 2.0

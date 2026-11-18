@@ -11,6 +11,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      MIHOMO_VERSION: v1.19.34
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,6 +54,14 @@ jobs:
           curl -fsSL https://github.com/XTLS/Xray-rules-dat/releases/latest/download/geoip-lite.dat -o app/src/main/assets/geoip.dat
           curl -fsSL https://github.com/XTLS/Xray-rules-dat/releases/latest/download/geosite.dat -o app/src/main/assets/geosite.dat
 
+      - name: Prepare arm64 mihomo and matching source
+        run: |
+          archive="$RUNNER_TEMP/mihomo-android-arm64-v8-$MIHOMO_VERSION.gz"
+          curl -fsSL "https://github.com/MetaCubeX/mihomo/releases/download/$MIHOMO_VERSION/mihomo-android-arm64-v8-$MIHOMO_VERSION.gz" -o "$archive"
+          gzip -dc "$archive" > third_party/xray-prebuilt/arm64-v8a/libmihomo.so
+          chmod +x third_party/xray-prebuilt/arm64-v8a/libmihomo.so
+          curl -fsSL "https://github.com/MetaCubeX/mihomo/archive/refs/tags/$MIHOMO_VERSION.tar.gz" -o "app/src/main/assets/licenses/mihomo/mihomo-$MIHOMO_VERSION-source.tar.gz"
+
       - name: Build SimpleTUN for Android
         working-directory: third_party/simpletun
         run: zig build android
@@ -64,4 +74,11 @@ jobs:
         with:
           name: SimpleXray-Groups-arm64-v8a
           path: app/build/outputs/apk/debug/SimpleXray-Groups-arm64-v8a.apk
+          if-no-files-found: error
+
+      - name: Upload mihomo source and notices
+        uses: actions/upload-artifact@v4
+        with:
+          name: mihomo-${{ env.MIHOMO_VERSION }}-source
+          path: app/src/main/assets/licenses/mihomo/
           if-no-files-found: error

@@ -23,6 +23,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.simplexray.re.R
+import com.simplexray.re.ui.scaffold.LocalLayerBackdrop
 import com.simplexray.re.viewmodel.MainViewModel
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
@@ -31,9 +32,9 @@ import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.glass.GlassBottomSheet
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Close
-import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @Composable
@@ -51,9 +52,10 @@ internal fun MihomoSubscriptionSheet(
         LocalWindowInfo.current.containerSize.height.toDp() * 0.7f
     }
 
-    OverlayBottomSheet(
+    GlassBottomSheet(
         title = stringResource(R.string.subscription_title),
         show = true,
+        backdrop = LocalLayerBackdrop.current,
         onDismissRequest = onDismiss,
         startAction = {
             IconButton(onClick = onDismiss) {
@@ -67,28 +69,21 @@ internal fun MihomoSubscriptionSheet(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
-                Text(
-                    text = selectedFile?.let {
-                        stringResource(R.string.subscription_merge_target, it.name)
-                    } ?: stringResource(R.string.subscription_create_target),
-                    style = MiuixTheme.textStyles.body2,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-                )
-            }
-            item {
-                Text(
-                    text = stringResource(R.string.subscription_policy_hint),
-                    style = MiuixTheme.textStyles.body2,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-                )
-            }
-            item {
                 TextField(
                     value = url,
                     onValueChange = { url = it },
                     label = stringResource(R.string.subscription_url),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                     modifier = Modifier.fillMaxWidth()
+                )
+            }
+            item {
+                Text(
+                    text = selectedFile?.let {
+                        stringResource(R.string.subscription_merge_target, it.name)
+                    } ?: stringResource(R.string.subscription_create_target),
+                    style = MiuixTheme.textStyles.body2,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary
                 )
             }
             item {
@@ -125,6 +120,13 @@ internal fun MihomoSubscriptionSheet(
                         )
                     }
                 }
+            }
+            item {
+                Text(
+                    text = stringResource(R.string.subscription_policy_hint),
+                    style = MiuixTheme.textStyles.body2,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                )
             }
             state.summary?.let { summary ->
                 item {

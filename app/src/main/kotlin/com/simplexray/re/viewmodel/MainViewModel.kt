@@ -51,18 +51,16 @@ class MainViewModel(application: Application) :
     val prefs: Preferences = Preferences(application)
     private val fileManager: FileManager = FileManager(application, prefs)
 
-    private val configFileController by lazy {
-        ConfigFileController(
-            application,
-            prefs,
-            fileManager,
-            viewModelScope,
-            { isVpnEnabled() },
-            { _uiEvent.trySend(it) },
-            { file -> settingsController.syncSocksCredentialsFromConfig(file?.absolutePath) },
-            { dashboardController.refreshConfig() },
-        )
-    }
+    private val configFileController: ConfigFileController = ConfigFileController(
+        application,
+        prefs,
+        fileManager,
+        viewModelScope,
+        { isVpnEnabled() },
+        { _uiEvent.trySend(it) },
+        { file -> settingsController.syncSocksCredentialsFromConfig(file?.absolutePath) },
+        { dashboardController.refreshConfig() },
+    )
 
     private val settingsController by lazy {
         SettingsController(
@@ -117,15 +115,13 @@ class MainViewModel(application: Application) :
         )
     }
 
-    private val dashboardController: DashboardController by lazy {
-        DashboardController(
-            application,
-            prefs,
-            viewModelScope,
-            configFileController.selectedConfigFile,
-            { isVpnEnabled() },
-        )
-    }
+    private val dashboardController: DashboardController = DashboardController(
+        application,
+        prefs,
+        viewModelScope,
+        configFileController.selectedConfigFile,
+        { isVpnEnabled() },
+    )
 
     private val vpnServiceController by lazy {
         VpnServiceController(
@@ -153,6 +149,9 @@ class MainViewModel(application: Application) :
 
     val outboundNodes: StateFlow<List<ConfigUtils.OutboundInfo>>
         get() = dashboardController.outboundNodes
+
+    val outboundLoadError: StateFlow<String?>
+        get() = dashboardController.outboundLoadError
 
     val outboundLatency: StateFlow<Map<String, OutboundLatency>>
         get() = dashboardController.outboundLatency

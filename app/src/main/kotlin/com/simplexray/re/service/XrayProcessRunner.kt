@@ -14,10 +14,15 @@ import com.simplexray.re.common.config.GroupProfileStore
 import com.simplexray.re.data.source.LogFileManager
 import com.simplexray.re.prefs.Preferences
 import com.simplexray.re.prefs.TunnelMode
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -76,28 +81,34 @@ internal class XrayProcessRunner(
     var isStarted: Boolean = false
         private set
 
-    private var job: Job? = null
+    @Volatile private var job: Job? = null
     private var startAttempt = 0
     private var scope: CoroutineScope? = null
     @Volatile private var groupSession: GroupCoreSession? = null
+    @Volatile private var mihomoProcess: MihomoOutboundProcess? = null
 
     fun resetAttempt() {
         startAttempt = 0
     }
 
-    fun launch(scope: CoroutineScope) {
+    @Synchronized fun launch(scope: CoroutineScope) {
         this.scope = scope
         job?.cancel()
-        job = scope.launch { run(scope) }
+        kill()
+        job = scope.launch(start = CoroutineStart.LAZY) { run(scope) }
+        job?.start()
     }
 
     fun restart(scope: CoroutineScope) {
-        kill()
         launch(scope)
     }
 
-    fun kill() {
+    @Synchronized fun kill() {
+        mihomoProcess?.close()
+        mihomoProcess = null
         groupSession?.close()
+        groupSession = null
+        isStarted = false
         process?.destroy()
         process = null
         val currentPid = pid
@@ -112,19 +123,25 @@ internal class XrayProcessRunner(
         }
     }
 
-    fun stop() {
+    @Synchronized fun stop() {
         job?.cancel()
         job = null
         kill()
     }
 
-    private fun run(scope: CoroutineScope) {
-        isStarted = false
+    private suspend fun run(scope: CoroutineScope) {
+        val runJob = currentCoroutineContext().job
+        synchronized(this) {
+            requireCurrentRun(runJob)
+            isStarted = false
+        }
+        val runScope = CoroutineScope(currentCoroutineContext())
         var stdoutPfd: ParcelFileDescriptor? = null
         var currentProcess: Process? = null
         var currentPid = -1
         var reader: BufferedReader? = null
         var session: GroupCoreSession? = null
+        var mihomo: MihomoOutboundProcess? = null
 
         try {
             val prefs = Preferences(application)
@@ -133,19 +150,19 @@ internal class XrayProcessRunner(
                 return
             }
             if (!prefs.disableVpn && !callbacks.hasVpnTunnel()) {
-                callbacks.onStartFailure("VPN tunnel is not established")
+                failCurrentRun(runJob, "VPN tunnel setup is required.")
                 return
             }
             Log.d(tag, "Attempting to start native Xray process with TUN fd & local gRPC API.")
             val libraryDir = TProxyService.getNativeLibraryDir(application)
             val selectedConfigPath = prefs.selectedConfigPath ?: run {
-                callbacks.onStartFailure("No configuration file selected")
+                failCurrentRun(runJob, "Select a configuration file to start Xray.")
                 return
             }
             val xrayPath = "$libraryDir/libxray.so"
             val configFile = File(selectedConfigPath)
             if (!configFile.exists()) {
-                callbacks.onStartFailure("Selected config file does not exist: $selectedConfigPath")
+                failCurrentRun(runJob, "The selected configuration file is required: $selectedConfigPath")
                 return
             }
 
@@ -159,50 +176,80 @@ internal class XrayProcessRunner(
 
             val ports = runCatching { extractPortsFromJson(sanitizedConfigContent) }.getOrDefault(emptySet())
             val apiPort = findAvailablePort(ports) ?: run {
-                callbacks.onStartFailure("No local port available for the stats API")
+                failCurrentRun(runJob, "Local port allocation failed for the stats API.")
                 return
             }
-            prefs.apiPort = apiPort
-            prefs.apiAddress = "127.0.0.1"
-
-            val configWithApi = ConfigUtils.injectStatsServiceIntoSanitized(prefs, sanitizedConfigContent)
+            val configWithApi = synchronized(this) {
+                requireCurrentRun(runJob)
+                prefs.apiPort = apiPort
+                prefs.apiAddress = "127.0.0.1"
+                ConfigUtils.injectStatsServiceIntoSanitized(prefs, sanitizedConfigContent)
+            }
             val nodes = ConfigUtils.extractOutbounds(sanitizedConfigContent).map { it.tag }
-            val finalConfigContent = if (nodes.isEmpty()) configWithApi else {
+            val usedPorts = (ports + apiPort + prefs.httpPort).toMutableSet()
+            fun allocatePort(): Int = requireNotNull(findAvailablePort(usedPorts)) {
+                "Local port allocation failed for runtime proxy listeners."
+            }.also { usedPorts.add(it) }
+            val runtimeConfig = JSONObject(configWithApi)
+            val dnsServers = buildList {
+                prefs.dnsIpv4.takeIf { it.isNotBlank() }?.let { add(it) }
+                if (prefs.ipv6) prefs.dnsIpv6.takeIf { it.isNotBlank() }?.let { add(it) }
+            }
+            mihomo = MihomoOutboundProcess.prepare(
+                runtimeConfig,
+                File("$libraryDir/libmihomo.so"),
+                application.cacheDir,
+                ::allocatePort,
+                dnsServers,
+                prefs.ipv6,
+            ) { owner, code -> onMihomoExited(owner, code, runJob) }
+            synchronized(this) {
+                requireCurrentRun(runJob)
+                mihomoProcess = mihomo
+            }
+            if (nodes.isNotEmpty()) {
                 val store = GroupProfileStore(application)
                 val profile = store.load(selectedConfigPath, nodes)
-                val usedPorts = (ports + apiPort + prefs.httpPort).toMutableSet()
-                fun allocatePort(): Int = requireNotNull(findAvailablePort(usedPorts)) {
-                    "No local port available for outbound groups"
-                }.also { usedPorts.add(it) }
                 val groups = OutboundGroupConfig(nodes, profile, allocatePort(), ::allocatePort)
                 session = GroupCoreSession(store, selectedConfigPath, groups, apiPort)
-                groupSession = session
-                JSONObject(configWithApi).also { groups.inject(it, application.filesDir, application.cacheDir) }.toString()
+                synchronized(this) {
+                    requireCurrentRun(runJob)
+                    groupSession = session
+                }
+                groups.inject(runtimeConfig, application.filesDir, application.cacheDir)
             }
+            val finalConfigContent = runtimeConfig.toString()
             Log.d(tag, "Injected final config (${finalConfigContent.length} chars) ready for stdin ($format)")
+            mihomo?.start()
+            requireCurrentRun(runJob)
 
             val useXrayTun = prefs.tunnelMode == TunnelMode.XrayTun && !prefs.disableVpn
 
             if (useXrayTun) {
                 val vpnFd = callbacks.vpnFd() ?: run {
-                    callbacks.onStartFailure("tunFd is null for Xray TUN mode")
+                    failCurrentRun(runJob, "A VPN descriptor is required for Xray TUN mode.")
                     return
                 }
-                val spawnResult = spawn(xrayPath, application.filesDir.path, vpnFd)
+                val spawnResult = synchronized(this) {
+                    requireCurrentRun(runJob)
+                    mihomo?.requireAlive()
+                    spawn(xrayPath, application.filesDir.path, vpnFd)?.also {
+                        currentPid = it[0]
+                        pid = currentPid
+                    }
+                }
                     ?: run {
-                        callbacks.onStartFailure("nativeSpawnXray returned null - spawn failed")
+                        failCurrentRun(runJob, "Native Xray process startup failed.")
                         return
                     }
-                currentPid = spawnResult[0]
                 val stdoutReadFd = spawnResult[1]
                 val stdinWriteFd = spawnResult[2]
-                pid = currentPid
                 Log.d(tag, "Xray TUN process started: pid=$currentPid")
 
                 // Write the config on a separate IO job so the parent starts
                 // draining stdout immediately. A synchronous write can deadlock
                 // when both pipe buffers fill up (large config + early logs).
-                scope.launch(Dispatchers.IO) {
+                runScope.launch(Dispatchers.IO) {
                     runCatching {
                         ParcelFileDescriptor.adoptFd(stdinWriteFd).use { pfd ->
                             ParcelFileDescriptor.AutoCloseOutputStream(pfd).use { out ->
@@ -220,12 +267,17 @@ internal class XrayProcessRunner(
                 )
             } else {
                 val processBuilder = getProcessBuilder(xrayPath)
-                val processRef = processBuilder.start()
-                currentProcess = processRef
-                process = processRef
+                val processRef = synchronized(this) {
+                    requireCurrentRun(runJob)
+                    mihomo?.requireAlive()
+                    processBuilder.start().also {
+                        currentProcess = it
+                        process = it
+                    }
+                }
                 Log.d(tag, "Xray child process started successfully via ProcessBuilder.")
 
-                scope.launch(Dispatchers.IO) {
+                runScope.launch(Dispatchers.IO) {
                     runCatching {
                         processRef.outputStream.use { os ->
                             os.write(finalConfigContent.toByteArray(Charsets.UTF_8))
@@ -238,24 +290,29 @@ internal class XrayProcessRunner(
                 reader = BufferedReader(InputStreamReader(processRef.inputStream))
             }
 
-            scope.launch {
+            runScope.launch {
                 val probeProcess = currentProcess
-                val client = CoreStatsClient.create("127.0.0.1", prefs.apiPort)
+                val client = CoreStatsClient.create("127.0.0.1", apiPort)
                 try {
                     val deadline = StartupProbeDeadline(STARTUP_PROBE_TIMEOUT_MS)
                     while (!isStarted &&
                         !callbacks.hasStartupFailed() &&
                         !callbacks.isStopping() &&
                         (probeProcess?.isAlive == true || currentPid > 0) &&
+                        job === runJob &&
                         !deadline.isExpired
                     ) {
                         if (client.getSystemStats() != null) {
-                            if (callbacks.hasStartupFailed() || callbacks.isStopping()) return@launch
-                            isStarted = true
-                            startAttempt = 0
-                            Log.d(tag, "Xray core ready (gRPC API reachable), updating VpnStateHub.")
-                            session?.start(scope) { restart(scope) }
-                            callbacks.onCoreReady()
+                            synchronized(this@XrayProcessRunner) {
+                                requireCurrentRun(runJob)
+                                mihomo?.requireAlive()
+                                if (callbacks.hasStartupFailed() || callbacks.isStopping()) return@launch
+                                isStarted = true
+                                startAttempt = 0
+                                Log.d(tag, "Xray core ready (gRPC API reachable), updating VpnStateHub.")
+                                session?.start(scope) { restart(scope) }
+                                callbacks.onCoreReady()
+                            }
                             break
                         }
                         delay(STARTUP_PROBE_INTERVAL_MS)
@@ -269,13 +326,17 @@ internal class XrayProcessRunner(
                         !callbacks.hasStartupFailed() &&
                         !callbacks.isStopping() &&
                         (probeProcess?.isAlive == true || currentPid > 0) &&
+                        job === runJob &&
                         deadline.isExpired
                     ) {
                         Log.e(tag, "Xray startup probe timed out after ${STARTUP_PROBE_TIMEOUT_MS}ms.")
-                        callbacks.onStartFailure(
-                            "Xray core did not become ready within ${STARTUP_PROBE_TIMEOUT_MS / 1000}s"
+                        failCurrentRun(
+                            runJob,
+                            "Xray core startup timed out after ${STARTUP_PROBE_TIMEOUT_MS / 1000}s.",
                         )
                     }
+                } catch (e: MihomoOutboundProcess.StartupException) {
+                    failCurrentRun(runJob, e.message ?: "Mihomo runtime startup failed.")
                 } finally {
                     client.close()
                 }
@@ -306,47 +367,84 @@ internal class XrayProcessRunner(
             }
             Log.d(tag, "Native Xray process log stream finished.")
             if (currentProcess != null) {
-                onXrayExited(currentProcess, -1)
+                onXrayExited(currentProcess, -1, runJob)
             } else {
-                onXrayExited(null, currentPid)
+                onXrayExited(null, currentPid, runJob)
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: MihomoOutboundProcess.StartupException) {
+            failCurrentRun(runJob, e.message ?: "Mihomo runtime startup failed.")
         } catch (e: InterruptedIOException) {
             Log.d(tag, "Xray log stream interrupted during shutdown.")
             if (currentProcess != null) {
-                onXrayExited(currentProcess, -1)
+                onXrayExited(currentProcess, -1, runJob)
             } else if (currentPid > 0) {
-                onXrayExited(null, currentPid)
+                onXrayExited(null, currentPid, runJob)
             }
         } catch (e: Exception) {
-            Log.e(tag, "Error executing native Xray", e)
+            Log.e(tag, "Executing native Xray failed (${e.javaClass.simpleName}).")
             if (currentProcess != null) {
-                onXrayExited(currentProcess, -1)
+                onXrayExited(currentProcess, -1, runJob)
             } else if (currentPid > 0) {
-                onXrayExited(null, currentPid)
+                onXrayExited(null, currentPid, runJob)
             } else {
-                callbacks.onStartFailure("Error executing native Xray: ${e.message}")
+                failCurrentRun(runJob, "Executing native Xray failed (${e.javaClass.simpleName}).")
             }
         } finally {
+            mihomo?.close()
             session?.close()
+            synchronized(this) {
+                if (mihomoProcess === mihomo) mihomoProcess = null
+                if (groupSession === session) groupSession = null
+                if (currentProcess != null && process === currentProcess) {
+                    process = null
+                }
+                if (pid > 0 && pid == currentPid) {
+                    pid = -1
+                }
+            }
             runCatching { reader?.close() }
             runCatching { stdoutPfd?.close() }
             Log.d(tag, "Native Xray process task finished.")
-            if (currentProcess != null && process === currentProcess) {
-                process = null
-            }
-            if (pid > 0 && pid == currentPid) {
-                pid = -1
-            }
             if (currentPid > 0) {
                 runCatching { reap(currentPid) }
             }
         }
     }
 
-    private fun onXrayExited(process: Process?, pid: Int) {
+    private fun requireCurrentRun(runJob: Job) {
+        runJob.ensureActive()
+        if (job !== runJob) throw CancellationException("Xray startup superseded by a newer run.")
+    }
+
+    @Synchronized private fun failCurrentRun(runJob: Job, reason: String) {
+        if (job === runJob && runJob.isActive && callbacks.isStopping() == false &&
+            callbacks.hasStartupFailed() == false
+        ) {
+            callbacks.onStartFailure(reason)
+        }
+    }
+
+    @Synchronized private fun onMihomoExited(owner: MihomoOutboundProcess, code: Int, runJob: Job) {
+        if (mihomoProcess !== owner || job !== runJob || runJob.isActive == false || callbacks.isStopping()) return
+        val message = "Mihomo helper exited unexpectedly (code $code)."
+        Log.e(tag, message)
+        if (isStarted) {
+            val line = formatAppLogLine("[Error] $message")
+            logFileManager.appendLog(line)
+            callbacks.emitLog(line)
+            callbacks.onUnexpectedExit()
+        } else {
+            callbacks.onStartFailure(message)
+        }
+    }
+
+    @Synchronized private fun onXrayExited(process: Process?, pid: Int, runJob: Job) {
         if (pid > 0) {
             runCatching { reap(pid) }
         }
+        if (job !== runJob || runJob.isActive == false) return
         if (callbacks.isStopping()) {
             Log.d(tag, "Xray process exited after intentional stop, ignoring.")
             return

@@ -53,6 +53,9 @@ internal class DashboardController(
     private val _outboundNodes = MutableStateFlow<List<ConfigUtils.OutboundInfo>>(emptyList())
     val outboundNodes: StateFlow<List<ConfigUtils.OutboundInfo>> = _outboundNodes.asStateFlow()
 
+    private val _outboundLoadError = MutableStateFlow<String?>(null)
+    val outboundLoadError: StateFlow<String?> = _outboundLoadError.asStateFlow()
+
     private val _outboundLatency = MutableStateFlow<Map<String, OutboundLatency>>(emptyMap())
     val outboundLatency: StateFlow<Map<String, OutboundLatency>> = _outboundLatency.asStateFlow()
 
@@ -68,6 +71,12 @@ internal class DashboardController(
     ) { file, activePath, nodes ->
         if (file != null && file.absolutePath == activePath) nodes else emptyMap()
     }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
+
+    init {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            selectedConfig.collect { refreshConfig() }
+        }
+    }
 
     fun reset() {
         _coreStatsState.value = CoreStatsState()
@@ -130,20 +139,29 @@ internal class DashboardController(
     }
 
     fun refreshConfig(): Job? = synchronized(groupProfileLock) {
+        val file = selectedConfig.value
+        val changed = groupProfilePath != file?.absolutePath
         groupProfileRefreshJob?.cancel()
         groupProfileObservationJob?.cancel()
         groupProfileRefreshJob = null
         groupProfileObservationJob = null
-        groupProfilePath = null
-        _outboundNodes.value = emptyList()
-        _groupProfile.value = GroupProfile(groups = emptyList(), targetStrategies = emptyMap())
+        _outboundLoadError.value = null
+        if (changed) {
+            groupProfilePath = null
+            _outboundNodes.value = emptyList()
+            _groupProfile.value = GroupProfile(groups = emptyList(), targetStrategies = emptyMap())
+        }
 
-        val file = selectedConfig.value ?: return@synchronized null
+        if (file == null) return@synchronized null
         val path = file.absolutePath
         val job = scope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
             val refreshJob = currentCoroutineContext()[Job]
-            val content = runCatching { file.readText() }.getOrElse { e ->
-                Log.e(TAG, "Error reading config file: ${file.name}", e)
+            val content = runCatching { file.readText() }.getOrElse {
+                setOutboundLoadError(path, refreshJob, "Config file read failed")
+                return@launch
+            }
+            if (!ConfigUtils.isValidConfigContent(content)) {
+                setOutboundLoadError(path, refreshJob, "Config content parsing failed")
                 return@launch
             }
             val nodes = ConfigUtils.extractOutbounds(content)
@@ -176,6 +194,20 @@ internal class DashboardController(
         groupProfileRefreshJob = job
         job.start()
         job
+    }
+
+    private fun setOutboundLoadError(path: String, refreshJob: Job?, message: String) {
+        synchronized(groupProfileLock) {
+            if (groupProfileRefreshJob === refreshJob &&
+                selectedConfig.value?.absolutePath == path
+            ) {
+                groupProfilePath = null
+                _outboundNodes.value = emptyList()
+                _groupProfile.value = GroupProfile(groups = emptyList(), targetStrategies = emptyMap())
+                _outboundLoadError.value = message
+                Log.w(TAG, message)
+            }
+        }
     }
 
     fun saveGroupProfile(profile: GroupProfile) {
