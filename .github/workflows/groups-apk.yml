@@ -31,6 +31,11 @@ jobs:
         with:
           gradle-version: 9.9.1
 
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+
       - name: Install Android build tools
         run: |
           ndk_version="$(sed -n 's/^NDK_VERSION=//p' version.properties | tr -d '\r')"
