@@ -199,11 +199,14 @@ internal object NodeImportConverter {
         val clone = JSONObject(ob.toString())
         clone.put("tag", tag)
         clone.put("protocol", normalized)
+        val uotVersion = clone.optInt("x-simplexray-uot-version")
+        clone.remove("x-simplexray-uot-version")
         return ProxyNode(
             tag = tag,
             protocol = normalized,
             outboundJson = clone.toString(),
             targetStrategy = clone.optString("targetStrategy"),
+            udpOverTcpVersion = uotVersion,
         )
     }
 
@@ -319,8 +322,8 @@ internal object NodeImportConverter {
         var ssHttpObfsHost: String? = null
         if (protocol == "shadowsocks") {
             val plugin = src.optString("plugin").trim().lowercase()
-            if (src.optBoolean("udp-over-tcp", false) || plugin.isNotEmpty()) {
-                reasons?.add("$name：该 Shadowsocks 外置插件或 UoT 需要相应协议实现，请提供原生节点")
+            if (plugin.isNotEmpty()) {
+                reasons?.add("$name：该 Shadowsocks 外置插件需要对应传输实现，请提供原生节点")
                 return null
             }
             if (plugin.isNotEmpty()) {
@@ -398,9 +401,6 @@ internal object NodeImportConverter {
                     .put("port", port)
                     .put("method", method)
                     .put("password", password)
-                if (src.optBoolean("udp-over-tcp", false)) {
-                    srv.put("uot", true)
-                }
                 settings.put("servers", JSONArray().put(srv))
             }
 
@@ -423,7 +423,9 @@ internal object NodeImportConverter {
         if (stream.length() > 0) {
             outbound.put("streamSettings", stream)
         }
-        return ProxyNode(tag = name, protocol = protocol, outboundJson = outbound.toString())
+        return ProxyNode(tag = name, protocol = protocol, outboundJson = outbound.toString(),
+            udpOverTcpVersion = if (protocol == "shadowsocks" && src.optBoolean("udp-over-tcp"))
+                src.optInt("udp-over-tcp-version", 2).let { if (it == 1) 1 else 2 } else 0)
     }
 
     private fun convertMihomoWireGuard(name: String, src: JSONObject): ProxyNode? {
@@ -644,9 +646,11 @@ internal object NodeImportConverter {
                 }
                 val plugin = src.optString("plugin").trim().lowercase()
                 val pluginOpts = parseKeyValueOpts(src.optString("plugin_opts"))
-                val uot = src.optBoolean("udp_over_tcp", false)
-                if (plugin.isNotEmpty() || uot || src.optJSONObject("udp_over_tcp")?.optBoolean("enabled") == true) {
-                    reasons?.add("$tag：Shadowsocks 外置插件或 UoT 需要相应协议实现，请提供原生节点")
+                val uotConfig = src.optJSONObject("udp_over_tcp")
+                val uot = src.optBoolean("udp_over_tcp", false) || uotConfig?.optBoolean("enabled") == true
+                val uotVersion = if (uot) uotConfig?.optInt("version", 2)?.let { if (it == 1) 1 else 2 } ?: 2 else 0
+                if (plugin.isNotEmpty()) {
+                    reasons?.add("$tag：Shadowsocks 外置插件需要对应传输实现，请提供原生节点")
                     return null
                 }
 
@@ -659,7 +663,6 @@ internal object NodeImportConverter {
                             .put("port", port)
                             .put("method", method)
                             .put("password", password)
-                        if (uot) srv.put("uot", true)
                         val outbound = JSONObject()
                             .put("tag", tag)
                             .put("protocol", "shadowsocks")
@@ -682,12 +685,11 @@ internal object NodeImportConverter {
                     .put("port", port)
                     .put("method", method)
                     .put("password", password)
-                if (uot) srv.put("uot", true)
                 val outbound = JSONObject()
                     .put("tag", tag)
                     .put("protocol", "shadowsocks")
                     .put("settings", JSONObject().put("servers", JSONArray().put(srv)))
-                return ProxyNode(tag = tag, protocol = "shadowsocks", outboundJson = outbound.toString())
+                return ProxyNode(tag = tag, protocol = "shadowsocks", outboundJson = outbound.toString(), udpOverTcpVersion = uotVersion)
             }
 
             "vless", "vmess" -> {

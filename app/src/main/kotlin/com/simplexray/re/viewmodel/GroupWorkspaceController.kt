@@ -19,7 +19,6 @@ import com.simplexray.re.common.config.ProxyNode
 import com.simplexray.re.common.config.RuleWorkspaceStore
 import com.simplexray.re.common.subscription.NodeImportConverter
 import com.simplexray.re.common.subscription.SubscriptionService
-import com.simplexray.re.common.subscription.SubscriptionGroups
 import com.simplexray.re.service.FallbackRuntimeInfo
 import com.simplexray.re.service.GroupRuntimeStatus
 import kotlinx.coroutines.CoroutineScope
@@ -97,6 +96,9 @@ internal class GroupWorkspaceController(
                         savedGroup
                     } else if (originalTag != trimmedTag) {
                         existing.copy(
+                            frontProxy = existing.frontProxy?.let { front ->
+                                if (front.isGroup && front.tag == originalTag) front.copy(tag = trimmedTag) else front
+                            },
                             members = existing.members.map { m ->
                                 if (m.isGroup && m.tag == originalTag) m.copy(tag = trimmedTag) else m
                             },
@@ -122,9 +124,9 @@ internal class GroupWorkspaceController(
             candidate
         }
         if (validationError == null &&
-            originalTag == null &&
             normalized.sourceType == GroupSourceType.SUBSCRIPTION &&
-            normalized.subscriptionUrl.isNotBlank()
+            normalized.subscriptionUrl.isNotBlank() &&
+            (originalTag == null || normalized.nodes.isEmpty())
         ) {
             refreshSubscriptionGroup(trimmedTag)
         }
@@ -134,12 +136,14 @@ internal class GroupWorkspaceController(
     fun deleteGroup(tag: String) {
         scope.launch(Dispatchers.IO) {
             workspaceStore.update { current ->
+                val deletedNodes = current.groupByTag(tag)?.nodes.orEmpty().map { it.tag }.toSet()
                 val remaining = current.groups
                     .filter { it.tag != tag }
                     .map { group ->
                         group.copy(
-                            members = group.members.filterNot { it.isGroup && it.tag == tag },
-                            selectedMember = group.selectedMember?.takeUnless { it.isGroup && it.tag == tag },
+                            frontProxy = group.frontProxy?.takeUnless { if (it.isGroup) it.tag == tag else it.tag in deletedNodes },
+                            members = group.effectiveMembers().filterNot { if (it.isGroup) it.tag == tag else it.tag in deletedNodes },
+                            selectedMember = group.selectedMember?.takeUnless { if (it.isGroup) it.tag == tag else it.tag in deletedNodes },
                         )
                     }
                 val nextDefault = if (current.defaultGroupTag == tag) {
@@ -406,6 +410,41 @@ internal class GroupWorkspaceController(
         return null
     }
 
+    fun addNodeToGroup(groupTag: String, rawJson: String): String? {
+        val parsed = NodeImportConverter.parse(rawJson)
+        if (parsed.nodes.isEmpty()) return parsed.skippedReasons.firstOrNull() ?: "请输入有效的 Xray 节点 JSON 或分享链接"
+        workspaceStore.update { current ->
+            val used = current.allNodes().map { it.tag }.toMutableSet()
+            val nodes = parsed.nodes.map { node ->
+                val tag = GroupWorkspace.uniqueTag(node.tag, used)
+                node.copy(tag = tag, outboundJson = JSONObject(node.outboundJson).put("tag", tag).toString(), userEdited = true)
+            }
+            current.copy(groups = current.groups.map { group ->
+                if (group.tag == groupTag) {
+                    val members = group.effectiveMembers() + nodes.map { GroupMemberRef(it.tag) }
+                    group.copy(nodes = group.nodes + nodes, members = members, selectedMember = group.selectedMember ?: members.firstOrNull())
+                } else group
+            })
+        }
+        return null
+    }
+
+    fun deleteNode(tag: String) {
+        scope.launch(Dispatchers.IO) {
+            workspaceStore.update { current ->
+                current.copy(groups = current.groups.map { group ->
+                    val members = group.effectiveMembers().filter { it.isGroup || it.tag != tag }
+                    group.copy(
+                        frontProxy = group.frontProxy?.takeUnless { it.isGroup == false && it.tag == tag },
+                        nodes = group.nodes.filter { it.tag != tag },
+                        members = members,
+                        selectedMember = group.selectedMember?.takeIf { it in members } ?: members.firstOrNull(),
+                    )
+                })
+            }
+        }
+    }
+
     private suspend fun importTextIntoGroup(groupTag: String, text: String) {
         val parsed = NodeImportConverter.parse(text)
         var updatedGlobal = false
@@ -431,15 +470,15 @@ internal class GroupWorkspaceController(
             val dedupedNodes = parsed.nodes.map { node ->
                 val unique = GroupWorkspace.uniqueTag(node.tag, usedTags)
                 if (unique == node.tag) {
-                    node
+                    node.copy(userEdited = true)
                 } else {
                     val json = JSONObject(node.outboundJson).put("tag", unique).toString()
-                    node.copy(tag = unique, outboundJson = json)
+                    node.copy(tag = unique, outboundJson = json, userEdited = true)
                 }
             }
             addedCount = dedupedNodes.size
             val newRefs = dedupedNodes.map { GroupMemberRef(it.tag, isGroup = false) }
-            val updated = current.copy(
+            current.copy(
                 groups = current.groups.map { g ->
                     if (g.tag != groupTag) {
                         g
@@ -453,8 +492,6 @@ internal class GroupWorkspaceController(
                     }
                 }
             )
-            SubscriptionGroups.merge(updated, groupTag, parsed.extractedProxyGroups,
-                parsed.nodes.zip(dedupedNodes).associate { (source, node) -> source.tag to node.tag })
         }
         withContext(Dispatchers.Main) {
             val globalNote = if (updatedGlobal) "，已同步更新全局配置" else ""

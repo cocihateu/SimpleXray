@@ -62,8 +62,21 @@ jobs:
         working-directory: third_party/simpletun
         run: zig build android
 
+      - name: Load persistent Groups signing key
+        env:
+          GROUPS_KEYSTORE_BASE64: ${{ secrets.GROUPS_KEYSTORE_BASE64 }}
+        run: |
+          printf '%s' "$GROUPS_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/simplexray-groups.p12"
+
       - name: Assemble signed debug APK
-        run: gradle :app:assembleDebug -x :app:ensureXrayCore
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/simplexray-groups.p12
+          KEYSTORE_PASSWORD: ${{ secrets.GROUPS_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: simplexray-groups
+          KEY_PASSWORD: ${{ secrets.GROUPS_KEYSTORE_PASSWORD }}
+        run: |
+          version_code=$((10001000 + GITHUB_RUN_NUMBER))
+          gradle :app:assembleDebug -x :app:ensureXrayCore -PappVerCode="$version_code" -PappVerName="1.0.0-groups.$GITHUB_RUN_NUMBER"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

@@ -50,6 +50,7 @@ internal class FallbackRelayServer(
     private val nodeEntryPort: Int,
     private val nodeUsers: Map<String, String>,
     private val nodePassword: String,
+    private val nodeUotVersions: Map<String, Int>,
     private val resolvePlan: (String) -> FailoverPlan,
     private val onCandidateFailed: (String, String) -> Unit,
     private val onCandidateConnected: (String, String) -> Unit,
@@ -257,7 +258,7 @@ internal class FallbackRelayServer(
         val local = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
         track(local)
         val currentControl = AtomicReference<Socket?>(null)
-        val currentUdp = AtomicReference<DatagramSocket?>(null)
+        val currentUdp = AtomicReference<RelayDatagramTransport?>(null)
         val endpoint = AtomicReference<InetSocketAddress?>(null)
         val entry = RelayConnectionEntry("udp", client.inetAddress.hostAddress.orEmpty(), client.port, spec.groupTag) {
             runCatching { local.close() }
@@ -319,18 +320,27 @@ internal class FallbackRelayServer(
                 entry.leafTag = leaf
                 val beganAt = SystemClock.elapsedRealtime()
                 var deadline = deadlineJob(control, beganAt + plan.failoverTimeoutMs)
-                var remote: DatagramSocket? = null
+                var remote: RelayDatagramTransport? = null
                 var sender: Job? = null
                 var responseWatch: Job? = null
                 val pendingResponseAt = AtomicLong()
                 var responseDelivered = false
                 try {
-                    val bound = connectNode(control, leaf, 3, SocksAddress(1, ByteArray(4), 0), plan.failoverTimeoutMs)
-                    val upstream = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+                    val uotVersion = nodeUotVersions[leaf] ?: 0
+                    val upstream: RelayDatagramTransport = if (uotVersion > 0) {
+                        val host = UotDatagramTransport.host(uotVersion).toByteArray(Charsets.US_ASCII)
+                        connectNode(control, leaf, 1, SocksAddress(3, byteArrayOf(host.size.toByte()) + host, 0), plan.failoverTimeoutMs)
+                        control.soTimeout = 0
+                        UotDatagramTransport(control, uotVersion)
+                    } else {
+                        val bound = connectNode(control, leaf, 3, SocksAddress(1, ByteArray(4), 0), plan.failoverTimeoutMs)
+                        val socket = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+                        socket.connect(InetSocketAddress("127.0.0.1", bound.port))
+                        SocksDatagramTransport(socket)
+                    }
                     remote = upstream
                     track(upstream)
                     currentUdp.set(upstream)
-                    upstream.connect(InetSocketAddress("127.0.0.1", bound.port))
                     deadline.cancel()
                     deadline = launch(Dispatchers.Default) {
                         if (plan.watchResponse == false) return@launch
@@ -340,31 +350,28 @@ internal class FallbackRelayServer(
                     }
                     sender = launch(relayIo) {
                         try {
-                            flight.replay().forEach { upstream.send(DatagramPacket(it, it.size)) }
+                            flight.replay().forEach { upstream.send(it) }
                             while (isActive) {
                                 val data = flight.pending.poll(100, TimeUnit.MILLISECONDS) ?: continue
                                 flight.retain(data)
                                 if (flight.established) pendingResponseAt.compareAndSet(0L, SystemClock.elapsedRealtime())
-                                upstream.send(DatagramPacket(data, data.size))
+                                upstream.send(data)
                             }
                         } catch (_: IOException) {
                             upstream.close()
                         }
                     }
-                    val bytes = ByteArray(65_535)
-                    val packet = DatagramPacket(bytes, bytes.size)
                     while (isActive && entry.closed.get() == false) {
-                        packet.length = bytes.size
-                        upstream.receive(packet)
+                        val data = upstream.receive()
                         pendingResponseAt.set(0L)
                         val clientEndpoint = endpoint.get() ?: continue
                         try {
-                            local.send(DatagramPacket(packet.data, packet.offset, packet.length, clientEndpoint))
+                            local.send(DatagramPacket(data, data.size, clientEndpoint))
                         } catch (e: IOException) {
                             entry.close()
                             throw e
                         }
-                        entry.downloadBytes.addAndGet(packet.length.toLong())
+                        entry.downloadBytes.addAndGet(data.size.toLong())
                         if (responseDelivered == false) {
                             deadline.cancel()
                             flight.establish()

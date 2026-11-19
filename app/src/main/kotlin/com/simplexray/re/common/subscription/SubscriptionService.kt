@@ -131,8 +131,11 @@ class SubscriptionService(context: Context) {
                 node.copy(tag = tagToUse, outboundJson = json, targetStrategy = targetStrategy, subscriptionName = node.tag)
             }
 
-            resultNodes = uniqueNodes
-            val newNodeRefs = uniqueNodes.map { GroupMemberRef(it.tag, isGroup = false) }
+            val importedTags = uniqueNodes.map { it.tag }.toSet()
+            val manualNodes = existing.nodes.filter { it.userEdited && it.subscriptionName.isBlank() && it.tag !in importedTags }
+            val refreshedNodes = uniqueNodes + manualNodes
+            resultNodes = refreshedNodes
+            val newNodeRefs = refreshedNodes.map { GroupMemberRef(it.tag, isGroup = false) }
             val ownedTags = existing.nodes.map { it.tag }.toSet()
             val preservedMembers = existing.effectiveMembers().filter {
                 it.isGroup || it.tag !in ownedTags || it in newNodeRefs
@@ -143,19 +146,15 @@ class SubscriptionService(context: Context) {
                 ?: mergedMembers.firstOrNull()
 
             val updatedGroup = existing.copy(
-                nodes = uniqueNodes,
+                nodes = refreshedNodes,
                 members = mergedMembers,
                 selectedMember = selectedMember,
                 subscriptionUpdatedAtMs = System.currentTimeMillis(),
             )
 
-            val updated = current.copy(
+            current.copy(
                 groups = current.groups.map { if (it.tag == groupTag) updatedGroup else it }
             )
-            if (existing.subscriptionUpdatedAtMs == 0L) {
-                SubscriptionGroups.merge(updated, groupTag, parsed.extractedProxyGroups,
-                    uniqueNodes.associate { it.subscriptionName to it.tag })
-            } else updated
         }
 
         val messages = mutableListOf<String>()

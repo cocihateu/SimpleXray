@@ -28,6 +28,7 @@ data class ProxyNode(
     val targetStrategy: String = "",
     val subscriptionName: String = "",
     val userEdited: Boolean = false,
+    val udpOverTcpVersion: Int = 0,
 )
 
 data class ProxyGroup(
@@ -45,6 +46,7 @@ data class ProxyGroup(
     val trustSeconds: Int = 120,
     val testUrl: String = DEFAULT_URL_TEST,
     val routingTargets: List<String> = emptyList(),
+    val frontProxy: GroupMemberRef? = null,
 ) {
     fun effectiveMembers(): List<GroupMemberRef> =
         if (members.isNotEmpty()) members else nodes.map { GroupMemberRef(it.tag, isGroup = false) }
@@ -90,6 +92,12 @@ data class GroupWorkspace(
             if (path.add(tag) == false) return true
             val group = byTag[tag]
             if (group != null) {
+                group.frontProxy?.let { front ->
+                    val frontGroup = if (front.isGroup) front.tag else groups.firstOrNull { owner ->
+                        owner.nodes.any { it.tag == front.tag }
+                    }?.tag
+                    if (frontGroup != null && visit(frontGroup)) return true
+                }
                 for (member in group.effectiveMembers()) {
                     if (member.isGroup && visit(member.tag)) return true
                 }

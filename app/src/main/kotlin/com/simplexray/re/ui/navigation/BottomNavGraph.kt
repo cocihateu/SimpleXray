@@ -11,12 +11,10 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.simplexray.re.common.ROUTE_OVERVIEW
 import com.simplexray.re.common.ROUTE_PROXIES
-import com.simplexray.re.common.ROUTE_PROFILES
 import com.simplexray.re.common.ROUTE_RULES
 import com.simplexray.re.common.ROUTE_SETTINGS
 import com.simplexray.re.ui.screens.DashboardScreen
 import com.simplexray.re.ui.screens.ProxiesScreen
-import com.simplexray.re.ui.screens.ProfilesScreen
 import com.simplexray.re.ui.screens.RulesScreen
 import com.simplexray.re.ui.screens.SettingsScreen
 import com.simplexray.re.viewmodel.LogViewModel
@@ -41,8 +39,12 @@ fun BottomNavHost(
 ) {
     NavHost(navController, startDestination = ROUTE_OVERVIEW, modifier = Modifier.fillMaxSize()) {
         composable(ROUTE_OVERVIEW) { DashboardScreen(mainViewModel, onSwitchVpnService, paddingValues) }
-        composable(ROUTE_PROXIES) { ProxiesScreen(mainViewModel, paddingValues) }
-        composable(ROUTE_PROFILES) { ProfilesScreen(mainViewModel, paddingValues) }
+        composable(ROUTE_PROXIES) {
+            ProxiesScreen(mainViewModel, paddingValues, onManageGroups = {
+                mainViewModel.settingsCategory = 8
+                navController.navigate(ROUTE_SETTINGS)
+            })
+        }
         composable(ROUTE_RULES) { RulesScreen(mainViewModel, paddingValues = paddingValues) }
         composable(ROUTE_SETTINGS) {
             SettingsScreen(mainViewModel, geoipFilePickerLauncher, geositeFilePickerLauncher, settingsScrollState, paddingValues)

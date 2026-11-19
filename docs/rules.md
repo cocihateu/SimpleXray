@@ -66,3 +66,5 @@ Automates migration from legacy `routing.lua` files:
 The supplied `HandleRoute` migration keeps nested domain branches and their return order. Repeated IP checks merge into the same structured criteria. Legacy scripted routing uses `IPOnDemand` so domain rules run before IP resolution and the terminal default rule.
 
 Runtime edits add required relay outbounds through `api ado`, then replace routing through `api adrules --append=false`. The API listener retains StatsService, RoutingService, and HandlerService. Importing a full Xray configuration updates the rule workspace as well as global settings.
+
+The rules page imports and exports structured JSON through Android's document picker. Imports also accept Xray `routing.rules`. Long-press dragging updates the displayed order, scrolls at viewport edges, and saves the final order when released. Group targets carry a small group label in the list and target selectors.

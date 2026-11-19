@@ -105,9 +105,6 @@ internal object MihomoProxyConverter {
                 val method = fields.requiredText("cipher").lowercase()
                 if (method !in shadowsocksMethods) fields.capability("cipher", method)
                 endpoint.put("method", method).put("password", fields.requiredText("password"))
-                if (fields.boolean("udp-over-tcp")) {
-                    endpoint.put("uot", true)
-                }
                 JSONObject().put("servers", JSONArray().put(endpoint))
             }
             else -> {
@@ -139,6 +136,11 @@ internal object MihomoProxyConverter {
             .put("protocol", protocol)
             .put("settings", settings)
             .put("streamSettings", stream)
+            .apply {
+                if (protocol == "shadowsocks" && fields.boolean("udp-over-tcp")) {
+                    put("x-simplexray-uot-version", if (fields.integer("udp-over-tcp-version", 2) == 1) 1 else 2)
+                }
+            }
     }
 
     private fun transport(fields: MihomoFields): JSONObject {

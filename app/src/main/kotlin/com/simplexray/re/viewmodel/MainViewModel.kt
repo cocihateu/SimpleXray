@@ -6,6 +6,9 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.util.Log
 import androidx.activity.result.ActivityResultLauncher
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.application
 import androidx.lifecycle.viewModelScope
@@ -179,12 +182,19 @@ class MainViewModel(application: Application) :
     val groupWorkspace: StateFlow<GroupWorkspace>
         get() = workspaceController.workspace
 
+    var settingsCategory by mutableStateOf(0)
+
     private val trafficRulesController = TrafficRulesController(application, viewModelScope)
     val trafficRules get() = trafficRulesController.rules
     val ruleApplyMessage get() = com.simplexray.re.service.RuleRuntimeStatus.message
     fun saveTrafficRule(rule: com.simplexray.re.common.config.TrafficRule) { trafficRulesController.save(rule) }
     fun deleteTrafficRule(id: String) { trafficRulesController.delete(id) }
     fun moveTrafficRule(id: String, delta: Int) { trafficRulesController.move(id, delta) }
+    val ruleTransferMessage get() = trafficRulesController.message
+    fun clearRuleTransferMessage() { trafficRulesController.clearMessage() }
+    fun importTrafficRules(uri: Uri) { trafficRulesController.importRules(uri) }
+    fun exportTrafficRules(uri: Uri) { trafficRulesController.exportRules(uri) }
+    fun reorderTrafficRules(ids: List<String>) { trafficRulesController.reorderRules(ids) }
 
     val globalConfigSummary: StateFlow<GlobalConfigSummary>
         get() = workspaceController.globalSummary
@@ -366,6 +376,11 @@ class MainViewModel(application: Application) :
 
     fun updateNodeJson(nodeTag: String, rawJson: String): String? =
         workspaceController.updateNodeJson(nodeTag, rawJson)
+
+    fun addNodeToGroup(groupTag: String, rawJson: String): String? =
+        workspaceController.addNodeToGroup(groupTag, rawJson)
+
+    fun deleteWorkspaceNode(nodeTag: String) = workspaceController.deleteNode(nodeTag)
 
     /**
      * Latency-tests every TCP-capable outbound endpoint (1-RTT TCP connect,

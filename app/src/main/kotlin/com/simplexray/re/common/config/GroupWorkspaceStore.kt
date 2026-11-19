@@ -189,6 +189,7 @@ class GroupWorkspaceStore(context: Context) {
                         .put("targetStrategy", node.targetStrategy)
                         .put("subscriptionName", node.subscriptionName)
                         .put("userEdited", node.userEdited)
+                        .put("udpOverTcpVersion", node.udpOverTcpVersion)
                 )
             }
             val membersArray = JSONArray()
@@ -218,6 +219,9 @@ class GroupWorkspaceStore(context: Context) {
                     "selectedMember",
                     JSONObject().put("tag", selected.tag).put("isGroup", selected.isGroup)
                 )
+            }
+            group.frontProxy?.let { front ->
+                groupObj.put("frontProxy", JSONObject().put("tag", front.tag).put("isGroup", front.isGroup))
             }
             groupsArray.put(groupObj)
         }
@@ -261,6 +265,7 @@ class GroupWorkspaceStore(context: Context) {
                                 targetStrategy = nodeObj.optString("targetStrategy"),
                                 subscriptionName = nodeObj.optString("subscriptionName"),
                                 userEdited = nodeObj.optBoolean("userEdited"),
+                                udpOverTcpVersion = nodeObj.optInt("udpOverTcpVersion"),
                             )
                         )
                     }
@@ -288,6 +293,9 @@ class GroupWorkspaceStore(context: Context) {
                         nodes = nodes,
                         members = members,
                         selectedMember = selected,
+                        frontProxy = obj.optJSONObject("frontProxy")?.let {
+                            GroupMemberRef(it.getString("tag"), it.optBoolean("isGroup"))
+                        },
                         failoverTimeoutSeconds = obj.optInt("failoverTimeoutSeconds", 3).coerceAtLeast(1),
                         recoveryIntervalSeconds = obj.optInt("recoveryIntervalSeconds", 300).coerceAtLeast(5),
                         intervalSeconds = obj.optInt("intervalSeconds", 60).coerceAtLeast(5),

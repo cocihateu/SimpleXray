@@ -20,7 +20,6 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import com.simplexray.re.R
 import com.simplexray.re.common.ROUTE_OVERVIEW
 import com.simplexray.re.common.ROUTE_PROXIES
-import com.simplexray.re.common.ROUTE_PROFILES
 import com.simplexray.re.common.ROUTE_RULES
 import com.simplexray.re.common.ROUTE_SETTINGS
 import com.simplexray.re.viewmodel.LogViewModel
@@ -37,8 +36,8 @@ import top.yukonga.miuix.kmp.glass.GlassTopAppBar
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 val LocalLayerBackdrop = staticCompositionLocalOf<LayerBackdrop?> { null }
-private val routes = listOf(ROUTE_OVERVIEW, ROUTE_PROXIES, ROUTE_PROFILES, ROUTE_RULES, ROUTE_SETTINGS)
-private val titles = listOf("概览", "代理", "订阅", "规则", "设置")
+private val routes = listOf(ROUTE_OVERVIEW, ROUTE_PROXIES, ROUTE_RULES, ROUTE_SETTINGS)
+private val titles = listOf("概览", "代理", "规则", "设置")
 
 @Composable
 fun AppScaffold(
@@ -59,7 +58,7 @@ fun AppScaffold(
     val selected = routes.indexOf(entry?.destination?.route).coerceAtLeast(0)
     val surface = MiuixTheme.colorScheme.surface
     val backdrop = rememberLayerBackdrop { drawRect(surface); drawContent() }
-    val icons = listOf(R.drawable.dashboard, R.drawable.code, R.drawable.upload_file, R.drawable.history, R.drawable.settings)
+    val icons = listOf(R.drawable.dashboard, R.drawable.code, R.drawable.history, R.drawable.settings)
     val items = icons.mapIndexed { index, icon ->
         GlassNavigationItem(ImageVector.vectorResource(icon), titles[index], titles[index])
     }

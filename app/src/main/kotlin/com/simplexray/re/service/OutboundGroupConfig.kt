@@ -32,6 +32,8 @@ internal class OutboundGroupConfig(
     val balancers: Map<String, String> = emptyMap()
     private val nodeEntryInbound = "${prefix}node-entry"
     private val healthInbound = "${prefix}health"
+    private val uotOutbounds = workspace.allNodes().filter { it.udpOverTcpVersion > 0 }
+        .mapIndexed { index, node -> node.tag to "${prefix}uot-$index" }.toMap()
     private var domainStrategy = "IPIfNonMatch"
     private var routingOptions = JSONObject()
     private val logTargetPattern = Regex("${Regex.escape(prefix)}(?:rule-.*?)?business-(\\d+)")
@@ -44,6 +46,21 @@ internal class OutboundGroupConfig(
 
     fun inject(root: JSONObject, filesDir: File, cacheDir: File, rules: List<TrafficRule>) {
         val outbounds = root.array("outbounds")
+        for (index in 0 until outbounds.length()) {
+            val outbound = outbounds.getJSONObject(index)
+            val nodeTag = outbound.optString("tag")
+            val owner = workspace.groups.firstOrNull { group -> group.nodes.any { it.tag == nodeTag } }
+            val front = owner?.frontProxy ?: continue
+            val target = if (front.isGroup) front.tag else physicalTarget(front.tag)
+            val stream = outbound.optJSONObject("streamSettings") ?: JSONObject().also { outbound.put("streamSettings", it) }
+            val sockopt = stream.optJSONObject("sockopt") ?: JSONObject().also { stream.put("sockopt", it) }
+            sockopt.put("dialerProxy", fallbackRelayOutbounds.getValue(target))
+        }
+        uotOutbounds.forEach { (node, target) ->
+            val original = (0 until outbounds.length()).map { outbounds.getJSONObject(it) }
+                .first { it.optString("tag") == node }
+            outbounds.put(JSONObject(original.toString()).put("tag", target).put("targetStrategy", "AsIs"))
+        }
         for (builtin in BUILTIN_GROUP_TARGET_TAGS) {
             if ((0 until outbounds.length()).none { outbounds.getJSONObject(it).optString("tag") == builtin }) {
                 outbounds.put(JSONObject().put("tag", builtin).put("protocol", if (builtin == "direct") "freedom" else "blackhole"))
@@ -80,6 +97,13 @@ internal class OutboundGroupConfig(
 
     fun routingConfig(current: GroupWorkspace, rules: List<TrafficRule>): JSONObject {
         val compiled = JSONArray()
+        uotOutbounds.forEach { (node, target) ->
+            compiled.put(JSONObject().put("type", "field")
+                .put("inboundTag", JSONArray().put(nodeEntryInbound))
+                .put("user", JSONArray().put(users.getValue(node)))
+                .put("domain", JSONArray().put("full:sp.udp-over-tcp.arpa").put("full:sp.v2.udp-over-tcp.arpa"))
+                .put("outboundTag", target).put("ruleTag", "sx-uot/${users.getValue(node)}"))
+        }
         users.forEach { (target, user) ->
             compiled.put(JSONObject()
                 .put("type", "field")

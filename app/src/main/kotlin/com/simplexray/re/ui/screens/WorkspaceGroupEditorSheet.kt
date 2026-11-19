@@ -63,6 +63,7 @@ internal fun WorkspaceGroupEditorSheet(
     onSave: (originalTag: String?, edited: ProxyGroup) -> String?,
     onDelete: (String) -> Unit,
     onDismiss: () -> Unit,
+    showSource: Boolean = true,
 ) {
     var tag by remember(editingGroup) { mutableStateOf(editingGroup?.tag.orEmpty()) }
     var sourceType by remember(editingGroup) {
@@ -124,7 +125,9 @@ internal fun WorkspaceGroupEditorSheet(
     )
 
     GlassBottomSheet(
-        title = if (editingGroup == null) {
+        title = if (showSource == false) {
+            "出站策略 · ${editingGroup?.tag.orEmpty()}"
+        } else if (editingGroup == null) {
             stringResource(R.string.workspace_add_group)
         } else {
             stringResource(R.string.outbound_group_edit, editingGroup.tag)
@@ -168,6 +171,7 @@ internal fun WorkspaceGroupEditorSheet(
                         trustSeconds = trustSec,
                         testUrl = testUrl.trim().ifBlank { DEFAULT_URL_TEST },
                         routingTargets = routingTargets.map { it.trim() }.filter { it.isNotEmpty() }.distinct(),
+                        frontProxy = editingGroup?.frontProxy,
                     )
                     val err = onSave(editingGroup?.tag, edited)
                     if (err != null) {
@@ -201,7 +205,7 @@ internal fun WorkspaceGroupEditorSheet(
                     }
                 }
 
-                item {
+                if (showSource) item {
                     TextField(
                         value = tag,
                         onValueChange = { tag = it; errorMessage = null },
@@ -212,7 +216,7 @@ internal fun WorkspaceGroupEditorSheet(
 
                 item {
                     Card(modifier = Modifier.fillMaxWidth()) {
-                        OverlayDropdownPreference(
+                        if (showSource) OverlayDropdownPreference(
                             title = stringResource(R.string.workspace_source_type),
                             items = sourceLabels,
                             selectedIndex = if (sourceType == GroupSourceType.LOCAL) 0 else 1,
@@ -239,7 +243,7 @@ internal fun WorkspaceGroupEditorSheet(
                     }
                 }
 
-                if (sourceType == GroupSourceType.SUBSCRIPTION) {
+                if (showSource && sourceType == GroupSourceType.SUBSCRIPTION) {
                     item {
                         TextField(
                             value = subscriptionUrl,

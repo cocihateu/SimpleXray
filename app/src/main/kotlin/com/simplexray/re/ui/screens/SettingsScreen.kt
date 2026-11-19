@@ -100,8 +100,8 @@ fun SettingsScreen(
     val geoipUrlDefault = stringResource(R.string.geoip_url)
     val geositeUrlDefault = stringResource(R.string.geosite_url)
     val backdrop = LocalLayerBackdrop.current
-    var category by remember { mutableStateOf(0) }
-    val categories = listOf("通用", "TUN", "入站", "规则资源", "全局 DNS 与配置", "zashboard", "网络", "关于")
+    val category = mainViewModel.settingsCategory
+    val categories = listOf("通用", "TUN", "入站", "规则资源", "全局 DNS 与配置", "zashboard", "网络", "关于", "分组")
 
     if (editingRuleFile != null) {
         GlassBottomSheet(
@@ -287,7 +287,7 @@ fun SettingsScreen(
         item {
             Card {
                 OverlayDropdownPreference(title = "设置分类", items = categories, selectedIndex = category,
-                    onSelectedIndexChange = { category = it })
+                    onSelectedIndexChange = { mainViewModel.settingsCategory = it })
             }
         }
         if (category == 0) item {
@@ -346,6 +346,9 @@ fun SettingsScreen(
                 mainViewModel = mainViewModel,
                 isCheckingForUpdates = isCheckingForUpdates,
             )
+        }
+        if (category == 8) {
+            groupManagementItems(mainViewModel)
         }
     }
 }

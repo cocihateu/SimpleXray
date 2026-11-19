@@ -146,6 +146,7 @@ internal class GroupCoreSession(
             nodeEntryPort = config.nodeEntryPort,
             nodeUsers = config.users,
             nodePassword = config.password,
+            nodeUotVersions = config.workspace.allNodes().associate { it.tag to it.udpOverTcpVersion },
             resolvePlan = { groupTag ->
                 controller?.buildFailoverPlan(groupTag) ?: FailoverPlan(null, emptyList(), 3_000)
             },
@@ -247,6 +248,7 @@ internal class GroupCoreSession(
                             .map(OutboundGroupConfig::physicalTarget)).toSet()
                     val newBalancerGroups = emptySet<String>()
                     if (updated.allNodes() != initialNodes ||
+                        updated.groups.map { it.tag to it.frontProxy } != config.workspace.groups.map { it.tag to it.frontProxy } ||
                         newRelayGroups != initialRelayGroups ||
                         newBalancerGroups != initialBalancerGroups
                     ) {
