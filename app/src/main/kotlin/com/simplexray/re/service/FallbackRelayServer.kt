@@ -19,6 +19,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicReference
 
 internal data class FallbackRelaySpec(
     val groupTag: String,
@@ -274,14 +275,14 @@ internal class FallbackRelayServer(
             client.soTimeout = 0
             upstreamControl.soTimeout = 0
 
-            @Volatile var clientEndpoint: InetSocketAddress? = null
+            val clientEndpoint = AtomicReference<InetSocketAddress?>(null)
             val c2u = scope.launch(Dispatchers.IO) {
                 val buf = ByteArray(UDP_BUFFER_BYTES)
                 val packet = DatagramPacket(buf, buf.size)
                 while (isActive && localUdp.isClosed == false) {
                     try {
                         localUdp.receive(packet)
-                        clientEndpoint = InetSocketAddress(packet.address, packet.port)
+                        clientEndpoint.set(InetSocketAddress(packet.address, packet.port))
                         upstreamUdp.send(DatagramPacket(packet.data, packet.offset, packet.length, xrayUdpAddr))
                     } catch (_: IOException) {
                         break
@@ -294,7 +295,7 @@ internal class FallbackRelayServer(
                 while (isActive && upstreamUdp.isClosed == false) {
                     try {
                         upstreamUdp.receive(packet)
-                        val dest = clientEndpoint ?: continue
+                        val dest = clientEndpoint.get() ?: continue
                         localUdp.send(DatagramPacket(packet.data, packet.offset, packet.length, dest))
                     } catch (_: IOException) {
                         break

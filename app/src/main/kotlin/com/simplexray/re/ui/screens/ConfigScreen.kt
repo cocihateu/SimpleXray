@@ -315,7 +315,7 @@ private fun WorkspaceGroupCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.defaultColors(
-            color = if (isDefault) MiuixTheme.colorScheme.surfaceContainer else MiuixTheme.colorScheme.surfaceContainerLow
+            color = if (isDefault) MiuixTheme.colorScheme.surfaceContainer else MiuixTheme.colorScheme.surface
         ),
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
