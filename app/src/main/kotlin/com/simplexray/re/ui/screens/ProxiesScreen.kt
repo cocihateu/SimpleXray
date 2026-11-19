@@ -141,6 +141,10 @@ fun ProxiesScreen(
                             Text(member.tag, style = MiuixTheme.textStyles.body1)
                             Text(if (member.isGroup) "节点组" else "${node?.protocol.orEmpty().uppercase()} · ${latencies[member.tag]?.let { "${it}ms" } ?: "待测"}",
                                 style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                            if (node != null && node.udpOverTcpVersion > 0) {
+                                Text("UDP over TCP v${node.udpOverTcpVersion}", style = MiuixTheme.textStyles.body2,
+                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                            }
                         }
                         if (selected) Icon(Icons.Default.Check, contentDescription = "已选择", tint = MiuixTheme.colorScheme.primary)
                         IconButton(onClick = {
@@ -156,8 +160,8 @@ fun ProxiesScreen(
     }
     if (editingNode != null || addingNode) {
         val node = editingNode
-        NodeConfigSheet(node, onSave = { raw ->
-            if (node != null) mainViewModel.updateNodeJson(node.tag, raw)
+        NodeConfigSheet(node, onSave = { raw, uotVersion ->
+            if (node != null) mainViewModel.updateNodeJson(node.tag, raw, uotVersion)
             else group?.let { mainViewModel.addNodeToGroup(it.tag, raw) } ?: "请先选择分组"
         }, onDismiss = { editingNode = null; addingNode = false })
     }
@@ -175,9 +179,10 @@ fun ProxiesScreen(
 }
 
 @Composable
-private fun NodeConfigSheet(node: ProxyNode?, onSave: (String) -> String?, onDismiss: () -> Unit) {
+private fun NodeConfigSheet(node: ProxyNode?, onSave: (String, Int?) -> String?, onDismiss: () -> Unit) {
     var text by remember(node) { mutableStateOf(node?.outboundJson?.let { JSONObject(it).toString(2) }.orEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
+    var uotVersion by remember(node) { mutableStateOf(node?.udpOverTcpVersion ?: 0) }
     GlassBottomSheet(show = true, backdrop = LocalLayerBackdrop.current,
         title = node?.tag ?: "新增节点", onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(16.dp).verticalScroll(rememberScrollState()),
@@ -186,8 +191,30 @@ private fun NodeConfigSheet(node: ProxyNode?, onSave: (String) -> String?, onDis
                 style = MiuixTheme.textStyles.body2)
             TextField(value = text, onValueChange = { text = it }, label = "节点配置",
                 modifier = Modifier.fillMaxWidth().heightIn(min = 200.dp, max = 360.dp))
+            if (node != null) {
+                val strategies = listOf("", "AsIs", "UseIP", "UseIPv4", "UseIPv6", "ForceIP", "ForceIPv4", "ForceIPv6")
+                val strategy = runCatching { JSONObject(text).optString("targetStrategy") }.getOrDefault("")
+                Card {
+                    OverlayDropdownPreference(title = "目标 DNS 解析", items = strategies.map { it.ifBlank { "默认" } },
+                        selectedIndex = strategies.indexOf(strategy).coerceAtLeast(0),
+                        onSelectedIndexChange = { index ->
+                            runCatching {
+                                text = JSONObject(text).apply {
+                                    if (index == 0) remove("targetStrategy") else put("targetStrategy", strategies[index])
+                                }.toString(2)
+                            }.onFailure { error = "请先完成节点 JSON 编辑" }
+                        })
+                }
+            }
+            if (node?.protocol == "shadowsocks") {
+                Card {
+                    OverlayDropdownPreference(title = "UDP 传输",
+                        items = listOf("原生 UDP", "UDP over TCP v1", "UDP over TCP v2"),
+                        selectedIndex = uotVersion, onSelectedIndexChange = { uotVersion = it })
+                }
+            }
             error?.let { Text(it, color = MiuixTheme.colorScheme.error) }
-            Button(onClick = { error = onSave(text); if (error == null) onDismiss() },
+            Button(onClick = { error = onSave(text, node?.let { uotVersion }); if (error == null) onDismiss() },
                 modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColorsPrimary()) { Text("保存") }
         }
     }

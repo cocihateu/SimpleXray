@@ -380,24 +380,34 @@ internal class GroupWorkspaceController(
         }
     }
 
-    fun updateNodeJson(nodeTag: String, rawJson: String): String? {
+    fun updateNodeJson(nodeTag: String, rawJson: String, udpOverTcpVersion: Int? = null): String? {
         val parsed = runCatching { JSONObject(rawJson) }.getOrNull()
             ?: return "JSON 格式无效"
         val protocol = parsed.optString("protocol").trim().lowercase()
         if (protocol.isEmpty()) return "缺少 protocol 字段"
-        parsed.put("tag", nodeTag)
+        val newTag = parsed.optString("tag").trim().ifBlank { nodeTag }
+        val workspace = workspaceStore.load()
+        if (newTag != nodeTag && (newTag in BUILTIN_GROUP_TARGET_TAGS || workspace.nodeByTag(newTag) != null)) {
+            return "节点名称已被使用：$newTag"
+        }
+        parsed.put("tag", newTag)
         val strategy = parsed.optString("targetStrategy")
         workspaceStore.update { current ->
             current.copy(
                 groups = current.groups.map { g ->
                     g.copy(
+                        frontProxy = g.frontProxy?.let { if (it.isGroup == false && it.tag == nodeTag) it.copy(tag = newTag) else it },
+                        members = g.effectiveMembers().map { if (it.isGroup == false && it.tag == nodeTag) it.copy(tag = newTag) else it },
+                        selectedMember = g.selectedMember?.let { if (it.isGroup == false && it.tag == nodeTag) it.copy(tag = newTag) else it },
                         nodes = g.nodes.map { n ->
                             if (n.tag == nodeTag) {
                                 n.copy(
+                                    tag = newTag,
                                     protocol = protocol,
                                     outboundJson = parsed.toString(),
                                     targetStrategy = strategy,
                                     userEdited = true,
+                                    udpOverTcpVersion = udpOverTcpVersion ?: n.udpOverTcpVersion,
                                 )
                             } else {
                                 n
@@ -406,6 +416,11 @@ internal class GroupWorkspaceController(
                     )
                 }
             )
+        }
+        if (newTag != nodeTag && nodeTag !in workspace.effectiveRoutingBindings()) {
+            RuleWorkspaceStore(application).update { rules ->
+                rules.map { if (it.target == nodeTag) it.copy(target = newTag) else it }
+            }
         }
         return null
     }

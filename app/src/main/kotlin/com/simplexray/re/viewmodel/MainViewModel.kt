@@ -374,8 +374,8 @@ class MainViewModel(application: Application) :
     fun updateNodeTargetStrategy(nodeTag: String, strategy: String) =
         workspaceController.updateNodeTargetStrategy(nodeTag, strategy)
 
-    fun updateNodeJson(nodeTag: String, rawJson: String): String? =
-        workspaceController.updateNodeJson(nodeTag, rawJson)
+    fun updateNodeJson(nodeTag: String, rawJson: String, udpOverTcpVersion: Int? = null): String? =
+        workspaceController.updateNodeJson(nodeTag, rawJson, udpOverTcpVersion)
 
     fun addNodeToGroup(groupTag: String, rawJson: String): String? =
         workspaceController.addNodeToGroup(groupTag, rawJson)
