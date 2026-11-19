@@ -22,7 +22,6 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Speed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -50,6 +49,7 @@ import top.yukonga.miuix.kmp.basic.DropdownItem
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.glass.GlassBottomSheet
 import top.yukonga.miuix.kmp.menu.OverlayIconDropdownMenu
@@ -125,9 +125,8 @@ fun ProxiesScreen(
                         ))) {
                             Icon(Icons.Default.Add, contentDescription = "导入节点到 ${group.tag}")
                         }
-                        IconButton(onClick = { mainViewModel.measureGroupLatency(group.tag) }, enabled = measuringTargets.isEmpty()) {
-                            Icon(Icons.Default.Speed, contentDescription = "测延迟")
-                        }
+                        TextButton(text = "测速", onClick = { mainViewModel.measureGroupLatency(group.tag) },
+                            enabled = measuringTargets.isEmpty())
                         if (group.sourceType == GroupSourceType.SUBSCRIPTION) {
                             IconButton(onClick = { mainViewModel.refreshSubscriptionGroup(group.tag) },
                                 enabled = group.tag !in refreshing) {
