@@ -90,8 +90,10 @@ internal object StandaloneLatencySession {
             )
             var process: Process? = null
             var readerJob: kotlinx.coroutines.Job? = null
+            val obfs = SimpleObfsRelay(config.obfsPort, config.obfsSpecs)
             try {
                 relay.start(this)
+                obfs.start(this)
                 val executable = "${TProxyService.getNativeLibraryDir(context)}/libxray.so"
                 val child = ProcessBuilder(executable, "-config", "stdin:").apply {
                     directory(context.filesDir)
@@ -146,6 +148,7 @@ internal object StandaloneLatencySession {
                 }.awaitAll()
             } finally {
                 relay.close()
+                obfs.close()
                 controller.stop()
                 client.dispatcher.cancelAll()
                 client.connectionPool.evictAll()

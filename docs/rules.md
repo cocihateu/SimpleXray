@@ -68,3 +68,5 @@ The supplied `HandleRoute` migration keeps nested domain branches and their retu
 Runtime edits add required relay outbounds through `api ado`, then replace routing through `api adrules --append=false`. The API listener retains StatsService, RoutingService, and HandlerService. Importing a full Xray configuration updates the rule workspace as well as global settings.
 
 The rules page imports and exports structured JSON through Android's document picker. Imports also accept Xray `routing.rules`. Long-press dragging updates the displayed order, scrolls at viewport edges, and saves the final order when released. Group targets carry a small group label in the list and target selectors.
+
+Choosing the default group in the app or the Clash API GLOBAL selector also changes the last enabled Match rule to target GLOBAL. This connects the catch-all rule to the selected default group while preserving specific domain, IP, and other rule targets.

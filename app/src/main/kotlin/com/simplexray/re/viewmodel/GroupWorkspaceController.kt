@@ -159,13 +159,8 @@ internal class GroupWorkspaceController(
 
     fun setDefaultGroup(tag: String) {
         scope.launch(Dispatchers.IO) {
-            workspaceStore.update { current ->
-                if (current.groups.any { it.tag == tag }) {
-                    current.copy(defaultGroupTag = tag)
-                } else {
-                    current
-                }
-            }
+            workspaceStore.selectDefaultGroup(tag)
+            showMessage("默认组已设为 $tag，兜底规则跟随默认组")
         }
     }
 
@@ -380,7 +375,8 @@ internal class GroupWorkspaceController(
         }
     }
 
-    fun updateNodeJson(nodeTag: String, rawJson: String, udpOverTcpVersion: Int? = null): String? {
+    fun updateNodeJson(nodeTag: String, rawJson: String, udpOverTcpVersion: Int? = null,
+        obfsMode: String? = null, obfsHost: String? = null): String? {
         val parsed = runCatching { JSONObject(rawJson) }.getOrNull()
             ?: return "JSON 格式无效"
         val protocol = parsed.optString("protocol").trim().lowercase()
@@ -408,6 +404,8 @@ internal class GroupWorkspaceController(
                                     targetStrategy = strategy,
                                     userEdited = true,
                                     udpOverTcpVersion = udpOverTcpVersion ?: n.udpOverTcpVersion,
+                                    obfsMode = obfsMode ?: n.obfsMode,
+                                    obfsHost = obfsHost ?: n.obfsHost,
                                 )
                             } else {
                                 n

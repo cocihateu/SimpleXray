@@ -54,6 +54,7 @@ internal class FallbackRelayServer(
     private val resolvePlan: (String) -> FailoverPlan,
     private val onCandidateFailed: (String, String) -> Unit,
     private val onCandidateConnected: (String, String) -> Unit,
+    private val awaitReady: suspend () -> Unit = {},
 ) : Closeable {
     private val listeners = CopyOnWriteArrayList<ServerSocket>()
     private val jobs = CopyOnWriteArrayList<Job>()
@@ -111,6 +112,7 @@ internal class FallbackRelayServer(
         val input = DataInputStream(client.getInputStream())
         val output = client.getOutputStream()
         val (spec, ruleId) = authenticateServer(input, output, targets) ?: return
+        if (ruleId != "dialer") awaitReady()
         val version = input.readUnsignedByte()
         val command = input.readUnsignedByte()
         input.readUnsignedByte()

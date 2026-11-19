@@ -11,6 +11,7 @@ import com.xray.app.router.command.OverrideBalancerTargetRequest
 import com.xray.app.router.command.RoutingServiceGrpc
 import io.grpc.ManagedChannelBuilder
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,6 +34,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 
 internal data class GroupNodeMeasurement(val delayMs: Long?, val completedAtMs: Long)
+internal data class ExitInfoProxy(val port: Int, val username: String, val password: String)
 
 internal object GroupRuntimeStatus {
     private val nodes = MutableStateFlow<Map<String, String>>(emptyMap())
@@ -86,6 +88,8 @@ internal object GroupRuntimeStatus {
     suspend fun measureTarget(member: GroupMemberRef, url: String, timeoutMs: Int): Long? =
         owner?.measureTarget(member, url, timeoutMs)
 
+    fun exitInfoProxy(): ExitInfoProxy? = owner?.exitInfoProxy()
+
     @Synchronized fun recordMeasurement(session: GroupCoreSession, node: String, delay: Long?) {
         if (owner === session) {
             measurements.value = measurements.value + (node to GroupNodeMeasurement(delay, System.currentTimeMillis()))
@@ -105,6 +109,8 @@ internal class GroupCoreSession(
     private var job: Job? = null
     @Volatile private var closed = false
     @Volatile private var relayServer: FallbackRelayServer? = null
+    private var obfsRelay: SimpleObfsRelay? = null
+    private val standbyReady = CompletableDeferred<Unit>()
     @Volatile private var measureNode: (suspend (String, String, Int) -> Long?)? = null
     @Volatile private var applyTarget: (suspend (String, String) -> Unit)? = null
     @Volatile private var controller: GroupRuntimeController? = GroupRuntimeController(
@@ -121,6 +127,7 @@ internal class GroupCoreSession(
     private val initialGlobalVersion: Long = GlobalConfigStore.version.value
 
     fun formatLogLine(line: String): String = config.formatLogLine(line)
+    fun exitInfoProxy() = ExitInfoProxy(config.healthPort, config.exitInfoUser, config.password)
 
     fun switchGroupMemberLive(groupTag: String, member: GroupMemberRef) {
         controller?.forceSwitchMember(groupTag, member)
@@ -156,12 +163,14 @@ internal class GroupCoreSession(
             onCandidateConnected = { groupTag, leaf ->
                 controller?.onCandidateConnected(groupTag, leaf)
             },
+            awaitReady = { standbyReady.await() },
         )
         relayServer = relay
         relay.start(scope)
+        obfsRelay = SimpleObfsRelay(config.obfsPort, config.obfsSpecs).also { it.start(scope) }
     }
 
-    @Synchronized fun start(scope: CoroutineScope, reload: () -> Unit) {
+    @Synchronized fun start(scope: CoroutineScope, onReady: () -> Unit, reload: () -> Unit) {
         if (closed) return
         GroupRuntimeStatus.start(this)
         startRelayBeforeCore(scope)
@@ -226,6 +235,8 @@ internal class GroupCoreSession(
 
             try {
                 runtimeController.start(this)
+                standbyReady.complete(Unit)
+                onReady()
                 config.routingBindings.forEach { (target, group) ->
                     logEvent("[Info] Routing target '$target' uses group '$group'.")
                 }
@@ -288,9 +299,12 @@ internal class GroupCoreSession(
 
     @Synchronized fun close() {
         closed = true
+        standbyReady.cancel()
         controller?.stop()
         relayServer?.close()
         relayServer = null
+        obfsRelay?.close()
+        obfsRelay = null
         job?.cancel()
         GroupRuntimeStatus.stop(this)
         config.close()

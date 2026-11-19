@@ -21,6 +21,7 @@ internal class OutboundGroupConfig(
     val allLeafTargets = (physicalNodes + BUILTIN_GROUP_TARGET_TAGS).distinct()
     val routingBindings = workspace.effectiveRoutingBindings()
     val users = allLeafTargets.mapIndexed { index, tag -> tag to "node-$index" }.toMap()
+    val exitInfoUser = "exit-info"
     private val targets = workspace.groups.map { it.tag } + allLeafTargets.map(::physicalTarget)
     val businessRelayPort = allocatePort()
     val fallbackRelaySpecs = targets.mapIndexed { index, target ->
@@ -32,6 +33,17 @@ internal class OutboundGroupConfig(
     val balancers: Map<String, String> = emptyMap()
     private val nodeEntryInbound = "${prefix}node-entry"
     private val healthInbound = "${prefix}health"
+    val obfsPort = if (workspace.allNodes().any { it.obfsMode.isNotEmpty() }) allocatePort() else 0
+    val obfsSpecs = workspace.allNodes().filter { it.obfsMode.isNotEmpty() }.mapIndexed { index, node ->
+        val front = workspace.groups.firstOrNull { it.nodes.any { member -> member.tag == node.tag } }?.frontProxy
+        val frontTarget = front?.let { if (it.isGroup) it.tag else physicalTarget(it.tag) }
+        SimpleObfsSpec(node.tag, "obfs-$index", UUID.randomUUID().toString(), node.obfsMode, node.obfsHost,
+            fallbackRelaySpecs.firstOrNull { it.groupTag == frontTarget }?.let {
+                it.copy(username = "${it.username}/dialer")
+            })
+    }
+    private val obfsOutbounds = obfsSpecs.associate { it.nodeTag to "${prefix}${it.username}" }
+    private val nativeUdpOutbounds = obfsSpecs.associate { it.nodeTag to "${prefix}native-udp-${it.username}" }
     private val uotOutbounds = workspace.allNodes().filter { it.udpOverTcpVersion > 0 }
         .mapIndexed { index, node -> node.tag to "${prefix}uot-$index" }.toMap()
     private var domainStrategy = "IPIfNonMatch"
@@ -46,6 +58,7 @@ internal class OutboundGroupConfig(
 
     fun inject(root: JSONObject, filesDir: File, cacheDir: File, rules: List<TrafficRule>) {
         val outbounds = root.array("outbounds")
+        val chainOutbounds = mutableListOf<JSONObject>()
         for (index in 0 until outbounds.length()) {
             val outbound = outbounds.getJSONObject(index)
             val nodeTag = outbound.optString("tag")
@@ -54,7 +67,21 @@ internal class OutboundGroupConfig(
             val target = if (front.isGroup) front.tag else physicalTarget(front.tag)
             val stream = outbound.optJSONObject("streamSettings") ?: JSONObject().also { outbound.put("streamSettings", it) }
             val sockopt = stream.optJSONObject("sockopt") ?: JSONObject().also { stream.put("sockopt", it) }
-            sockopt.put("dialerProxy", fallbackRelayOutbounds.getValue(target))
+            val spec = fallbackRelaySpecs.first { it.groupTag == target }
+            val chainTag = "${prefix}chain-${chainOutbounds.size}"
+            sockopt.put("dialerProxy", chainTag)
+            chainOutbounds += relayOutbound(spec, chainTag, "${spec.username}/dialer")
+        }
+        chainOutbounds.forEach { outbounds.put(it) }
+        obfsSpecs.forEach { spec ->
+            val original = (0 until outbounds.length()).map { outbounds.getJSONObject(it) }
+                .first { it.optString("tag") == spec.nodeTag }
+            outbounds.put(JSONObject(original.toString()).put("tag", nativeUdpOutbounds.getValue(spec.nodeTag)))
+            val stream = original.optJSONObject("streamSettings") ?: JSONObject().also { original.put("streamSettings", it) }
+            val sockopt = stream.optJSONObject("sockopt") ?: JSONObject().also { stream.put("sockopt", it) }
+            sockopt.put("dialerProxy", obfsOutbounds.getValue(spec.nodeTag))
+            outbounds.put(relayOutbound(FallbackRelaySpec(spec.nodeTag, obfsPort, spec.username, spec.password),
+                obfsOutbounds.getValue(spec.nodeTag), spec.username))
         }
         uotOutbounds.forEach { (node, target) ->
             val original = (0 until outbounds.length()).map { outbounds.getJSONObject(it) }
@@ -75,7 +102,8 @@ internal class OutboundGroupConfig(
         root.array("inbounds").put(listener(nodeEntryInbound, nodeEntryPort, "socks",
             JSONObject().put("auth", "password").put("accounts", accounts).put("udp", true)))
         root.array("inbounds").put(listener(healthInbound, healthPort, "http",
-            JSONObject().put("accounts", JSONArray(accounts.toString()))))
+            JSONObject().put("accounts", JSONArray(accounts.toString())
+                .put(JSONObject().put("user", exitInfoUser).put("pass", password)))))
         domainStrategy = root.optJSONObject("routing")?.optString("domainStrategy", "IPIfNonMatch") ?: "IPIfNonMatch"
         routingOptions = JSONObject(root.optJSONObject("routing")?.toString() ?: "{}").apply {
             remove("script")
@@ -97,6 +125,12 @@ internal class OutboundGroupConfig(
 
     fun routingConfig(current: GroupWorkspace, rules: List<TrafficRule>): JSONObject {
         val compiled = JSONArray()
+        nativeUdpOutbounds.forEach { (node, target) ->
+            compiled.put(JSONObject().put("type", "field")
+                .put("inboundTag", JSONArray().put(nodeEntryInbound))
+                .put("network", "udp").put("user", JSONArray().put(users.getValue(node)))
+                .put("outboundTag", target).put("ruleTag", "sx-native-udp/${users.getValue(node)}"))
+        }
         uotOutbounds.forEach { (node, target) ->
             compiled.put(JSONObject().put("type", "field")
                 .put("inboundTag", JSONArray().put(nodeEntryInbound))
@@ -110,6 +144,13 @@ internal class OutboundGroupConfig(
                 .put("inboundTag", JSONArray().put(nodeEntryInbound).put(healthInbound))
                 .put("user", JSONArray().put(user)).put("outboundTag", target)
                 .put("ruleTag", "sx-internal/$user"))
+        }
+        targetSpec(current, if (current.routingMode == "direct") "direct" else "GLOBAL")?.let { spec ->
+            compiled.put(JSONObject().put("type", "field")
+                .put("inboundTag", JSONArray().put(healthInbound))
+                .put("user", JSONArray().put(exitInfoUser))
+                .put("outboundTag", fallbackRelayOutbounds.getValue(spec.groupTag))
+                .put("ruleTag", "exit-info"))
         }
         if (current.routingMode == "rule") {
             rules.filter { it.enabled }.forEach { rule ->

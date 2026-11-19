@@ -131,6 +131,9 @@ class MainViewModel(application: Application) :
         configFileController.selectedConfigFile,
         { isVpnEnabled() },
     )
+    private val exitInfoController = ExitInfoController(viewModelScope)
+    val exitInfo get() = exitInfoController.state
+    fun refreshExitInfo() = exitInfoController.refresh()
 
     private val workspaceController: GroupWorkspaceController = GroupWorkspaceController(
         application = application,
@@ -380,8 +383,9 @@ class MainViewModel(application: Application) :
     fun updateNodeTargetStrategy(nodeTag: String, strategy: String) =
         workspaceController.updateNodeTargetStrategy(nodeTag, strategy)
 
-    fun updateNodeJson(nodeTag: String, rawJson: String, udpOverTcpVersion: Int? = null): String? =
-        workspaceController.updateNodeJson(nodeTag, rawJson, udpOverTcpVersion)
+    fun updateNodeJson(nodeTag: String, rawJson: String, udpOverTcpVersion: Int? = null,
+        obfsMode: String? = null, obfsHost: String? = null): String? =
+        workspaceController.updateNodeJson(nodeTag, rawJson, udpOverTcpVersion, obfsMode, obfsHost)
 
     fun addNodeToGroup(groupTag: String, rawJson: String): String? =
         workspaceController.addNodeToGroup(groupTag, rawJson)

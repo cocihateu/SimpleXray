@@ -200,13 +200,19 @@ internal object NodeImportConverter {
         clone.put("tag", tag)
         clone.put("protocol", normalized)
         val uotVersion = clone.optInt("x-simplexray-uot-version")
+        val obfsMode = clone.optString("x-simplexray-obfs-mode")
+        val obfsHost = clone.optString("x-simplexray-obfs-host")
         clone.remove("x-simplexray-uot-version")
+        clone.remove("x-simplexray-obfs-mode")
+        clone.remove("x-simplexray-obfs-host")
         return ProxyNode(
             tag = tag,
             protocol = normalized,
             outboundJson = clone.toString(),
             targetStrategy = clone.optString("targetStrategy"),
             udpOverTcpVersion = uotVersion,
+            obfsMode = obfsMode,
+            obfsHost = obfsHost,
         )
     }
 
@@ -318,21 +324,18 @@ internal object NodeImportConverter {
             return convertMihomoWireGuard(name, src)
         }
 
-        // Check Shadowsocks plugins
-        var ssHttpObfsHost: String? = null
+        var obfsMode = ""
+        var obfsHost = ""
         if (protocol == "shadowsocks") {
             val plugin = src.optString("plugin").trim().lowercase()
             if (plugin.isNotEmpty()) {
-                reasons?.add("$name：该 Shadowsocks 外置插件需要对应传输实现，请提供原生节点")
-                return null
-            }
-            if (plugin.isNotEmpty()) {
                 val opts = src.optJSONObject("plugin-opts")
                 val mode = opts?.optString("mode")?.trim()?.lowercase().orEmpty()
-                if ((plugin == "obfs" || plugin == "obfs-local" || plugin == "simple-obfs") && mode == "http") {
-                    ssHttpObfsHost = opts?.optString("host")?.trim().orEmpty()
+                if (plugin in setOf("obfs", "obfs-local", "simple-obfs") && mode in setOf("http", "tls")) {
+                    obfsMode = mode
+                    obfsHost = opts?.optString("host")?.trim().orEmpty().ifBlank { server }
                 } else {
-                    reasons?.add("Shadowsocks 插件暂缺少原生 Xray 支持：$plugin（节点：$name）")
+                    reasons?.add("$name：SS 插件 $plugin / $mode 暂缺对应传输实现")
                     return null
                 }
             }
@@ -419,11 +422,12 @@ internal object NodeImportConverter {
         }
         outbound.put("settings", settings)
 
-        val stream = buildMihomoStreamSettings(src, protocol, server, ssHttpObfsHost)
+        val stream = buildMihomoStreamSettings(src, protocol, server, null)
         if (stream.length() > 0) {
             outbound.put("streamSettings", stream)
         }
         return ProxyNode(tag = name, protocol = protocol, outboundJson = outbound.toString(),
+            obfsMode = obfsMode, obfsHost = obfsHost,
             udpOverTcpVersion = if (protocol == "shadowsocks" && src.optBoolean("udp-over-tcp"))
                 src.optInt("udp-over-tcp-version", 2).let { if (it == 1) 1 else 2 } else 0)
     }
@@ -650,14 +654,9 @@ internal object NodeImportConverter {
                 val uot = src.optBoolean("udp_over_tcp", false) || uotConfig?.optBoolean("enabled") == true
                 val uotVersion = if (uot) uotConfig?.optInt("version", 2)?.let { if (it == 1) 1 else 2 } ?: 2 else 0
                 if (plugin.isNotEmpty()) {
-                    reasons?.add("$tag：Shadowsocks 外置插件需要对应传输实现，请提供原生节点")
-                    return null
-                }
-
-                if (plugin.isNotEmpty()) {
                     val obfsMode = pluginOpts["obfs"]?.lowercase().orEmpty()
                     val obfsHost = pluginOpts["obfs-host"].orEmpty()
-                    if ((plugin == "obfs-local" || plugin == "simple-obfs" || plugin == "obfs") && obfsMode == "http") {
+                    if (plugin in setOf("obfs-local", "simple-obfs", "obfs") && obfsMode in setOf("http", "tls")) {
                         val srv = JSONObject()
                             .put("address", server)
                             .put("port", port)
@@ -667,15 +666,10 @@ internal object NodeImportConverter {
                             .put("tag", tag)
                             .put("protocol", "shadowsocks")
                             .put("settings", JSONObject().put("servers", JSONArray().put(srv)))
-                            .put(
-                                "streamSettings",
-                                JSONObject()
-                                    .put("network", "tcp")
-                                    .put("tcpSettings", buildHttpObfsTcpSettings(obfsHost))
-                            )
-                        return ProxyNode(tag = tag, protocol = "shadowsocks", outboundJson = outbound.toString())
+                        return ProxyNode(tag = tag, protocol = "shadowsocks", outboundJson = outbound.toString(),
+                            udpOverTcpVersion = uotVersion, obfsMode = obfsMode, obfsHost = obfsHost.ifBlank { server })
                     } else {
-                        reasons?.add("Shadowsocks 插件暂缺少原生 Xray 支持：$plugin（节点：$tag）")
+                        reasons?.add("$tag：SS 插件 $plugin / $obfsMode 暂缺对应传输实现")
                         return null
                     }
                 }
@@ -863,10 +857,6 @@ internal object NodeImportConverter {
 
     private fun parseSingleShareLink(line: String, reasons: MutableList<String>? = null): ProxyNode? {
         val uri = Uri.parse(line)
-        if (uri.isHierarchical && uri.getQueryParameter("plugin")?.isNotBlank() == true) {
-            reasons?.add("Shadowsocks 分享链接带外置插件，请提供原生节点")
-            return null
-        }
         if (uri.isHierarchical && uri.getQueryParameter("type") in setOf("http", "h2", "h3", "quic")) {
             reasons?.add("分享链接采用旧 HTTP/H2/QUIC 传输，请使用服务端 XHTTP 配置")
             return null
@@ -1040,7 +1030,7 @@ internal object NodeImportConverter {
 
         if (authorityPart.contains('@')) {
             val userInfoRaw = authorityPart.substringBefore('@')
-            val hostPort = authorityPart.substringAfter('@')
+            val hostPort = authorityPart.substringAfter('@').removeSuffix("/")
             val decodedUserInfo = if (userInfoRaw.contains(':')) {
                 urlDecode(userInfoRaw)
             } else {
@@ -1077,7 +1067,7 @@ internal object NodeImportConverter {
             val opts = parseKeyValueOpts(pluginParam.substringAfter(';', ""))
             val obfsMode = opts["obfs"]?.lowercase().orEmpty()
             val obfsHost = opts["obfs-host"].orEmpty()
-            if ((pluginName == "obfs-local" || pluginName == "simple-obfs") && obfsMode == "http") {
+            if (pluginName in setOf("obfs-local", "simple-obfs", "obfs") && obfsMode in setOf("http", "tls")) {
                 val outbound = JSONObject()
                     .put("tag", finalTag)
                     .put("protocol", "shadowsocks")
@@ -1094,15 +1084,10 @@ internal object NodeImportConverter {
                             )
                         )
                     )
-                    .put(
-                        "streamSettings",
-                        JSONObject()
-                            .put("network", "tcp")
-                            .put("tcpSettings", buildHttpObfsTcpSettings(obfsHost))
-                    )
-                return ProxyNode(tag = finalTag, protocol = "shadowsocks", outboundJson = outbound.toString())
+                return ProxyNode(tag = finalTag, protocol = "shadowsocks", outboundJson = outbound.toString(),
+                    obfsMode = obfsMode, obfsHost = obfsHost.ifBlank { host })
             } else {
-                reasons?.add("Shadowsocks 插件暂缺少原生 Xray 支持：$pluginName（节点：$finalTag）")
+                reasons?.add("$finalTag：SS 插件 $pluginName / $obfsMode 暂缺对应传输实现")
                 return null
             }
         }

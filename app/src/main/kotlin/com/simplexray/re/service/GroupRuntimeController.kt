@@ -56,9 +56,14 @@ internal class GroupRuntimeController(
     private var expiryJob: Job? = null
     private var runtimeScope: CoroutineScope? = null
 
-    fun start(scope: CoroutineScope) {
+    suspend fun start(scope: CoroutineScope) {
         runtimeScope = scope
-        restartUrlTestLoops(scope)
+        coroutineScope {
+            workspace.groups.filter { it.strategy == GroupStrategy.URL_TEST }.map { group ->
+                async(Dispatchers.IO) { measureUrlTestGroup(group) }
+            }.awaitAll()
+        }
+        restartUrlTestLoops(scope, waitBeforeFirstCheck = true)
         fallbackStates.filterValues { it.nextRecoveryAtElapsedMs > 0L }.keys.forEach(::startRecoveryLoop)
         expiryJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
@@ -251,7 +256,7 @@ internal class GroupRuntimeController(
         }
         val group = workspace.groupByTag(groupTag)
             ?: return FailoverPlan(null, emptyList(), 3_000)
-        if (group.strategy == GroupStrategy.SELECT || group.effectiveMembers().size == 1) {
+        if (group.strategy == GroupStrategy.SELECT) {
             val leaf = resolveActiveLeaf(group, mutableSetOf())
             val chosen = manualMembers[groupTag] ?: group.selectedMember ?: group.effectiveMembers().firstOrNull()
             if (chosen?.isGroup == true) return buildFailoverPlan(chosen.tag)
@@ -261,6 +266,11 @@ internal class GroupRuntimeController(
             return FailoverPlan(null, rankUrlTestLeaves(group, mutableSetOf(groupTag)), group.failoverTimeoutSeconds * 1_000)
         }
         val members = group.effectiveMembers()
+        if (members.size == 1) {
+            val only = members.first()
+            return if (only.isGroup) buildFailoverPlan(only.tag)
+                else FailoverPlan(only.tag, listOf(only.tag), group.failoverTimeoutSeconds * 1_000, watchResponse = false)
+        }
         val primary = members.firstOrNull()
             ?.let { expandMemberLeaves(it, mutableSetOf(groupTag)) }.orEmpty()
         val backups = orderedBackups(group).flatMap { expandMemberLeaves(it, mutableSetOf(groupTag)) }
@@ -290,34 +300,55 @@ internal class GroupRuntimeController(
         runtimeScope?.launch(Dispatchers.IO) { syncAllBalancersAndPublish() }
     }
 
-    private fun restartUrlTestLoops(scope: CoroutineScope) {
+    private fun urlTestLeaves(group: ProxyGroup): List<String> {
+        val protectedPrimaries = workspace.groups
+            .filter { it.strategy == GroupStrategy.FALLBACK && it.effectiveMembers().size > 1 }
+            .mapNotNull { parent ->
+                parent.effectiveMembers().firstOrNull()?.let { ref -> scheduledPrimaryLeaf(ref, mutableSetOf(parent.tag)) }
+            }.toSet()
+        return group.effectiveMembers()
+            .flatMap { collectMemberLeaves(it, mutableSetOf(group.tag)) }
+            .distinct()
+            .filter { it !in protectedPrimaries && it !in BUILTIN_GROUP_TARGET_TAGS }
+    }
+
+    private suspend fun measureUrlTestGroup(group: ProxyGroup) {
+        coroutineScope {
+            urlTestLeaves(group).map { leaf ->
+                async(Dispatchers.IO) {
+                    recordMeasurement(leaf, group.testUrl, probeNode(leaf, group.testUrl))
+                }
+            }.awaitAll()
+        }
+        manualMembers.remove(group.tag)
+        syncAllBalancersAndPublish()
+    }
+
+    private fun nextUrlTestDelay(group: ProxyGroup): Long {
+        val now = SystemClock.elapsedRealtime()
+        val earliestExpiry = urlTestLeaves(group).mapNotNull { leaf ->
+            probeResults[leaf to group.testUrl]?.takeIf { it.healthy }
+                ?.let { it.completedAtElapsedMs + group.trustSeconds * 1_000L }
+        }.minOrNull()
+        val intervalDue = now + group.intervalSeconds * 1_000L
+        val refreshLead = minOf(5_000L, group.trustSeconds * 500L)
+        val nextCheck = earliestExpiry?.let { minOf(intervalDue, it - refreshLead) } ?: intervalDue
+        return (nextCheck - now).coerceAtLeast(1_000L)
+    }
+
+    private fun restartUrlTestLoops(scope: CoroutineScope, waitBeforeFirstCheck: Boolean = false) {
         val groups = workspace.groups.filter { it.strategy == GroupStrategy.URL_TEST }
         val tags = groups.map { it.tag }.toSet()
         for (tag in urlTestJobs.keys - tags) urlTestJobs.remove(tag)?.cancel()
         for (group in groups) {
             if (urlTestJobs.containsKey(group.tag)) continue
             urlTestJobs[group.tag] = scope.launch(Dispatchers.IO) {
+                if (waitBeforeFirstCheck) delay(nextUrlTestDelay(group))
                 while (isActive) {
                     val latest = workspace.groupByTag(group.tag) ?: break
                     if (latest.strategy != GroupStrategy.URL_TEST) break
-                    val protectedPrimaries = workspace.groups
-                        .filter { it.strategy == GroupStrategy.FALLBACK && it.effectiveMembers().isNotEmpty() }
-                        .mapNotNull { it.effectiveMembers().firstOrNull()?.let { ref -> scheduledPrimaryLeaf(ref, mutableSetOf(it.tag)) } }
-                        .toSet()
-                    val leaves = latest.effectiveMembers()
-                        .flatMap { collectMemberLeaves(it, mutableSetOf(latest.tag)) }
-                        .distinct()
-                        .filter { it !in protectedPrimaries && it !in BUILTIN_GROUP_TARGET_TAGS }
-                    coroutineScope {
-                        leaves.map { leaf ->
-                            async(Dispatchers.IO) {
-                                recordMeasurement(leaf, latest.testUrl, probeNode(leaf, latest.testUrl))
-                            }
-                        }.awaitAll()
-                    }
-                    manualMembers.remove(group.tag)
-                    syncAllBalancersAndPublish()
-                    delay(latest.intervalSeconds * 1_000L)
+                    measureUrlTestGroup(latest)
+                    delay(nextUrlTestDelay(latest))
                 }
             }
         }
@@ -373,7 +404,9 @@ internal class GroupRuntimeController(
             GroupStrategy.FALLBACK -> {
                 val state = fallbackStates[group.tag]
                 if (state?.inFallback == true) {
-                    state.activeLeaf ?: orderedBackups(group).mapNotNull { resolvePreferredLeaf(it, visited) }.firstOrNull()
+                    state.activeLeaf ?: orderedBackups(group).firstNotNullOfOrNull {
+                        resolvePreferredLeaf(it, visited.toMutableSet())
+                    }
                 }
                 else members.firstOrNull()?.let { resolvePreferredLeaf(it, visited) }
             }

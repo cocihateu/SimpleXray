@@ -57,6 +57,7 @@ import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -72,7 +73,13 @@ fun DashboardScreen(
     val fallback by mainViewModel.fallbackRuntimeStates.collectAsStateWithLifecycle()
     val backendMode = mainViewModel.prefs.tunnelMode.displayName
     val state by VpnStateHub.state.collectAsStateWithLifecycle()
+    val exitInfo by mainViewModel.exitInfo.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val defaultGroup = workspace.effectiveDefaultGroupTag()
+    val exitNode = defaultGroup?.let(active::get)
+    LaunchedEffect(state, defaultGroup, exitNode, workspace.routingMode) {
+        if (state != VpnRunningState.Connecting) mainViewModel.refreshExitInfo()
+    }
 
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     var lastUplink by remember { mutableLongStateOf(0L) }
@@ -133,6 +140,38 @@ fun DashboardScreen(
                 activeConnections = liveConnectionCount,
                 memoryAlloc = stats.alloc
             )
+        }
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("出口信息", style = MiuixTheme.textStyles.title3)
+                            Text(if (state == VpnRunningState.Connected && workspace.routingMode != "direct")
+                                "${defaultGroup.orEmpty()} → ${exitNode ?: "等待节点"}" else "直连出口",
+                                style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                        }
+                        TextButton(text = "刷新", enabled = exitInfo.loading == false && state != VpnRunningState.Connecting,
+                            onClick = mainViewModel::refreshExitInfo)
+                    }
+                    if (exitInfo.loading) {
+                        Text("正在获取出口 IP 与网络信息…", color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                    } else if (exitInfo.error.isNotBlank()) {
+                        Text(exitInfo.error, color = MiuixTheme.colorScheme.error)
+                    } else {
+                        Text(exitInfo.ip.ifBlank { "等待查询" }, style = MiuixTheme.textStyles.title2,
+                            fontFamily = FontFamily.Monospace)
+                        val flag = exitInfo.countryCode.uppercase().takeIf { it.length == 2 }?.let { code ->
+                            code.map { String(Character.toChars(0x1F1E6 + it.code - 'A'.code)) }.joinToString("")
+                        }.orEmpty()
+                        OverviewValue("国家 / 地区", "$flag ${exitInfo.country}".trim())
+                        OverviewValue("城市", listOf(exitInfo.region, exitInfo.city).filter { it.isNotBlank() }.distinct().joinToString(" · "))
+                        OverviewValue("AS", exitInfo.asn.takeIf { it.isNotBlank() }?.let { "AS$it" } ?: "—")
+                        OverviewValue("网络机构", exitInfo.organization.ifBlank { "—" })
+                        OverviewValue("运营商", exitInfo.isp.ifBlank { "—" })
+                    }
+                }
+            }
         }
         item {
             Button(onClick = {

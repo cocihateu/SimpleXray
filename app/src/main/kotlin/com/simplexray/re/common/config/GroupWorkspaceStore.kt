@@ -56,6 +56,19 @@ class GroupWorkspaceStore(context: Context) {
         .distinctUntilChanged()
         .flowOn(Dispatchers.IO)
 
+    fun selectDefaultGroup(tag: String) {
+        val updated = update { current ->
+            if (current.groupByTag(tag) != null) current.copy(defaultGroupTag = tag) else current
+        }
+        if (updated.groupByTag(tag) == null) return
+        RuleWorkspaceStore(appContext).update { rules ->
+            val catchAll = rules.indexOfLast { it.enabled && it.type == TrafficRule.TYPE_MATCH }
+            rules.mapIndexed { index, rule ->
+                if (index == catchAll) rule.copy(target = TrafficRule.TARGET_GLOBAL) else rule
+            }
+        }
+    }
+
     private fun ensureInitialized() {
         if (file.isFile) return
         synchronized(lock) {
@@ -190,6 +203,8 @@ class GroupWorkspaceStore(context: Context) {
                         .put("subscriptionName", node.subscriptionName)
                         .put("userEdited", node.userEdited)
                         .put("udpOverTcpVersion", node.udpOverTcpVersion)
+                        .put("obfsMode", node.obfsMode)
+                        .put("obfsHost", node.obfsHost)
                 )
             }
             val membersArray = JSONArray()
@@ -266,6 +281,8 @@ class GroupWorkspaceStore(context: Context) {
                                 subscriptionName = nodeObj.optString("subscriptionName"),
                                 userEdited = nodeObj.optBoolean("userEdited"),
                                 udpOverTcpVersion = nodeObj.optInt("udpOverTcpVersion"),
+                                obfsMode = nodeObj.optString("obfsMode"),
+                                obfsHost = nodeObj.optString("obfsHost"),
                             )
                         )
                     }

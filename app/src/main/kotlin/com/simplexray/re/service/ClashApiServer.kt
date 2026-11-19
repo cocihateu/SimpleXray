@@ -384,7 +384,7 @@ internal class ClashApiServer(context: Context) :
                 if (groupName == "GLOBAL") {
                     val chosen = mapper.resolve(selectedMemberName)?.takeIf { it.isGroup && ws.groupByTag(it.tag) != null }
                         ?: return jsonResponse(Response.Status.BAD_REQUEST, """{"message":"Select a workspace group"}""")
-                    workspaceStore.update { it.copy(defaultGroupTag = chosen.tag) }
+                    workspaceStore.selectDefaultGroup(chosen.tag)
                     return emptyResponse(Response.Status.NO_CONTENT)
                 }
                 val groupRef = mapper.resolve(groupName)?.takeIf { it.isGroup }

@@ -304,8 +304,16 @@ internal class XrayProcessRunner(
                                 isStarted = true
                                 startAttempt = 0
                                 Log.d(tag, "Xray core ready (gRPC API reachable), updating VpnStateHub.")
-                                session?.start(scope) { restart(scope) }
-                                callbacks.onCoreReady()
+                                val readySession = session
+                                if (readySession != null) {
+                                    readySession.start(scope, onReady = {
+                                        synchronized(this@XrayProcessRunner) {
+                                            if (job === runJob && callbacks.isStopping() == false) callbacks.onCoreReady()
+                                        }
+                                    }, reload = { restart(scope) })
+                                } else {
+                                    callbacks.onCoreReady()
+                                }
                             }
                             break
                         }

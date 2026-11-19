@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.simplexray.re.common.config.GroupMemberRef
 import com.simplexray.re.common.config.GroupSourceType
+import com.simplexray.re.common.config.GroupStrategy
 import com.simplexray.re.common.config.GroupWorkspace
 import com.simplexray.re.common.config.ProxyGroup
 import com.simplexray.re.common.config.ProxyNode
@@ -61,6 +62,7 @@ fun ProxiesScreen(
     mainViewModel: MainViewModel,
     paddingValues: PaddingValues = PaddingValues(),
     onManageGroups: () -> Unit = {},
+    onGroupSettings: (String) -> Unit = {},
 ) {
     val workspace by mainViewModel.groupWorkspace.collectAsStateWithLifecycle()
     val active by mainViewModel.activeGroupNodes.collectAsStateWithLifecycle()
@@ -73,10 +75,7 @@ fun ProxiesScreen(
     var editingNode by remember { mutableStateOf<ProxyNode?>(null) }
     var addingNode by remember { mutableStateOf(false) }
     var deletingNode by remember { mutableStateOf<String?>(null) }
-    var editingPolicy by remember { mutableStateOf(false) }
-    var editingChain by remember { mutableStateOf(false) }
     var creatingGroup by remember { mutableStateOf(false) }
-    var editingSource by remember { mutableStateOf<ProxyGroup?>(null) }
     var importTarget by remember { mutableStateOf<String?>(null) }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         importTarget?.let { target -> if (uri != null) mainViewModel.importFromUriToGroup(target, uri) }
@@ -127,23 +126,7 @@ fun ProxiesScreen(
                         }
                         TextButton(text = "测速", onClick = { mainViewModel.measureGroupLatency(group.tag) },
                             enabled = measuringTargets.isEmpty())
-                        if (group.sourceType == GroupSourceType.SUBSCRIPTION) {
-                            IconButton(onClick = { mainViewModel.refreshSubscriptionGroup(group.tag) },
-                                enabled = group.tag !in refreshing) {
-                                Icon(Icons.Default.Refresh, contentDescription = "更新订阅")
-                            }
-                        }
-                        OverlayIconDropdownMenu(entry = DropdownEntry(listOf(
-                            DropdownItem("编辑分组", onClick = { editingSource = group }),
-                            DropdownItem("链式代理", onClick = { editingChain = true }),
-                            DropdownItem("出站策略", onClick = { editingPolicy = true }),
-                            DropdownItem(if (workspace.effectiveDefaultGroupTag() == group.tag) "默认组" else "设为默认组",
-                                selected = workspace.effectiveDefaultGroupTag() == group.tag,
-                                onClick = { mainViewModel.setDefaultWorkspaceGroup(group.tag) }),
-                            DropdownItem("分组管理", onClick = onManageGroups),
-                        ))) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "分组菜单")
-                        }
+                        TextButton(text = "设置", onClick = { onGroupSettings(group.tag) })
                     }
                     group.frontProxy?.let { Text("链路：本机 → ${it.tag} → 组内节点 → 目标", style = MiuixTheme.textStyles.body2) }
                     if (group.tag in refreshing) Text("正在更新订阅…", style = MiuixTheme.textStyles.body2)
@@ -159,17 +142,31 @@ fun ProxiesScreen(
                     latencies[member.tag] != null -> "${latencies[member.tag]} ms"
                     else -> "待测"
                 }
-                val selected = active[group.tag]?.let { it == member.tag }
+                val selected = active[group.tag]?.let { it == if (member.isGroup) active[member.tag] else member.tag }
                     ?: ((group.selectedMember ?: group.effectiveMembers().firstOrNull()) == member)
                 Card(Modifier.fillMaxWidth(), onClick = { mainViewModel.selectGroupMember(group.tag, member) }) {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(member.tag, style = MiuixTheme.textStyles.body1)
+                            if (group.strategy == GroupStrategy.FALLBACK) {
+                                val position = group.effectiveMembers().indexOf(member)
+                                if (position >= 0) Text(if (position == 0) "主节点" else "备用 $position",
+                                    style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.primary)
+                            }
                             Text("${if (member.isGroup) "节点组" else node?.protocol.orEmpty().uppercase()} · $delayText",
                                 style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                             if (node != null && node.udpOverTcpVersion > 0) {
                                 Text("UDP over TCP v${node.udpOverTcpVersion}", style = MiuixTheme.textStyles.body2,
                                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                            }
+                            if (node != null) {
+                                Text(nodeDnsStrategyLabel(node.targetStrategy),
+                                    style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                                if (node.obfsMode.isNotBlank()) Text("simple-obfs · ${node.obfsMode.uppercase()}",
+                                    style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                            } else if (member.isGroup) {
+                                Text("当前节点：${active[member.tag] ?: "等待连接"}",
+                                    style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                             }
                         }
                         if (selected) Icon(Icons.Default.Check, contentDescription = "已选择", tint = MiuixTheme.colorScheme.primary)
@@ -184,29 +181,21 @@ fun ProxiesScreen(
             }
         }
     }
-    if (creatingGroup || editingSource != null) {
-        GroupSourceEditorSheet(editingSource, onSave = { originalTag, edited ->
+    if (creatingGroup) {
+        GroupSourceEditorSheet(null, onSave = { originalTag, edited ->
             mainViewModel.saveWorkspaceGroup(originalTag, edited).also { error ->
                 if (error == null) mainViewModel.selectedProxyGroupTag = edited.tag
             }
         }) {
             creatingGroup = false
-            editingSource = null
         }
     }
     if (editingNode != null || addingNode) {
         val node = editingNode
-        NodeConfigSheet(node, onSave = { raw, uotVersion ->
-            if (node != null) mainViewModel.updateNodeJson(node.tag, raw, uotVersion)
+        NodeConfigSheet(node, onSave = { raw, uotVersion, obfsMode, obfsHost ->
+            if (node != null) mainViewModel.updateNodeJson(node.tag, raw, uotVersion, obfsMode, obfsHost)
             else group?.let { mainViewModel.addNodeToGroup(it.tag, raw) } ?: "请先选择分组"
         }, onDismiss = { editingNode = null; addingNode = false })
-    }
-    if (editingPolicy && group != null) {
-        WorkspaceGroupEditorSheet(workspace, group, mainViewModel::saveWorkspaceGroup,
-            mainViewModel::deleteWorkspaceGroup, onDismiss = { editingPolicy = false }, showSource = false)
-    }
-    if (editingChain && group != null) {
-        GroupChainSheet(workspace, group, mainViewModel::saveWorkspaceGroup) { editingChain = false }
     }
     deletingNode?.let { tag ->
         ConfirmOverlayDialog(title = "删除节点", summary = "删除 $tag 及其组内引用", confirmText = "删除", cancelText = "取消",
@@ -215,10 +204,12 @@ fun ProxiesScreen(
 }
 
 @Composable
-private fun NodeConfigSheet(node: ProxyNode?, onSave: (String, Int?) -> String?, onDismiss: () -> Unit) {
+private fun NodeConfigSheet(node: ProxyNode?, onSave: (String, Int?, String?, String?) -> String?, onDismiss: () -> Unit) {
     var text by remember(node) { mutableStateOf(node?.outboundJson?.let { JSONObject(it).toString(2) }.orEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
     var uotVersion by remember(node) { mutableStateOf(node?.udpOverTcpVersion ?: 0) }
+    var obfsMode by remember(node) { mutableStateOf(node?.obfsMode.orEmpty()) }
+    var obfsHost by remember(node) { mutableStateOf(node?.obfsHost.orEmpty()) }
     GlassBottomSheet(show = true, backdrop = LocalLayerBackdrop.current,
         title = node?.tag ?: "新增节点", onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(16.dp).verticalScroll(rememberScrollState()),
@@ -231,7 +222,7 @@ private fun NodeConfigSheet(node: ProxyNode?, onSave: (String, Int?) -> String?,
                 val strategies = listOf("", "AsIs", "UseIP", "UseIPv4", "UseIPv6", "ForceIP", "ForceIPv4", "ForceIPv6")
                 val strategy = runCatching { JSONObject(text).optString("targetStrategy") }.getOrDefault("")
                 Card {
-                    OverlayDropdownPreference(title = "目标 DNS 解析", items = strategies.map { it.ifBlank { "默认" } },
+                    OverlayDropdownPreference(title = "目标 DNS 解析", items = strategies.map(::nodeDnsStrategyLabel),
                         selectedIndex = strategies.indexOf(strategy).coerceAtLeast(0),
                         onSelectedIndexChange = { index ->
                             runCatching {
@@ -247,13 +238,34 @@ private fun NodeConfigSheet(node: ProxyNode?, onSave: (String, Int?) -> String?,
                     OverlayDropdownPreference(title = "UDP 传输",
                         items = listOf("原生 UDP", "UDP over TCP v1", "UDP over TCP v2"),
                         selectedIndex = uotVersion, onSelectedIndexChange = { uotVersion = it })
+                    val modes = listOf("", "http", "tls")
+                    OverlayDropdownPreference(title = "传输封装", items = listOf("原生 SS", "simple-obfs HTTP", "simple-obfs TLS"),
+                        selectedIndex = modes.indexOf(obfsMode).coerceAtLeast(0),
+                        onSelectedIndexChange = { obfsMode = modes[it] })
                 }
+                if (obfsMode.isNotBlank()) TextField(obfsHost, { obfsHost = it }, label = "simple-obfs Host",
+                    modifier = Modifier.fillMaxWidth())
             }
             error?.let { Text(it, color = MiuixTheme.colorScheme.error) }
-            Button(onClick = { error = onSave(text, node?.let { uotVersion }); if (error == null) onDismiss() },
+            Button(onClick = {
+                error = onSave(text, node?.let { uotVersion }, node?.let { obfsMode }, node?.let { obfsHost })
+                if (error == null) onDismiss()
+            },
                 modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColorsPrimary()) { Text("保存") }
         }
     }
+}
+
+private fun nodeDnsStrategyLabel(value: String): String = when (value) {
+    "" -> "默认解析策略"
+    "AsIs" -> "远端解析 · AsIs"
+    "UseIP" -> "本地解析 IPv4 / IPv6 · UseIP"
+    "UseIPv4" -> "本地解析 IPv4 · UseIPv4"
+    "UseIPv6" -> "本地解析 IPv6 · UseIPv6"
+    "ForceIP" -> "强制本地解析 · ForceIP"
+    "ForceIPv4" -> "强制本地 IPv4 · ForceIPv4"
+    "ForceIPv6" -> "强制本地 IPv6 · ForceIPv6"
+    else -> value
 }
 
 @Composable

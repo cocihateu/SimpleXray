@@ -36,7 +36,7 @@ class CoreStatsClient(private val channel: ManagedChannel) : Closeable {
             ?.statList
             ?.filter {
                 val target = it.name.substringAfter("outbound>>>").substringBefore(">>>")
-                target.startsWith("sx-") == false || target.contains("-uot-")
+                target.startsWith("sx-") == false || target.contains("-uot-") || target.contains("-native-udp-")
             }
             ?.groupBy {
                 when {

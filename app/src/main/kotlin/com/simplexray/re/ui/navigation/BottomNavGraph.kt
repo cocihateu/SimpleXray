@@ -47,7 +47,7 @@ fun BottomNavHost(
         composable(ROUTE_PROXIES) {
             ProxiesScreen(mainViewModel, paddingValues, onManageGroups = {
                 navController.navigate(ROUTE_GROUPS)
-            })
+            }, onGroupSettings = { navController.navigate("proxy_group_settings/${Uri.encode(it)}") })
         }
         composable(ROUTE_GROUPS) {
             GroupManagementScreen(mainViewModel, paddingValues,

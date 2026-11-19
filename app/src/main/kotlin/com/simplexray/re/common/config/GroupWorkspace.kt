@@ -29,6 +29,8 @@ data class ProxyNode(
     val subscriptionName: String = "",
     val userEdited: Boolean = false,
     val udpOverTcpVersion: Int = 0,
+    val obfsMode: String = "",
+    val obfsHost: String = "",
 )
 
 data class ProxyGroup(

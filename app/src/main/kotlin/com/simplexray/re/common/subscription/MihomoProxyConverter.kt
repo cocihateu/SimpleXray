@@ -58,9 +58,12 @@ internal object MihomoProxyConverter {
         val port = fields.integer("port", 0)
         if (port !in 1..65535) fields.typeError("port")
 
-        if (protocol == "shadowsocks" && (fields.has("plugin") || fields.has("plugin-opts"))) {
-            fields.capability("plugin", "unsupported-plugin")
-        }
+        val plugin = if (protocol == "shadowsocks") fields.text("plugin").lowercase() else ""
+        val pluginOptions = if (plugin.isNotBlank()) fields.objectValue("plugin-opts") else null
+        val obfsMode = pluginOptions?.text("mode").orEmpty().lowercase()
+        if (plugin.isNotBlank() &&
+            (plugin !in setOf("obfs", "obfs-local", "simple-obfs") || obfsMode !in setOf("http", "tls"))
+        ) fields.capability("plugin", "$plugin/$obfsMode")
 
         if (fields.has("udp")) {
             val udp = fields.boolean("udp")
@@ -137,6 +140,10 @@ internal object MihomoProxyConverter {
             .put("settings", settings)
             .put("streamSettings", stream)
             .apply {
+                if (plugin.isNotBlank()) {
+                    put("x-simplexray-obfs-mode", obfsMode)
+                    put("x-simplexray-obfs-host", pluginOptions?.text("host").orEmpty().ifBlank { address })
+                }
                 if (protocol == "shadowsocks" && fields.boolean("udp-over-tcp")) {
                     put("x-simplexray-uot-version", if (fields.integer("udp-over-tcp-version", 2) == 1) 1 else 2)
                 }

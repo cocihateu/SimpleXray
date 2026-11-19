@@ -53,8 +53,17 @@ internal fun GroupSourceEditorSheet(
             }
             error?.let { Text(it, color = MiuixTheme.colorScheme.error) }
             Button(onClick = {
+                val trimmedName = name.trim()
+                if (trimmedName.isEmpty()) {
+                    error = "请输入分组名称"
+                    return@Button
+                }
+                if (source == GroupSourceType.SUBSCRIPTION && url.trim().isEmpty()) {
+                    error = "请输入订阅链接"
+                    return@Button
+                }
                 val group = (original ?: ProxyGroup(name, strategy = GroupStrategy.SELECT))
-                    .copy(tag = name.trim(), sourceType = source, subscriptionUrl = url.trim())
+                    .copy(tag = trimmedName, sourceType = source, subscriptionUrl = url.trim())
                 error = onSave(original?.tag, group)
                 if (error == null) visible = false
             }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColorsPrimary()) { Text("保存") }
