@@ -187,8 +187,15 @@ internal class GroupRuntimeController(
                 }
                 if (rtt != null) {
                     logEvent("[Info] Group '$groupTag': primary '$leaf' recovered; new connections use primary.")
-                    synchronized(stateLock) { fallbackStates.remove(groupTag) }
-                    manualMembers.remove(groupTag)
+                    reachableFallbackGroups(groupTag).filter { candidate ->
+                        candidate.tag == groupTag || candidate.effectiveMembers().firstOrNull()?.let {
+                            scheduledPrimaryLeaf(it, mutableSetOf(candidate.tag))
+                        } == leaf
+                    }.forEach { recovered ->
+                        synchronized(stateLock) { fallbackStates.remove(recovered.tag) }
+                        manualMembers.remove(recovered.tag)
+                        if (recovered.tag != groupTag) recoveryJobs.remove(recovered.tag)?.cancel()
+                    }
                     syncAllBalancersAndPublish()
                     break
                 }
@@ -379,7 +386,9 @@ internal class GroupRuntimeController(
 
     private fun orderedBackups(group: ProxyGroup): List<GroupMemberRef> {
         val backups = group.effectiveMembers().drop(1)
+        val connected = fallbackStates[group.tag]?.activeLeaf
         val selected = manualMembers[group.tag]?.takeIf { it in backups }
+            ?: backups.firstOrNull { connected != null && connected in collectMemberLeaves(it, mutableSetOf(group.tag)) }
         return if (selected == null) backups else listOf(selected) + backups.filter { it != selected }
     }
 

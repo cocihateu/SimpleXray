@@ -207,7 +207,7 @@ fun DashboardScreen(
                                 .padding(horizontal = 8.dp, vertical = 2.dp)
                         ) {
                             Text(
-                                strategyShortLabel(group.strategy),
+                                dashboardStrategyLabel(group.strategy),
                                 style = MiuixTheme.textStyles.body2,
                                 color = MiuixTheme.colorScheme.primary,
                                 fontWeight = FontWeight.SemiBold
@@ -340,7 +340,7 @@ private fun OverviewValue(label: String, value: String) {
     }
 }
 
-private fun strategyShortLabel(strategy: GroupStrategy): String = when (strategy) {
+private fun dashboardStrategyLabel(strategy: GroupStrategy): String = when (strategy) {
     GroupStrategy.FALLBACK -> "Fallback 自动备用"
     GroupStrategy.URL_TEST -> "URLTest 最快响应"
     GroupStrategy.SELECT -> "Select 手动选择"
