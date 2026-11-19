@@ -112,7 +112,6 @@ internal class FallbackRelayServer(
         val input = DataInputStream(client.getInputStream())
         val output = client.getOutputStream()
         val (spec, ruleId) = authenticateServer(input, output, targets) ?: return
-        if (ruleId != "dialer") awaitReady()
         val version = input.readUnsignedByte()
         val command = input.readUnsignedByte()
         input.readUnsignedByte()
@@ -160,7 +159,11 @@ internal class FallbackRelayServer(
         try {
             val attempted = mutableSetOf<String>()
             while (isActive && closed == false && entry.closed.get() == false && flight.replayable) {
-                val plan = resolvePlan(spec.groupTag)
+                var plan = resolvePlan(spec.groupTag)
+                if (plan.candidates.none { it !in attempted } && ruleId != "dialer") {
+                    awaitReady()
+                    plan = resolvePlan(spec.groupTag)
+                }
                 val leaf = plan.candidates.firstOrNull { it !in attempted } ?: break
                 attempted += leaf
                 val socket = Socket()
@@ -313,7 +316,11 @@ internal class FallbackRelayServer(
         try {
             val attempted = mutableSetOf<String>()
             while (isActive && closed == false && entry.closed.get() == false && flight.replayable) {
-                val plan = resolvePlan(spec.groupTag)
+                var plan = resolvePlan(spec.groupTag)
+                if (plan.candidates.none { it !in attempted } && ruleId != "dialer") {
+                    awaitReady()
+                    plan = resolvePlan(spec.groupTag)
+                }
                 val leaf = plan.candidates.firstOrNull { it !in attempted } ?: break
                 attempted += leaf
                 val control = Socket()

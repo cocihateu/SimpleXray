@@ -165,7 +165,7 @@ fun GroupSettingsScreen(
         item { SmallTitle("节点选择") }
         item {
             Card {
-                OverlayDropdownPreference(title = "运行方式", items = strategyChoices.map(::strategyShortLabel),
+                OverlayDropdownPreference(title = "运行方式", items = listOf("手动选择", "主备回落", "自动测速"),
                     selectedIndex = strategyChoices.indexOf(strategy), onSelectedIndexChange = { strategy = strategyChoices[it] })
                 if (strategy == GroupStrategy.FALLBACK) {
                     OverlayDropdownPreference(title = "主节点", summary = "可选择单个节点或节点组",
