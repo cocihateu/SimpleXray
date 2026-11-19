@@ -89,6 +89,7 @@ fun ProxiesScreen(
     val scope = rememberCoroutineScope()
 
     val groups = workspace.groups
+    val allNodesMap = remember(workspace) { workspace.allNodes().associateBy { it.tag } }
     var selectedGroupTag by remember(groups) {
         mutableStateOf(workspace.effectiveDefaultGroupTag() ?: groups.firstOrNull()?.tag.orEmpty())
     }
@@ -250,7 +251,6 @@ fun ProxiesScreen(
             }
 
             val effectiveMembers = currentGroup.effectiveMembers()
-            val allNodesMap = remember(workspace) { workspace.allNodes().associateBy { it.tag } }
             val activeNodeTag = activeNodes[currentGroup.tag]
 
             items(effectiveMembers, key = { "${it.isGroup}:${it.tag}" }) { memberRef ->
