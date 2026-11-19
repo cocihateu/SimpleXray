@@ -11,8 +11,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      MIHOMO_VERSION: v1.19.34
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,23 +23,25 @@ jobs:
             21
             25
 
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
-
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 9.9.1
 
       - uses: android-actions/setup-android@v3
         with:
+          cmdline-tools-version: 16111833
           packages: platform-tools
           log-accepted-android-sdk-licenses: false
 
       - name: Install Android build tools
         run: |
           ndk_version="$(sed -n 's/^NDK_VERSION=//p' version.properties | tr -d '\r')"
-          sdkmanager "platforms;android-37.2" "build-tools;36.0.0" "ndk;$ndk_version" "cmake;3.22.1"
+          SDK_ROOT="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          export PATH="$SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+          android --sdk "$SDK_ROOT" sdk install "build-tools/36.0.0"
+          android --sdk "$SDK_ROOT" sdk install "platforms/android-37.2"
+          android --sdk "$SDK_ROOT" sdk install "ndk/$ndk_version"
+          android --sdk "$SDK_ROOT" sdk install "cmake/3.22.1"
 
       - name: Prepare arm64 Xray and bundled routing data
         run: |
@@ -54,18 +54,6 @@ jobs:
           curl -fsSL https://github.com/XTLS/Xray-rules-dat/releases/latest/download/geoip-lite.dat -o app/src/main/assets/geoip.dat
           curl -fsSL https://github.com/XTLS/Xray-rules-dat/releases/latest/download/geosite.dat -o app/src/main/assets/geosite.dat
 
-      - name: Prepare arm64 mihomo and matching source
-        run: |
-          archive="$RUNNER_TEMP/mihomo-android-arm64-v8-$MIHOMO_VERSION.gz"
-          curl -fsSL "https://github.com/MetaCubeX/mihomo/releases/download/$MIHOMO_VERSION/mihomo-android-arm64-v8-$MIHOMO_VERSION.gz" -o "$archive"
-          gzip -dc "$archive" > third_party/xray-prebuilt/arm64-v8a/libmihomo.so
-          chmod +x third_party/xray-prebuilt/arm64-v8a/libmihomo.so
-          curl -fsSL "https://github.com/MetaCubeX/mihomo/archive/refs/tags/$MIHOMO_VERSION.tar.gz" -o "app/src/main/assets/licenses/mihomo/mihomo-$MIHOMO_VERSION-source.tar.gz"
-
-      - name: Build SimpleTUN for Android
-        working-directory: third_party/simpletun
-        run: zig build android
-
       - name: Assemble signed debug APK
         run: gradle :app:assembleDebug -x :app:ensureXrayCore
 
@@ -74,11 +62,4 @@ jobs:
         with:
           name: SimpleXray-Groups-arm64-v8a
           path: app/build/outputs/apk/debug/SimpleXray-Groups-arm64-v8a.apk
-          if-no-files-found: error
-
-      - name: Upload mihomo source and notices
-        uses: actions/upload-artifact@v4
-        with:
-          name: mihomo-${{ env.MIHOMO_VERSION }}-source
-          path: app/src/main/assets/licenses/mihomo/
           if-no-files-found: error

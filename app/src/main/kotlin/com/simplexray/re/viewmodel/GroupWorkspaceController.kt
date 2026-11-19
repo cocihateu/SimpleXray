@@ -19,6 +19,9 @@ import com.simplexray.re.common.config.ProxyNode
 import com.simplexray.re.common.subscription.NodeImportConverter
 import com.simplexray.re.service.FallbackRuntimeInfo
 import com.simplexray.re.service.GroupRuntimeStatus
+import com.simplexray.re.service.VpnRunningState
+import com.simplexray.re.service.VpnStateHub
+import com.simplexray.re.prefs.Preferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,6 +36,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.util.concurrent.TimeUnit
 
 private const val TAG = "GroupWorkspaceController"
@@ -79,7 +84,10 @@ internal class GroupWorkspaceController(
         if (trimmedTag.isEmpty() || trimmedTag in BUILTIN_GROUP_TARGET_TAGS) {
             return "请输入有效的组名"
         }
-        val normalized = edited.copy(tag = trimmedTag)
+        val normalized = edited.copy(
+            tag = trimmedTag,
+            routingTargets = edited.routingTargets.map { it.trim() }.filter { it.isNotEmpty() }.distinct(),
+        )
         var validationError: String? = null
         workspaceStore.update { current ->
             val duplicate = current.groups.any { it.tag == trimmedTag && it.tag != originalTag }
@@ -87,12 +95,15 @@ internal class GroupWorkspaceController(
                 validationError = "组名已存在：$trimmedTag"
                 return@update current
             }
+            val savedGroup = if (originalTag != null && originalTag != trimmedTag &&
+                current.effectiveRoutingBindings()[originalTag] == originalTag
+            ) normalized.copy(routingTargets = (normalized.routingTargets + originalTag).distinct()) else normalized
             val updatedGroups = if (originalTag == null) {
-                current.groups + normalized
+                current.groups + savedGroup
             } else {
                 current.groups.map { existing ->
                     if (existing.tag == originalTag) {
-                        normalized
+                        savedGroup
                     } else if (originalTag != trimmedTag) {
                         existing.copy(
                             members = existing.members.map { m ->
@@ -112,9 +123,9 @@ internal class GroupWorkspaceController(
                 originalTag != null && current.defaultGroupTag == originalTag -> trimmedTag
                 else -> current.defaultGroupTag
             }
-            val candidate = GroupWorkspace(groups = updatedGroups, defaultGroupTag = nextDefault)
+            val candidate = current.copy(groups = updatedGroups, defaultGroupTag = nextDefault)
             if (candidate.isValid() == false) {
-                validationError = "分组配置存在循环嵌套或参数越界"
+                validationError = "请检查循环嵌套、时间参数，以及重复或保留的路由目标"
                 return@update current
             }
             candidate
@@ -145,7 +156,7 @@ internal class GroupWorkspaceController(
                 } else {
                     current.defaultGroupTag
                 }
-                GroupWorkspace(groups = remaining, defaultGroupTag = nextDefault)
+                current.copy(groups = remaining, defaultGroupTag = nextDefault)
             }
             showMessage("已删除组：$tag")
         }
@@ -160,6 +171,12 @@ internal class GroupWorkspaceController(
                     current
                 }
             }
+        }
+    }
+
+    fun setRoutingMode(mode: String) {
+        scope.launch(Dispatchers.IO) {
+            workspaceStore.update { it.copy(routingMode = mode) }
         }
     }
 
@@ -203,7 +220,13 @@ internal class GroupWorkspaceController(
                     .url(url)
                     .header("User-Agent", "clash-verge/v1.7.7 mihomo/1.19.34 SimpleXray")
                     .build()
-                val body = httpClient.newCall(req).execute().use { resp ->
+                val client = if (VpnStateHub.state.value == VpnRunningState.Connected) {
+                    val prefs = Preferences(application)
+                    httpClient.newBuilder()
+                        .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress(prefs.socksAddress, prefs.socksPort)))
+                        .build()
+                } else httpClient
+                val body = client.newCall(req).execute().use { resp ->
                     if (resp.isSuccessful == false) {
                         showMessage("订阅拉取失败：HTTP ${resp.code}")
                         return@launch
@@ -212,7 +235,7 @@ internal class GroupWorkspaceController(
                 }
                 val parsed = NodeImportConverter.parse(body)
                 if (parsed.nodes.isEmpty()) {
-                    showMessage("订阅内容中未解析到可用节点")
+                    showMessage("订阅中可转换节点为 0。\n${parsed.skippedReasons.distinct().take(5).joinToString("\n")}")
                     return@launch
                 }
                 var importedCount = 0
@@ -251,7 +274,9 @@ internal class GroupWorkspaceController(
                         }
                     )
                 }
-                val skipHint = if (parsed.skippedCount > 0) "（跳过 ${parsed.skippedCount} 条）" else ""
+                val skipHint = if (parsed.skippedCount > 0) {
+                    "（跳过 ${parsed.skippedCount} 条）\n${parsed.skippedReasons.distinct().take(5).joinToString("\n")}"
+                } else ""
                 showMessage("订阅「$groupTag」已更新：$importedCount 个节点$skipHint")
             } catch (e: Exception) {
                 Log.e(TAG, "Subscription refresh failed for $groupTag", e)
@@ -458,7 +483,7 @@ internal class GroupWorkspaceController(
             if (updatedGlobal) {
                 showMessage("已从文件更新全局配置（dns / inbounds / routing）")
             } else {
-                showMessage("未识别到可导入的节点或配置")
+                showMessage("可转换节点为 0。\n${parsed.skippedReasons.distinct().take(5).joinToString("\n")}")
             }
             return
         }
@@ -494,7 +519,9 @@ internal class GroupWorkspaceController(
         }
         withContext(Dispatchers.Main) {
             val globalNote = if (updatedGlobal) "，已同步更新全局配置" else ""
-            val skipNote = if (parsed.skippedCount > 0) "（跳过 ${parsed.skippedCount} 条）" else ""
+            val skipNote = if (parsed.skippedCount > 0) {
+                "（跳过 ${parsed.skippedCount} 条）\n${parsed.skippedReasons.distinct().take(5).joinToString("\n")}"
+            } else ""
             showMessage("已导入 $addedCount 个节点到「$groupTag」$globalNote$skipNote")
         }
     }

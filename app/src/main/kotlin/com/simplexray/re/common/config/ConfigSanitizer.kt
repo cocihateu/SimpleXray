@@ -3,7 +3,6 @@ package com.simplexray.re.common.config
 import android.util.Log
 import com.simplexray.re.prefs.LogLevel
 import com.simplexray.re.prefs.Preferences
-import com.simplexray.re.prefs.TunnelMode
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -73,7 +72,6 @@ internal object ConfigSanitizer {
         }
 
         var hasSocksInbound = false
-        var hasTunInbound = false
         val targetPort = prefs?.socksPort ?: 10808
         val targetListen = prefs?.socksAddress.takeIf { !it.isNullOrEmpty() } ?: "127.0.0.1"
 
@@ -92,42 +90,8 @@ internal object ConfigSanitizer {
             val inbound = inbounds.optJSONObject(i) ?: continue
             val protocol = inbound.optString("protocol").lowercase()
             if (protocol == "tun") {
-                if (prefs?.tunnelMode == TunnelMode.XrayTun && prefs.disableVpn == false) {
-                    hasTunInbound = true
-                    val settings = inbound.optJSONObject("settings") ?: JSONObject().also { inbound.put("settings", it) }
-                    if (!settings.has("mtu")) {
-                        // TProxyService uses prefs.tunnelMtu for the VPN interface
-                        // when the raw config declares no TUN MTU; keep Xray's stack
-                        // MTU equal to that interface MTU.
-                        settings.put("mtu", prefs.tunnelMtu)
-                    }
-                    // Android receives an already-established VPN fd. Xray's
-                    // config builder otherwise tries to enumerate interfaces
-                    // to generate a desktop TUN name, which can be denied by
-                    // the Android sandbox before the fd-backed implementation
-                    // is reached.
-                    if (!settings.has("name") || settings.optString("name").isBlank()) {
-                        settings.put("name", "tun-inbound")
-                    }
-                    settings.remove("autoSystemRoutingTable")
-                    settings.remove("autoOutboundsInterface")
-                    val sniffing = inbound.optJSONObject("sniffing")
-                    if (sniffing == null) {
-                        inbound.put("sniffing", createDefaultSniffingObject())
-                        Log.d(TAG, "Injected missing sniffing block into existing tun inbound.")
-                    } else {
-                        if (!sniffing.has("enabled")) sniffing.put("enabled", true)
-                        val destOverride = sniffing.optJSONArray("destOverride") ?: JSONArray().also { sniffing.put("destOverride", it) }
-                        val overrides = (0 until destOverride.length()).map { destOverride.optString(it).lowercase() }.toSet()
-                        if (!overrides.contains("fakedns")) {
-                            destOverride.put("fakedns")
-                        }
-                    }
-                    Log.d(TAG, "Sanitized existing tun inbound for Android VpnService (removed auto-routing, ensured sniffing).")
-                } else {
-                    inbounds.remove(i)
-                    Log.d(TAG, "Removed desktop-only tun inbound at index $i to prevent Android permission denied.")
-                }
+                inbounds.remove(i)
+                Log.d(TAG, "Hev owns the VPN interface; removed imported core TUN inbound.")
                 continue
             }
             if (protocol == "socks") {
@@ -135,15 +99,7 @@ internal object ConfigSanitizer {
                 if (inbound === primarySocksInbound) {
                     inbound.put("port", targetPort)
                     inbound.put("listen", targetListen)
-                    if (prefs != null && prefs.tunnelMode == TunnelMode.SimpleTun) {
-                        // SimpleTUN only supports the no-auth SOCKS5 path. Strip any
-                        // imported config-side auth so the backend can interoperate.
-                        val settings = inbound.optJSONObject("settings")
-                            ?: JSONObject().also { inbound.put("settings", it) }
-                        settings.remove("auth")
-                        settings.remove("accounts")
-                        Log.d(TAG, "Removed primary SOCKS authentication for SimpleTUN (no-auth only).")
-                    } else if (prefs != null && prefs.socksUsername.isNotEmpty() && prefs.socksPassword.isNotEmpty()) {
+                    if (prefs != null && prefs.socksUsername.isNotEmpty() && prefs.socksPassword.isNotEmpty()) {
                         val settings = inbound.optJSONObject("settings") ?: JSONObject().also { inbound.put("settings", it) }
                         val accounts = JSONArray().apply {
                             put(JSONObject().apply {
@@ -171,21 +127,6 @@ internal object ConfigSanitizer {
             }
         }
 
-        if (prefs?.tunnelMode == TunnelMode.XrayTun && prefs.disableVpn == false && !hasTunInbound) {
-            val newTunInbound = JSONObject().apply {
-                put("protocol", "tun")
-                put("tag", "tun-inbound")
-                put("settings", JSONObject().apply {
-                    put("name", "tun-inbound")
-                    put("network", "tcp,udp")
-                    put("mtu", prefs.tunnelMtu)
-                })
-                put("sniffing", createDefaultSniffingObject())
-            }
-            inbounds.put(newTunInbound)
-            Log.d(TAG, "Injected default Android-compatible tun inbound with sniffing.")
-        }
-
         if (!hasSocksInbound && prefs != null) {
             val newSocksInbound = JSONObject().apply {
                 put("protocol", "socks")
@@ -194,8 +135,7 @@ internal object ConfigSanitizer {
                 put("tag", "socks-in")
                 put("settings", JSONObject().apply {
                     put("udp", true)
-                    if (prefs.tunnelMode != TunnelMode.SimpleTun &&
-                        prefs.socksUsername.isNotEmpty() && prefs.socksPassword.isNotEmpty()
+                    if (prefs.socksUsername.isNotEmpty() && prefs.socksPassword.isNotEmpty()
                     ) {
                         put("auth", "password")
                         put("accounts", JSONArray().apply {
@@ -394,15 +334,6 @@ internal object ConfigSanitizer {
 
         // 5. Keep outbound transports responsive after Android network switches.
         injectOutboundSocketTimeouts(rootJson)
-
-        // 6. Observatory probeTimeout safety injection
-        val observatory = rootJson.optJSONObject("observatory")
-        if (observatory != null) {
-            if (!observatory.has("probeTimeout")) {
-                observatory.put("probeTimeout", "2s")
-                Log.d(TAG, "Injected default probeTimeout: 2s into observatory.")
-            }
-        }
 
         return rootJson.toString(2)
     }

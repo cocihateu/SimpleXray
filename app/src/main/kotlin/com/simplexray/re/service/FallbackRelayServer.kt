@@ -1,15 +1,20 @@
 package com.simplexray.re.service
 
-import android.util.Log
+import android.os.SystemClock
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.ByteArrayInputStream
 import java.io.Closeable
 import java.io.DataInputStream
+import java.io.EOFException
 import java.io.IOException
-import java.io.InputStream
 import java.io.OutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -17,8 +22,11 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.net.SocketTimeoutException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 internal data class FallbackRelaySpec(
@@ -34,476 +42,443 @@ internal data class FailoverPlan(
     val failoverTimeoutMs: Int,
 )
 
-/**
- * Local authenticated SOCKS5 relay for FALLBACK groups.
- *
- * Buffers the initial client payload (e.g. TLS ClientHello) so when the primary outbound fails to
- * connect, closes with zero upstream bytes, or exceeds failoverTimeoutMs before first byte, this
- * exact connection immediately redials the pre-warmed fallback target and flips the group into
- * fallback mode with a recovery countdown.
- */
+/** Routes initial TCP/UDP exchanges through ordered group candidates. */
 internal class FallbackRelayServer(
     private val specs: List<FallbackRelaySpec>,
     private val nodeEntryPort: Int,
     private val nodeUsers: Map<String, String>,
     private val nodePassword: String,
     private val resolvePlan: (String) -> FailoverPlan,
-    private val onPrimaryFailed: (groupTag: String, failedLeaf: String) -> Unit,
+    private val onCandidateFailed: (String, String) -> Unit,
+    private val onCandidateConnected: (String, String) -> Unit,
 ) : Closeable {
-    private val servers = CopyOnWriteArrayList<ServerSocket>()
+    private val listeners = CopyOnWriteArrayList<ServerSocket>()
     private val jobs = CopyOnWriteArrayList<Job>()
+    private val resources = ConcurrentHashMap.newKeySet<Closeable>()
     @Volatile private var closed = false
 
     fun start(scope: CoroutineScope) {
-        for (spec in specs) {
-            val server = ServerSocket()
-            server.reuseAddress = true
-            server.bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), spec.port))
-            servers.add(server)
-            val acceptJob = scope.launch(Dispatchers.IO) {
+        specs.forEach { spec ->
+            val server = ServerSocket().apply {
+                reuseAddress = true
+                bind(InetSocketAddress("127.0.0.1", spec.port))
+            }
+            listeners += server
+            jobs += scope.launch(Dispatchers.IO) {
                 while (isActive && closed == false) {
-                    val client = try {
-                        server.accept()
-                    } catch (_: IOException) {
-                        break
-                    }
-                    launch(Dispatchers.IO) {
-                        handleClient(scope, spec, client)
+                    val client = try { server.accept() } catch (_: IOException) { break }
+                    track(client)
+                    launch {
+                        try {
+                            handleClient(spec, client)
+                        } catch (_: IOException) {
+                            // Session teardown closes both local and upstream sockets.
+                        } finally {
+                            release(client)
+                        }
                     }
                 }
             }
-            jobs.add(acceptJob)
         }
     }
 
     override fun close() {
-        if (closed) return
         closed = true
-        servers.forEach { runCatching { it.close() } }
-        servers.clear()
+        listeners.forEach { runCatching { it.close() } }
+        listeners.clear()
+        resources.toList().forEach(::release)
         jobs.forEach { it.cancel() }
         jobs.clear()
     }
 
-    private suspend fun handleClient(scope: CoroutineScope, spec: FallbackRelaySpec, client: Socket) {
-        try {
-            client.tcpNoDelay = true
-            client.soTimeout = HANDSHAKE_TIMEOUT_MS
-            val input = DataInputStream(client.getInputStream())
-            val output = client.getOutputStream()
+    private fun release(resource: Closeable) {
+        runCatching { resource.close() }
+        resources.remove(resource)
+    }
 
-            if (performServerAuth(input, output, spec.username, spec.password) == false) {
-                client.close()
-                return
-            }
+    private fun track(resource: Closeable) {
+        resources += resource
+        if (closed) release(resource)
+    }
 
-            val ver = input.readUnsignedByte()
-            val cmd = input.readUnsignedByte()
-            input.readUnsignedByte() // RSV
-            if (ver != 5) {
-                client.close()
-                return
-            }
-            val target = readSocksAddress(input) ?: run {
-                client.close()
-                return
-            }
-
-            when (cmd) {
-                CMD_CONNECT -> handleTcpConnect(scope, spec, client, input, output, target)
-                CMD_UDP_ASSOCIATE -> handleUdpAssociate(scope, spec, client, input, output)
-                else -> {
-                    sendSocksReply(output, 0x07)
-                    client.close()
-                }
-            }
-        } catch (_: Exception) {
-            runCatching { client.close() }
+    private suspend fun handleClient(spec: FallbackRelaySpec, client: Socket) {
+        client.tcpNoDelay = true
+        client.soTimeout = HANDSHAKE_TIMEOUT_MS
+        val input = DataInputStream(client.getInputStream())
+        val output = client.getOutputStream()
+        if (authenticateServer(input, output, spec) == false) return
+        val version = input.readUnsignedByte()
+        val command = input.readUnsignedByte()
+        input.readUnsignedByte()
+        val address = readAddress(input)
+        if (version != 5) return
+        when (command) {
+            1 -> handleTcp(spec, client, address)
+            3 -> handleUdp(spec, client)
+            else -> reply(output, 7)
         }
     }
 
-    private suspend fun handleTcpConnect(
-        scope: CoroutineScope,
-        spec: FallbackRelaySpec,
-        client: Socket,
-        clientIn: InputStream,
-        clientOut: OutputStream,
-        target: SocksAddress,
-    ) {
-        sendSocksReply(clientOut, 0x00)
-
-        val initialPayload = ByteArray(INITIAL_BUFFER_BYTES)
-        var initialLength = 0
-        try {
-            client.soTimeout = CLIENT_PEEK_TIMEOUT_MS
-            val read = clientIn.read(initialPayload)
-            if (read < 0) {
-                client.close()
-                return
-            }
-            initialLength = read
-        } catch (_: SocketTimeoutException) {
-            initialLength = 0
-        } catch (_: IOException) {
-            client.close()
-            return
-        } finally {
-            runCatching { client.soTimeout = 0 }
+    private suspend fun handleTcp(spec: FallbackRelaySpec, client: Socket, target: SocksAddress) = coroutineScope {
+        client.soTimeout = 0
+        reply(client.getOutputStream(), 0)
+        val currentUpstream = AtomicReference<Socket?>(null)
+        val entry = RelayConnectionEntry("tcp", client.inetAddress.hostAddress.orEmpty(), client.port, spec.groupTag) {
+            runCatching { currentUpstream.get()?.close() }
+            runCatching { client.close() }
         }
-
-        val plan = resolvePlan(spec.groupTag)
-        if (plan.candidates.isEmpty()) {
-            client.close()
-            return
-        }
-
-        val firstChunk = ByteArray(FIRST_RESPONSE_BUFFER_BYTES)
-        for ((index, leaf) in plan.candidates.withIndex()) {
-            val hasMore = index + 1 < plan.candidates.size
-            val upstream = dialUpstreamViaNode(leaf, target, plan.failoverTimeoutMs)
-            if (upstream == null) {
-                if (hasMore && leaf == plan.primaryLeaf) {
-                    onPrimaryFailed(spec.groupTag, leaf)
-                }
-                continue
-            }
-
-            var established = false
-            var firstResponseLen = 0
+        target.describe(entry)
+        RelayConnectionRegistry.register(entry)
+        val flight = FirstFlight()
+        val localEnded = AtomicBoolean(false)
+        val reader = launch(Dispatchers.IO) {
+            val buffer = ByteArray(32 * 1024)
             try {
-                val upOut = upstream.getOutputStream()
-                val upIn = upstream.getInputStream()
-                if (initialLength > 0) {
-                    upOut.write(initialPayload, 0, initialLength)
-                    upOut.flush()
-                }
-
-                if (hasMore) {
-                    upstream.soTimeout = plan.failoverTimeoutMs
-                    val n = upIn.read(firstChunk)
-                    if (n > 0) {
-                        upstream.soTimeout = 0
-                        firstResponseLen = n
-                        established = true
-                    } else {
-                        established = false
+                while (isActive) {
+                    val count = client.getInputStream().read(buffer)
+                    if (count < 0) break
+                    val chunk = buffer.copyOf(count)
+                    flight.firstPayload.complete(SystemClock.elapsedRealtime())
+                    entry.uploadBytes.addAndGet(count.toLong())
+                    while (isActive && flight.pending.offer(chunk, 100, TimeUnit.MILLISECONDS) == false) {
+                        // Bounded buffering follows upstream consumption.
                     }
-                } else {
-                    upstream.soTimeout = 0
-                    established = true
                 }
-            } catch (_: SocketTimeoutException) {
-                established = false
             } catch (_: IOException) {
-                established = false
-            }
-
-            if (established) {
-                try {
-                    if (firstResponseLen > 0) {
-                        clientOut.write(firstChunk, 0, firstResponseLen)
-                        clientOut.flush()
-                    }
-                    pipeBidirectional(scope, client, upstream)
-                } finally {
-                    runCatching { upstream.close() }
-                    runCatching { client.close() }
-                }
-                return
-            } else {
-                runCatching { upstream.close() }
-                if (client.isClosed || client.isInputShutdown) {
-                    runCatching { client.close() }
-                    return
-                }
-                if (hasMore && leaf == plan.primaryLeaf) {
-                    Log.w(TAG, "Primary '$leaf' failed for group '${spec.groupTag}', failing over immediately.")
-                    onPrimaryFailed(spec.groupTag, leaf)
-                }
+                entry.close()
+            } finally {
+                localEnded.set(true)
             }
         }
-        runCatching { client.close() }
+        try {
+            val attempted = mutableSetOf<String>()
+            while (isActive && closed == false && entry.closed.get() == false && flight.replayable) {
+                val plan = resolvePlan(spec.groupTag)
+                val leaf = plan.candidates.firstOrNull { it !in attempted } ?: break
+                attempted += leaf
+                val socket = Socket()
+                track(socket)
+                currentUpstream.set(socket)
+                entry.leafTag = leaf
+                val beganAt = SystemClock.elapsedRealtime()
+                var deadline = deadlineJob(socket, beganAt + plan.failoverTimeoutMs)
+                var sender: Job? = null
+                val upstreamFailed = AtomicBoolean(false)
+                var responseDelivered = false
+                try {
+                    connectNode(socket, leaf, 1, target, plan.failoverTimeoutMs)
+                    deadline.cancel()
+                    deadline = launch(Dispatchers.IO) {
+                        val firstPayloadAt = flight.firstPayload.await()
+                        val dueAt = maxOf(beganAt, firstPayloadAt) + plan.failoverTimeoutMs
+                        delay((dueAt - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
+                        socket.close()
+                    }
+                    socket.soTimeout = 0
+                    sender = launch(Dispatchers.IO) {
+                        try {
+                            val output = socket.getOutputStream()
+                            flight.replay().forEach { output.write(it) }
+                            while (isActive) {
+                                val chunk = flight.pending.poll(100, TimeUnit.MILLISECONDS)
+                                if (chunk == null) {
+                                    if (localEnded.get()) {
+                                        socket.shutdownOutput()
+                                        break
+                                    }
+                                    continue
+                                }
+                                flight.retain(chunk)
+                                output.write(chunk)
+                            }
+                        } catch (_: IOException) {
+                            upstreamFailed.set(true)
+                            runCatching { socket.close() }
+                        }
+                    }
+                    val buffer = ByteArray(32 * 1024)
+                    val count = socket.getInputStream().read(buffer)
+                    if (count < 0) throw EOFException("Upstream closed before response")
+                    deadline.cancel()
+                    flight.establish()
+                    try {
+                        client.getOutputStream().write(buffer, 0, count)
+                    } catch (e: IOException) {
+                        entry.close()
+                        throw e
+                    }
+                    entry.downloadBytes.addAndGet(count.toLong())
+                    responseDelivered = true
+                    onCandidateConnected(spec.groupTag, leaf)
+                    while (isActive && entry.closed.get() == false) {
+                        val size = socket.getInputStream().read(buffer)
+                        if (size < 0) break
+                        try {
+                            client.getOutputStream().write(buffer, 0, size)
+                        } catch (e: IOException) {
+                            entry.close()
+                            throw e
+                        }
+                        entry.downloadBytes.addAndGet(size.toLong())
+                    }
+                    if (upstreamFailed.get()) throw IOException("Upstream upload failed")
+                    break
+                } catch (_: IOException) {
+                    if (closed == false && entry.closed.get() == false && localEnded.get() == false) {
+                        onCandidateFailed(spec.groupTag, leaf)
+                    }
+                    if (responseDelivered || localEnded.get() || entry.closed.get() || flight.replayable == false) break
+                } finally {
+                    deadline.cancel()
+                    release(socket)
+                    sender?.cancelAndJoin()
+                    currentUpstream.compareAndSet(socket, null)
+                }
+            }
+        } finally {
+            entry.close()
+            RelayConnectionRegistry.unregister(entry.id)
+            reader.cancelAndJoin()
+        }
     }
 
-    private suspend fun handleUdpAssociate(
-        scope: CoroutineScope,
-        spec: FallbackRelaySpec,
-        client: Socket,
-        clientIn: InputStream,
-        clientOut: OutputStream,
-    ) {
-        val plan = resolvePlan(spec.groupTag)
-        val leaf = plan.candidates.firstOrNull() ?: run {
-            sendSocksReply(clientOut, 0x01)
-            client.close()
-            return
-        }
-        val user = nodeUsers[leaf] ?: run {
-            sendSocksReply(clientOut, 0x01)
-            client.close()
-            return
-        }
-
-        val upstreamControl = Socket()
-        var localUdp: DatagramSocket? = null
-        var upstreamUdp: DatagramSocket? = null
-        try {
-            upstreamControl.connect(InetSocketAddress("127.0.0.1", nodeEntryPort), 2_000)
-            upstreamControl.soTimeout = HANDSHAKE_TIMEOUT_MS
-            val upIn = DataInputStream(upstreamControl.getInputStream())
-            val upOut = upstreamControl.getOutputStream()
-            if (performClientAuth(upIn, upOut, user, nodePassword) == false) {
-                sendSocksReply(clientOut, 0x01)
-                return
-            }
-            upOut.write(byteArrayOf(0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
-            upOut.flush()
-            val rVer = upIn.readUnsignedByte()
-            val rRep = upIn.readUnsignedByte()
-            upIn.readUnsignedByte()
-            val bound = readSocksAddress(upIn)
-            if (rVer != 5 || rRep != 0 || bound == null) {
-                sendSocksReply(clientOut, 0x01)
-                return
-            }
-            val xrayUdpAddr = InetSocketAddress(InetAddress.getByName("127.0.0.1"), bound.port)
-
-            localUdp = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
-            upstreamUdp = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
-            val localPort = localUdp.localPort
-            sendSocksReply(clientOut, 0x00, localPort)
-            client.soTimeout = 0
-            upstreamControl.soTimeout = 0
-
-            val clientEndpoint = AtomicReference<InetSocketAddress?>(null)
-            val c2u = scope.launch(Dispatchers.IO) {
-                val buf = ByteArray(UDP_BUFFER_BYTES)
-                val packet = DatagramPacket(buf, buf.size)
-                while (isActive && localUdp.isClosed == false) {
-                    try {
-                        localUdp.receive(packet)
-                        clientEndpoint.set(InetSocketAddress(packet.address, packet.port))
-                        upstreamUdp.send(DatagramPacket(packet.data, packet.offset, packet.length, xrayUdpAddr))
-                    } catch (_: IOException) {
-                        break
-                    }
-                }
-            }
-            val u2c = scope.launch(Dispatchers.IO) {
-                val buf = ByteArray(UDP_BUFFER_BYTES)
-                val packet = DatagramPacket(buf, buf.size)
-                while (isActive && upstreamUdp.isClosed == false) {
-                    try {
-                        upstreamUdp.receive(packet)
-                        val dest = clientEndpoint.get() ?: continue
-                        localUdp.send(DatagramPacket(packet.data, packet.offset, packet.length, dest))
-                    } catch (_: IOException) {
-                        break
-                    }
-                }
-            }
-            runCatching {
-                val drain = ByteArray(64)
-                while (clientIn.read(drain) >= 0) {
-                    // Keep UDP association open until control TCP closes.
-                }
-            }
-            c2u.cancel()
-            u2c.cancel()
-        } catch (_: Exception) {
-            runCatching { sendSocksReply(clientOut, 0x01) }
-        } finally {
-            runCatching { localUdp?.close() }
-            runCatching { upstreamUdp?.close() }
-            runCatching { upstreamControl.close() }
+    private suspend fun handleUdp(spec: FallbackRelaySpec, client: Socket) = coroutineScope {
+        val local = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+        track(local)
+        val currentControl = AtomicReference<Socket?>(null)
+        val currentUdp = AtomicReference<DatagramSocket?>(null)
+        val endpoint = AtomicReference<InetSocketAddress?>(null)
+        val entry = RelayConnectionEntry("udp", client.inetAddress.hostAddress.orEmpty(), client.port, spec.groupTag) {
+            runCatching { local.close() }
+            runCatching { currentUdp.get()?.close() }
+            runCatching { currentControl.get()?.close() }
             runCatching { client.close() }
         }
-    }
-
-    private fun dialUpstreamViaNode(leaf: String, target: SocksAddress, timeoutMs: Int): Socket? {
-        val user = nodeUsers[leaf] ?: return null
-        val socket = Socket()
-        return try {
-            socket.tcpNoDelay = true
-            socket.connect(InetSocketAddress("127.0.0.1", nodeEntryPort), minOf(timeoutMs, 2_500))
-            socket.soTimeout = timeoutMs
-            val input = DataInputStream(socket.getInputStream())
-            val output = socket.getOutputStream()
-            if (performClientAuth(input, output, user, nodePassword) == false) {
-                socket.close()
-                return null
-            }
-            val req = ByteArray(4 + target.rawAddress.size + 2)
-            req[0] = 0x05
-            req[1] = CMD_CONNECT.toByte()
-            req[2] = 0x00
-            req[3] = target.atyp.toByte()
-            System.arraycopy(target.rawAddress, 0, req, 4, target.rawAddress.size)
-            req[4 + target.rawAddress.size] = ((target.port shr 8) and 0xFF).toByte()
-            req[4 + target.rawAddress.size + 1] = (target.port and 0xFF).toByte()
-            output.write(req)
-            output.flush()
-
-            val ver = input.readUnsignedByte()
-            val rep = input.readUnsignedByte()
-            input.readUnsignedByte()
-            readSocksAddress(input)
-            if (ver != 5 || rep != 0) {
-                socket.close()
-                return null
-            }
-            socket
-        } catch (_: Exception) {
-            runCatching { socket.close() }
-            null
+        RelayConnectionRegistry.register(entry)
+        val flight = FirstFlight()
+        client.soTimeout = 0
+        try {
+            reply(client.getOutputStream(), 0, local.localPort)
+        } catch (e: IOException) {
+            entry.close()
+            release(local)
+            RelayConnectionRegistry.unregister(entry.id)
+            throw e
         }
-    }
-
-    private suspend fun pipeBidirectional(scope: CoroutineScope, client: Socket, upstream: Socket) {
-        val cIn = client.getInputStream()
-        val cOut = client.getOutputStream()
-        val uIn = upstream.getInputStream()
-        val uOut = upstream.getOutputStream()
-
-        val uploadJob = scope.launch(Dispatchers.IO) {
-            copyStream(cIn, uOut)
-            runCatching { upstream.shutdownOutput() }
+        val controlReader = launch(Dispatchers.IO) {
+            try { while (client.getInputStream().read() >= 0) { /* Association lifetime. */ } }
+            catch (_: IOException) { /* Control socket ended. */ }
+            finally { entry.close() }
+        }
+        val reader = launch(Dispatchers.IO) {
+            val buffer = ByteArray(65_535)
+            val packet = DatagramPacket(buffer, buffer.size)
+            try {
+                while (isActive) {
+                    packet.length = buffer.size
+                    local.receive(packet)
+                    endpoint.set(InetSocketAddress(packet.address, packet.port))
+                    val data = packet.data.copyOfRange(packet.offset, packet.offset + packet.length)
+                    if (entry.destinationPort == 0) {
+                        val input = DataInputStream(ByteArrayInputStream(data))
+                        input.readUnsignedShort()
+                        input.readUnsignedByte()
+                        readAddress(input).describe(entry)
+                    }
+                    flight.firstPayload.complete(SystemClock.elapsedRealtime())
+                    entry.uploadBytes.addAndGet(data.size.toLong())
+                    while (isActive && flight.pending.offer(data, 100, TimeUnit.MILLISECONDS) == false) {
+                        // Datagram buffering follows the selected upstream.
+                    }
+                }
+            } catch (_: IOException) {
+                entry.close()
+            }
         }
         try {
-            copyStream(uIn, cOut)
-            runCatching { client.shutdownOutput() }
+            val attempted = mutableSetOf<String>()
+            while (isActive && closed == false && entry.closed.get() == false && flight.replayable) {
+                val plan = resolvePlan(spec.groupTag)
+                val leaf = plan.candidates.firstOrNull { it !in attempted } ?: break
+                attempted += leaf
+                val control = Socket()
+                track(control)
+                currentControl.set(control)
+                entry.leafTag = leaf
+                val beganAt = SystemClock.elapsedRealtime()
+                var deadline = deadlineJob(control, beganAt + plan.failoverTimeoutMs)
+                var remote: DatagramSocket? = null
+                var sender: Job? = null
+                var responseDelivered = false
+                try {
+                    val bound = connectNode(control, leaf, 3, SocksAddress(1, ByteArray(4), 0), plan.failoverTimeoutMs)
+                    val upstream = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+                    remote = upstream
+                    track(upstream)
+                    currentUdp.set(upstream)
+                    upstream.connect(InetSocketAddress("127.0.0.1", bound.port))
+                    deadline.cancel()
+                    deadline = launch(Dispatchers.IO) {
+                        val firstPayloadAt = flight.firstPayload.await()
+                        delay((maxOf(beganAt, firstPayloadAt) + plan.failoverTimeoutMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
+                        upstream.close()
+                    }
+                    sender = launch(Dispatchers.IO) {
+                        try {
+                            flight.replay().forEach { upstream.send(DatagramPacket(it, it.size)) }
+                            while (isActive) {
+                                val data = flight.pending.poll(100, TimeUnit.MILLISECONDS) ?: continue
+                                flight.retain(data)
+                                upstream.send(DatagramPacket(data, data.size))
+                            }
+                        } catch (_: IOException) {
+                            upstream.close()
+                        }
+                    }
+                    val bytes = ByteArray(65_535)
+                    val packet = DatagramPacket(bytes, bytes.size)
+                    while (isActive && entry.closed.get() == false) {
+                        packet.length = bytes.size
+                        upstream.receive(packet)
+                        val clientEndpoint = endpoint.get() ?: continue
+                        try {
+                            local.send(DatagramPacket(packet.data, packet.offset, packet.length, clientEndpoint))
+                        } catch (e: IOException) {
+                            entry.close()
+                            throw e
+                        }
+                        entry.downloadBytes.addAndGet(packet.length.toLong())
+                        if (responseDelivered == false) {
+                            deadline.cancel()
+                            flight.establish()
+                            responseDelivered = true
+                            onCandidateConnected(spec.groupTag, leaf)
+                        }
+                    }
+                    break
+                } catch (_: IOException) {
+                    if (closed == false && entry.closed.get() == false) onCandidateFailed(spec.groupTag, leaf)
+                    if (responseDelivered || entry.closed.get() || flight.replayable == false) break
+                } finally {
+                    deadline.cancel()
+                    remote?.let(::release)
+                    release(control)
+                    sender?.cancelAndJoin()
+                    currentUdp.set(null)
+                    currentControl.compareAndSet(control, null)
+                }
+            }
         } finally {
-            uploadJob.join()
+            entry.close()
+            release(local)
+            RelayConnectionRegistry.unregister(entry.id)
+            reader.cancel()
+            controlReader.cancel()
+            reader.cancelAndJoin()
+            controlReader.cancelAndJoin()
         }
     }
 
-    private fun copyStream(input: InputStream, output: OutputStream) {
-        val buffer = ByteArray(PIPE_BUFFER_BYTES)
-        try {
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                output.write(buffer, 0, read)
-                output.flush()
-            }
-        } catch (_: IOException) {
-            // Normal half-close or peer reset during stream shutdown.
-        }
+    private fun CoroutineScope.deadlineJob(socket: Socket, deadlineAt: Long) = launch(Dispatchers.IO) {
+        delay((deadlineAt - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
+        socket.close()
     }
 
-    private fun performServerAuth(
-        input: DataInputStream,
-        output: OutputStream,
-        expectedUser: String,
-        expectedPass: String,
-    ): Boolean {
-        val ver = input.readUnsignedByte()
-        if (ver != 5) return false
-        val nMethods = input.readUnsignedByte()
-        val methods = ByteArray(nMethods)
-        input.readFully(methods)
-        val supportsUserPass = methods.any { it.toInt() == 0x02 }
-        if (supportsUserPass == false) {
-            output.write(byteArrayOf(0x05, 0xFF.toByte()))
-            output.flush()
+    private fun connectNode(socket: Socket, leaf: String, command: Int, target: SocksAddress, timeout: Int): SocksAddress {
+        val user = nodeUsers[leaf] ?: throw IOException("Physical node entry missing")
+        socket.tcpNoDelay = true
+        socket.connect(InetSocketAddress("127.0.0.1", nodeEntryPort), timeout)
+        socket.soTimeout = timeout
+        val input = DataInputStream(socket.getInputStream())
+        val output = socket.getOutputStream()
+        output.write(byteArrayOf(5, 1, 2))
+        if (input.readUnsignedByte() != 5 || input.readUnsignedByte() != 2) throw IOException("SOCKS auth method")
+        val userBytes = user.toByteArray()
+        val passwordBytes = nodePassword.toByteArray()
+        output.write(byteArrayOf(1, userBytes.size.toByte()) + userBytes + byteArrayOf(passwordBytes.size.toByte()) + passwordBytes)
+        if (input.readUnsignedByte() != 1 || input.readUnsignedByte() != 0) throw IOException("SOCKS authentication")
+        output.write(byteArrayOf(5, command.toByte(), 0, target.type.toByte()) + target.raw +
+            byteArrayOf((target.port shr 8).toByte(), target.port.toByte()))
+        val version = input.readUnsignedByte()
+        val result = input.readUnsignedByte()
+        input.readUnsignedByte()
+        val bound = readAddress(input)
+        if (version != 5 || result != 0) throw IOException("SOCKS target connection $result")
+        return bound
+    }
+
+    private fun authenticateServer(input: DataInputStream, output: OutputStream, spec: FallbackRelaySpec): Boolean {
+        if (input.readUnsignedByte() != 5) return false
+        val methods = ByteArray(input.readUnsignedByte()).also(input::readFully)
+        if (methods.any { it.toInt() == 2 } == false) {
+            output.write(byteArrayOf(5, 0xff.toByte()))
             return false
         }
-        output.write(byteArrayOf(0x05, 0x02))
-        output.flush()
-
-        val authVer = input.readUnsignedByte()
-        val uLen = input.readUnsignedByte()
-        val uBytes = ByteArray(uLen)
-        input.readFully(uBytes)
-        val pLen = input.readUnsignedByte()
-        val pBytes = ByteArray(pLen)
-        input.readFully(pBytes)
-        val ok = authVer == 1 &&
-            String(uBytes, Charsets.UTF_8) == expectedUser &&
-            String(pBytes, Charsets.UTF_8) == expectedPass
-        output.write(byteArrayOf(0x01, if (ok) 0x00 else 0x01))
-        output.flush()
-        return ok
+        output.write(byteArrayOf(5, 2))
+        val version = input.readUnsignedByte()
+        val user = ByteArray(input.readUnsignedByte()).also(input::readFully).toString(Charsets.UTF_8)
+        val password = ByteArray(input.readUnsignedByte()).also(input::readFully).toString(Charsets.UTF_8)
+        val accepted = version == 1 && user == spec.username && password == spec.password
+        output.write(byteArrayOf(1, if (accepted) 0 else 1))
+        return accepted
     }
 
-    private fun performClientAuth(
-        input: DataInputStream,
-        output: OutputStream,
-        user: String,
-        pass: String,
-    ): Boolean {
-        output.write(byteArrayOf(0x05, 0x01, 0x02))
-        output.flush()
-        val ver = input.readUnsignedByte()
-        val method = input.readUnsignedByte()
-        if (ver != 5 || method != 0x02) return false
-        val uBytes = user.toByteArray(Charsets.UTF_8)
-        val pBytes = pass.toByteArray(Charsets.UTF_8)
-        val pkt = ByteArray(3 + uBytes.size + pBytes.size)
-        pkt[0] = 0x01
-        pkt[1] = uBytes.size.toByte()
-        System.arraycopy(uBytes, 0, pkt, 2, uBytes.size)
-        pkt[2 + uBytes.size] = pBytes.size.toByte()
-        System.arraycopy(pBytes, 0, pkt, 3 + uBytes.size, pBytes.size)
-        output.write(pkt)
-        output.flush()
-        val aVer = input.readUnsignedByte()
-        val status = input.readUnsignedByte()
-        return aVer == 1 && status == 0
-    }
-
-    private fun readSocksAddress(input: DataInputStream): SocksAddress? {
-        val atyp = input.readUnsignedByte()
-        val rawAddr = when (atyp) {
-            1 -> ByteArray(4).also { input.readFully(it) }
+    private fun readAddress(input: DataInputStream): SocksAddress {
+        val type = input.readUnsignedByte()
+        val raw = when (type) {
+            1 -> ByteArray(4).also(input::readFully)
+            4 -> ByteArray(16).also(input::readFully)
             3 -> {
-                val len = input.readUnsignedByte()
-                ByteArray(1 + len).also {
-                    it[0] = len.toByte()
-                    input.readFully(it, 1, len)
-                }
+                val length = input.readUnsignedByte()
+                byteArrayOf(length.toByte()) + ByteArray(length).also(input::readFully)
             }
-
-            4 -> ByteArray(16).also { input.readFully(it) }
-            else -> return null
+            else -> throw IOException("SOCKS address type $type")
         }
-        val port = input.readUnsignedShort()
-        return SocksAddress(atyp, rawAddr, port)
+        return SocksAddress(type, raw, input.readUnsignedShort())
     }
 
-    private fun sendSocksReply(output: OutputStream, rep: Int, bindPort: Int = 0) {
-        output.write(
-            byteArrayOf(
-                0x05,
-                rep.toByte(),
-                0x00,
-                0x01,
-                127,
-                0,
-                0,
-                1,
-                ((bindPort shr 8) and 0xFF).toByte(),
-                (bindPort and 0xFF).toByte(),
-            )
-        )
-        output.flush()
+    private fun reply(output: OutputStream, result: Int, port: Int = 0) {
+        output.write(byteArrayOf(5, result.toByte(), 0, 1, 127, 0, 0, 1, (port shr 8).toByte(), port.toByte()))
     }
 
-    private class SocksAddress(
-        val atyp: Int,
-        val rawAddress: ByteArray,
-        val port: Int,
-    )
+    private data class SocksAddress(val type: Int, val raw: ByteArray, val port: Int) {
+        fun describe(entry: RelayConnectionEntry) {
+            if (type == 3) entry.destinationHost = raw.copyOfRange(1, raw.size).toString(Charsets.UTF_8)
+            else entry.destinationIp = InetAddress.getByAddress(raw).hostAddress.orEmpty()
+            entry.destinationPort = port
+        }
+    }
 
-    companion object {
-        private const val TAG = "FallbackRelayServer"
-        private const val CMD_CONNECT = 0x01
-        private const val CMD_UDP_ASSOCIATE = 0x03
-        private const val HANDSHAKE_TIMEOUT_MS = 5_000
-        private const val CLIENT_PEEK_TIMEOUT_MS = 150
-        private const val INITIAL_BUFFER_BYTES = 16 * 1024
-        private const val FIRST_RESPONSE_BUFFER_BYTES = 16 * 1024
-        private const val PIPE_BUFFER_BYTES = 32 * 1024
-        private const val UDP_BUFFER_BYTES = 65_535
+    /** Retains the complete initial flight; larger transfers continue on their current transport. */
+    private class FirstFlight {
+        val pending = LinkedBlockingQueue<ByteArray>(8)
+        val firstPayload = CompletableDeferred<Long>()
+        private val initial = mutableListOf<ByteArray>()
+        private var retainedBytes = 0
+        private var established = false
+        @Volatile var replayable = true
+            private set
+
+        @Synchronized fun replay(): List<ByteArray> = initial.toList()
+
+        @Synchronized fun retain(bytes: ByteArray) {
+            if (established || replayable == false) return
+            if (retainedBytes + bytes.size > 256 * 1024) {
+                replayable = false
+                initial.clear()
+            } else {
+                initial += bytes
+                retainedBytes += bytes.size
+            }
+        }
+
+        @Synchronized fun establish() {
+            established = true
+            initial.clear()
+        }
+    }
+
+    private companion object {
+        const val HANDSHAKE_TIMEOUT_MS = 5_000
     }
 }

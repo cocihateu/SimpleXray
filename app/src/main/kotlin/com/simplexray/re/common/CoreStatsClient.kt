@@ -34,6 +34,7 @@ class CoreStatsClient(private val channel: ManagedChannel) : Closeable {
         }
             .getOrNull()
             ?.statList
+            ?.filter { it.name.substringAfter("outbound>>>").substringBefore(">>>").startsWith("sx-") == false }
             ?.groupBy {
                 when {
                     it.name.endsWith("uplink") -> "uplink"

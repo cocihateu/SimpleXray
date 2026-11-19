@@ -164,7 +164,7 @@ class GroupWorkspaceStore(context: Context) {
         return GroupWorkspace(
             groups = dedupGroups,
             defaultGroupTag = dedupGroups.firstOrNull()?.tag,
-        )
+        ).migrateRoutingTargets(dedupGroups.map { it.tag }.toSet())
     }
 
     private fun writeAtomic(content: String) {
@@ -210,6 +210,7 @@ class GroupWorkspaceStore(context: Context) {
                 .put("intervalSeconds", group.intervalSeconds)
                 .put("trustSeconds", group.trustSeconds)
                 .put("testUrl", group.testUrl)
+                .put("routingTargets", JSONArray(group.routingTargets))
             group.selectedMember?.let { selected ->
                 groupObj.put(
                     "selectedMember",
@@ -220,6 +221,7 @@ class GroupWorkspaceStore(context: Context) {
         }
         return JSONObject()
             .put("groups", groupsArray)
+            .put("routingMode", workspace.routingMode)
             .apply {
                 workspace.defaultGroupTag?.let { put("defaultGroupTag", it) }
             }
@@ -229,11 +231,13 @@ class GroupWorkspaceStore(context: Context) {
     private fun decode(content: String): GroupWorkspace {
         val root = JSONObject(content)
         val groupsArray = root.optJSONArray("groups") ?: JSONArray()
+        val legacyRoutingGroups = mutableSetOf<String>()
         val groups = buildList {
             for (i in 0 until groupsArray.length()) {
                 val obj = groupsArray.optJSONObject(i) ?: continue
                 val tag = obj.optString("tag").trim()
                 if (tag.isEmpty()) continue
+                if (obj.has("routingTargets") == false) legacyRoutingGroups.add(tag)
                 val sourceType = runCatching {
                     GroupSourceType.valueOf(obj.optString("sourceType", GroupSourceType.LOCAL.name))
                 }.getOrDefault(GroupSourceType.LOCAL)
@@ -285,12 +289,44 @@ class GroupWorkspaceStore(context: Context) {
                         intervalSeconds = obj.optInt("intervalSeconds", 60).coerceAtLeast(5),
                         trustSeconds = obj.optInt("trustSeconds", 120).coerceAtLeast(5),
                         testUrl = obj.optString("testUrl").ifBlank { DEFAULT_URL_TEST },
+                        routingTargets = obj.optJSONArray("routingTargets")?.let { targets ->
+                            (0 until targets.length()).map { targets.getString(it) }
+                        }.orEmpty(),
                     )
                 )
             }
         }
         val defaultGroupTag = root.optString("defaultGroupTag").takeIf { it.isNotBlank() }
-        return GroupWorkspace(groups = groups, defaultGroupTag = defaultGroupTag)
+        return GroupWorkspace(groups = groups, defaultGroupTag = defaultGroupTag, routingMode = root.optString("routingMode", "rule"))
+            .migrateRoutingTargets(legacyRoutingGroups)
+    }
+
+    private fun GroupWorkspace.migrateRoutingTargets(legacyGroups: Set<String>): GroupWorkspace {
+        fun primaryLeaf(member: GroupMemberRef, visited: Set<String> = emptySet()): String? {
+            if (member.isGroup == false) return member.tag
+            if (member.tag in visited) return null
+            val child = groupByTag(member.tag) ?: return null
+            if (child.strategy == GroupStrategy.URL_TEST) return null
+            val primary = if (child.strategy == GroupStrategy.SELECT) {
+                child.selectedMember ?: child.effectiveMembers().firstOrNull()
+            } else child.effectiveMembers().firstOrNull()
+            return primary?.let { primaryLeaf(it, visited + member.tag) }
+        }
+        val owners = groups.filter { it.strategy == GroupStrategy.FALLBACK && it.effectiveMembers().size > 1 }
+            .mapNotNull { group ->
+                group.effectiveMembers().firstOrNull()?.let { primaryLeaf(it) }
+                    ?.let { it to group.tag }
+            }
+            .groupBy({ it.first }, { it.second })
+        val assigned = groups.flatMap { it.routingTargets }.toSet()
+        return copy(groups = groups.map { group ->
+            val primary = group.effectiveMembers().firstOrNull()?.let { primaryLeaf(it) }
+            if (group.tag in legacyGroups && primary != null &&
+                owners[primary] == listOf(group.tag) && primary !in assigned
+            ) {
+                group.copy(routingTargets = listOf(primary))
+            } else group
+        })
     }
 
     companion object {

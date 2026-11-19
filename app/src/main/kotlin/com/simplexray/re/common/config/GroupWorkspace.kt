@@ -42,6 +42,7 @@ data class ProxyGroup(
     val intervalSeconds: Int = 60,
     val trustSeconds: Int = 120,
     val testUrl: String = DEFAULT_URL_TEST,
+    val routingTargets: List<String> = emptyList(),
 ) {
     fun effectiveMembers(): List<GroupMemberRef> =
         if (members.isNotEmpty()) members else nodes.map { GroupMemberRef(it.tag, isGroup = false) }
@@ -50,6 +51,7 @@ data class ProxyGroup(
 data class GroupWorkspace(
     val groups: List<ProxyGroup> = emptyList(),
     val defaultGroupTag: String? = null,
+    val routingMode: String = "rule",
 ) {
     fun allNodes(): List<ProxyNode> {
         val seen = linkedMapOf<String, ProxyNode>()
@@ -68,6 +70,14 @@ data class GroupWorkspace(
     fun effectiveDefaultGroupTag(): String? =
         defaultGroupTag?.takeIf { tag -> groups.any { it.tag == tag } }
             ?: groups.firstOrNull()?.tag
+
+    /** Business routing aliases are applied after the internal physical-node routing branch. */
+    fun effectiveRoutingBindings(): Map<String, String> = buildMap {
+        groups.forEach { put(it.tag, it.tag) }
+        groups.forEach { group ->
+            group.routingTargets.forEach { target -> put(target, group.tag) }
+        }
+    }
 
     fun hasCycle(): Boolean {
         val byTag = groups.associateBy { it.tag }
@@ -90,8 +100,12 @@ data class GroupWorkspace(
     }
 
     fun isValid(): Boolean {
+        if (routingMode !in setOf("rule", "global", "direct")) return false
         if (groups.any { it.tag.isBlank() || it.tag in BUILTIN_GROUP_TARGET_TAGS }) return false
         if (groups.map { it.tag }.toSet().size != groups.size) return false
+        val targets = groups.flatMap { it.routingTargets }
+        if (targets.any { it.isBlank() || it in BUILTIN_GROUP_TARGET_TAGS }) return false
+        if (targets.distinct().size != targets.size) return false
         if (groups.any {
                 it.failoverTimeoutSeconds < 1 ||
                     it.recoveryIntervalSeconds < 5 ||

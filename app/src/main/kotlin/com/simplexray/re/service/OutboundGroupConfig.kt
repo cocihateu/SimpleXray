@@ -19,10 +19,13 @@ internal class OutboundGroupConfig(
     val password = UUID.randomUUID().toString()
     val physicalNodes: List<String> = workspace.allNodes().map { it.tag }
     val allLeafTargets: List<String> = (physicalNodes + BUILTIN_GROUP_TARGET_TAGS).distinct()
+    val routingBindings: Map<String, String> = workspace.effectiveRoutingBindings()
     val users: Map<String, String> = allLeafTargets.mapIndexed { index, tag -> tag to "node-$index" }.toMap()
 
     val fallbackRelaySpecs: List<FallbackRelaySpec> = workspace.groups.mapIndexedNotNull { index, group ->
-        if (group.strategy == GroupStrategy.FALLBACK && group.effectiveMembers().size >= 2) {
+        if (group.strategy == GroupStrategy.URL_TEST ||
+            (group.strategy == GroupStrategy.FALLBACK && group.effectiveMembers().size >= 2)
+        ) {
             FallbackRelaySpec(
                 groupTag = group.tag,
                 port = allocatePort(),
@@ -144,18 +147,25 @@ internal class OutboundGroupConfig(
                         .put("ruleTag", "sx-internal/$user")
                 )
             }
-            val existing = routing.array("rules")
+            val existing = if (workspace.routingMode == "rule") routing.array("rules") else JSONArray()
             for (i in 0 until existing.length()) {
                 val rule = existing.getJSONObject(i)
-                val targetTag = rule.optString("outboundTag")
+                val originalTarget = rule.optString("outboundTag")
+                val targetTag = routingBindings[originalTarget] ?: originalTarget
                 fallbackRelayOutbounds[targetTag]?.let { relayOutbound ->
                     rule.put("outboundTag", relayOutbound)
+                    rule.put("ruleTag", "$targetTag/${rule.optString("ruleTag", "rule-$i")}")
                 } ?: balancers[targetTag]?.let { balancerTag ->
                     rule.remove("outboundTag")
                     rule.put("balancerTag", balancerTag)
                     rule.put("ruleTag", "$balancerTag/rule-$i/${rule.optString("ruleTag")}")
                 }
                 rules.put(rule)
+            }
+            if (workspace.routingMode == "direct") {
+                rules.put(JSONObject().put("network", "tcp,udp").put("outboundTag", "direct").put("ruleTag", "mode/direct"))
+                routing.put("rules", rules)
+                return
             }
             val defaultRelay = fallbackRelayOutbounds[defaultGroupTag]
             val defaultBalancer = balancers[defaultGroupTag]
@@ -180,7 +190,7 @@ internal class OutboundGroupConfig(
         defaultRelay: String?,
         defaultBalancer: String?,
     ) {
-        if (routing.optString("domainStrategy").equals("IPIfNonMatch", ignoreCase = true)) {
+        if (workspace.routingMode == "rule" && routing.optString("domainStrategy").equals("IPIfNonMatch", ignoreCase = true)) {
             val id = UUID.randomUUID().toString()
             val defaultTag = "${prefix}default"
             val port = allocatePort()
@@ -248,12 +258,18 @@ internal class OutboundGroupConfig(
         appendLine("local pick = require('xray.router').PickOutbound")
         appendLine("local relays = ${luaTable(fallbackRelayOutbounds)}")
         appendLine("local balancers = ${luaTable(balancers)}")
+        appendLine("local bindings = ${luaTable(routingBindings)}")
         appendLine("local internal = ${luaTable(users.entries.associate { (node, user) -> user to node })}")
         appendLine("function HandleRoute(ctx, inbound, sp, tp, lp, domain, net, proto, user, ...)")
         appendLine("  if inbound == ${luaString(nodeEntryInbound)} or inbound == ${luaString(healthInbound)} then return internal[user], 'sx-internal', nil end")
-        appendLine("  local tag, rule, err = original(ctx, inbound, sp, tp, lp, domain, net, proto, user, ...)")
+        when (workspace.routingMode) {
+            "direct" -> appendLine("  do return 'direct', 'mode/direct', nil end")
+            "global" -> appendLine("  local tag, rule, err = ${luaString(defaultGroupTag)}, 'mode/global', nil")
+            else -> appendLine("  local tag, rule, err = original(ctx, inbound, sp, tp, lp, domain, net, proto, user, ...)")
+        }
         appendLine("  if err then return tag, rule, err end")
         appendLine("  local effective = (tag and tag ~= '' and tag) or ${luaString(defaultGroupTag)}")
+        appendLine("  effective = bindings[effective] or effective")
         appendLine("  local relay = relays[effective]")
         appendLine("  if relay then return relay, effective .. '/' .. (rule or 'default'), nil end")
         appendLine("  local bal = balancers[effective]")

@@ -103,33 +103,7 @@ target_link_options(hev-socks5-tunnel PRIVATE
 )
 
 # -----------------------------------------------------------------------------
-# 3. SimpleTUN JNI bridge and static engine
-# -----------------------------------------------------------------------------
-set(SIMPLETUN_DIR "${PROJECT_ROOT}/third_party/simpletun")
-set(SIMPLETUN_STATIC_LIB "${SIMPLETUN_DIR}/zig-out/android/prebuilt/arm64-v8a/libsimpletun.a")
-if(NOT EXISTS "${SIMPLETUN_STATIC_LIB}")
-    message(FATAL_ERROR
-        "Missing SimpleTUN Android artifact: ${SIMPLETUN_STATIC_LIB}. "
-        "Run 'zig build android' in third_party/simpletun first.")
-endif()
-
-add_library(simpletun-prebuilt STATIC IMPORTED GLOBAL)
-set_target_properties(simpletun-prebuilt PROPERTIES
-    IMPORTED_LOCATION "${SIMPLETUN_STATIC_LIB}"
-    INTERFACE_INCLUDE_DIRECTORIES "${SIMPLETUN_DIR}/include"
-)
-
-add_library(simpletun-jni SHARED "${SIMPLETUN_DIR}/android/bridge.c")
-target_include_directories(simpletun-jni PRIVATE "${SIMPLETUN_DIR}/include")
-target_compile_options(simpletun-jni PRIVATE -O3 -Wall -Wextra -Werror -std=c11)
-target_link_libraries(simpletun-jni simpletun-prebuilt log)
-target_link_options(simpletun-jni PRIVATE
-    -Wl,-z,max-page-size=16384
-    -Wl,-z,common-page-size=16384
-)
-
-# -----------------------------------------------------------------------------
-# 4. xray-exec shared library
+# 3. xray-exec shared library
 # -----------------------------------------------------------------------------
 add_library(xray-exec SHARED xray_exec.c)
 target_link_libraries(xray-exec log)

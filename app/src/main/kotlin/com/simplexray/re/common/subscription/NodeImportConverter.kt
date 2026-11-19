@@ -13,6 +13,7 @@ data class NodeImportResult(
     val nodes: List<ProxyNode> = emptyList(),
     val extractedGlobalConfig: JSONObject? = null,
     val skippedCount: Int = 0,
+    val skippedReasons: List<String> = emptyList(),
 )
 
 /**
@@ -22,21 +23,43 @@ data class NodeImportResult(
 internal object NodeImportConverter {
     private val EXCLUDED_PROTOCOLS = setOf("freedom", "direct", "blackhole", "block", "dns", "loopback", "selector", "urltest")
     private val LINK_SCHEMES = listOf("vless://", "vmess://", "trojan://", "ss://", "socks://", "socks5://", "http://", "https://")
+    internal val SUPPORTED_XRAY_PROTOCOLS = setOf(
+        "vless", "vmess", "trojan", "shadowsocks", "socks", "http", "wireguard", "hysteria", "masque"
+    )
 
     fun parse(rawInput: String): NodeImportResult {
+        val parsed = parseInput(rawInput)
+        val reasons = parsed.skippedReasons.toMutableList()
+        val nodes = parsed.nodes.filter { node ->
+            val outbound = JSONObject(node.outboundJson)
+            val stream = outbound.optJSONObject("streamSettings")
+            val reason = when {
+                stream?.optString("network") in setOf("http", "h2", "h3", "quic") ->
+                    "当前 Xray 已移除旧 HTTP/H2/QUIC 传输，请使用服务端提供的 XHTTP 节点"
+                stream?.optJSONObject("tlsSettings")?.optBoolean("allowInsecure") == true ->
+                    "当前 Xray 要求有效 TLS 证书，allowInsecure 字段已移除"
+                else -> null
+            }
+            if (reason != null) reasons += "${node.tag}：$reason"
+            reason == null
+        }
+        return parsed.copy(nodes = nodes, skippedCount = parsed.skippedCount + parsed.nodes.size - nodes.size, skippedReasons = reasons)
+    }
+
+    private fun parseInput(rawInput: String): NodeImportResult {
         val trimmed = rawInput.trim().removePrefix("\uFEFF")
         if (trimmed.isEmpty()) return NodeImportResult()
 
         // 1. Try direct JSON or brace-less JSON fragment (e.g. sing-box snippet).
         tryParseJsonOrFragment(trimmed)?.let { result ->
-            if (result.nodes.isNotEmpty() || result.extractedGlobalConfig != null) {
+            if (result.nodes.isNotEmpty() || result.extractedGlobalConfig != null || result.skippedReasons.isNotEmpty()) {
                 return result
             }
         }
 
         // 2. Try V2Ray share links (raw or Base64 subscription payload).
         val linkResult = tryParseShareLinks(trimmed)
-        if (linkResult.nodes.isNotEmpty()) {
+        if (linkResult.nodes.isNotEmpty() || linkResult.skippedReasons.isNotEmpty()) {
             return linkResult
         }
 
@@ -75,18 +98,24 @@ internal object NodeImportConverter {
 
         // Single sing-box outbound object (may also contain stray log/inbounds keys)
         if (root.has("type") && root.has("server") && root.has("server_port")) {
-            val converted = convertSingBoxOutbound(root)
+            val reasons = mutableListOf<String>()
+            val converted = convertSingBoxOutbound(root, reasons)
             return if (converted != null) {
                 NodeImportResult(nodes = listOf(converted))
             } else {
-                NodeImportResult(skippedCount = 1)
+                NodeImportResult(skippedCount = 1, skippedReasons = reasons)
             }
         }
 
         // Single Xray outbound object
         if (root.has("protocol") && root.has("settings") && root.has("outbounds") == false) {
-            val node = xrayOutboundToProxyNode(root)
-            return if (node != null) NodeImportResult(nodes = listOf(node)) else NodeImportResult(skippedCount = 1)
+            val reasons = mutableListOf<String>()
+            val node = xrayOutboundToProxyNode(root, reasons)
+            return if (node != null) {
+                NodeImportResult(nodes = listOf(node))
+            } else {
+                NodeImportResult(skippedCount = 1, skippedReasons = reasons.ifEmpty { listOf("Xray 出站缺少有效协议或配置") })
+            }
         }
 
         val globalCandidate = if (GlobalConfigStore.hasGlobalSections(root)) root else null
@@ -104,36 +133,100 @@ internal object NodeImportConverter {
 
     private fun parseOutboundArray(outbounds: JSONArray, extractedGlobal: JSONObject?): NodeImportResult {
         val nodes = mutableListOf<ProxyNode>()
+        val reasons = mutableListOf<String>()
         var skipped = 0
         for (i in 0 until outbounds.length()) {
             val ob = outbounds.optJSONObject(i) ?: continue
             if (ob.has("protocol")) {
                 val protocol = ob.optString("protocol").lowercase()
                 if (protocol in EXCLUDED_PROTOCOLS) continue
-                val node = xrayOutboundToProxyNode(ob)
-                if (node != null) nodes += node else skipped++
+                val node = xrayOutboundToProxyNode(ob, reasons)
+                if (node != null) {
+                    nodes += node
+                } else {
+                    skipped++
+                }
             } else if (ob.has("type")) {
                 val type = ob.optString("type").lowercase()
                 if (type in EXCLUDED_PROTOCOLS) continue
-                val node = convertSingBoxOutbound(ob)
+                val node = convertSingBoxOutbound(ob, reasons)
                 if (node != null) nodes += node else skipped++
             }
         }
-        return NodeImportResult(nodes = nodes, extractedGlobalConfig = extractedGlobal, skippedCount = skipped)
+        return NodeImportResult(
+            nodes = nodes,
+            extractedGlobalConfig = extractedGlobal,
+            skippedCount = skipped,
+            skippedReasons = reasons,
+        )
     }
 
-    private fun xrayOutboundToProxyNode(ob: JSONObject): ProxyNode? {
-        val protocol = ob.optString("protocol").trim().lowercase()
-        if (protocol.isEmpty() || protocol in EXCLUDED_PROTOCOLS) return null
+    private fun xrayOutboundToProxyNode(ob: JSONObject, reasons: MutableList<String>? = null): ProxyNode? {
+        val rawProtocol = ob.optString("protocol").trim().lowercase()
+        if (rawProtocol.isEmpty() || rawProtocol in EXCLUDED_PROTOCOLS) return null
+        val tag = ob.optString("tag").trim().ifEmpty { deriveFallbackTag(ob, rawProtocol) }
+
+        if (rawProtocol == "mihomo") {
+            val settings = ob.optJSONObject("settings")
+            if (settings != null) {
+                val converted = runCatching { convertMihomoProxy(settings.optJSONObject("proxy") ?: settings, reasons) }.getOrNull()
+                if (converted != null) {
+                    val finalTag = tag.ifBlank { converted.tag }
+                    val targetStrategy = ob.optString("targetStrategy").ifBlank { converted.targetStrategy }
+                    val finalJson = JSONObject(converted.outboundJson).put("tag", finalTag).toString()
+                    return converted.copy(tag = finalTag, outboundJson = finalJson, targetStrategy = targetStrategy)
+                }
+            }
+            if (reasons != null && reasons.none { it.contains(tag) }) {
+                reasons.add("旧版辅助节点缺少原生 Xray 支持：$tag")
+            }
+            return null
+        }
+
+        val normalized = when (rawProtocol) {
+            "ss" -> "shadowsocks"
+            "socks5" -> "socks"
+            else -> rawProtocol
+        }
+
+        if (normalized !in SUPPORTED_XRAY_PROTOCOLS) {
+            reasons?.add("协议缺少原生 Xray 支持：$rawProtocol（节点：$tag）")
+            return null
+        }
+
         val clone = JSONObject(ob.toString())
-        val tag = clone.optString("tag").trim().ifEmpty { deriveFallbackTag(clone, protocol) }
         clone.put("tag", tag)
+        clone.put("protocol", normalized)
         return ProxyNode(
             tag = tag,
-            protocol = protocol,
+            protocol = normalized,
             outboundJson = clone.toString(),
             targetStrategy = clone.optString("targetStrategy"),
         )
+    }
+
+    fun inspectLegacyOrUnsupportedNode(node: ProxyNode): String? {
+        val proto = node.protocol.trim().lowercase()
+        val outboundProto = runCatching {
+            JSONObject(node.outboundJson).optString("protocol").trim().lowercase()
+        }.getOrDefault(proto)
+
+        if (proto == "mihomo" || outboundProto == "mihomo") {
+            return "检测到历史辅助协议节点：${node.tag}，需刷新订阅或重新导入原生节点"
+        }
+        val normalized = when (proto) {
+            "ss" -> "shadowsocks"
+            "socks5" -> "socks"
+            else -> proto
+        }
+        if (normalized !in SUPPORTED_XRAY_PROTOCOLS) {
+            return "节点协议缺少原生 Xray 支持：${node.protocol}（${node.tag}）"
+        }
+        return null
+    }
+
+    fun findUnsupportedNodeReasons(nodes: List<ProxyNode>): List<String> {
+        return nodes.mapNotNull { inspectLegacyOrUnsupportedNode(it) }
     }
 
     private fun deriveFallbackTag(ob: JSONObject, protocol: String): String {
@@ -157,43 +250,58 @@ internal object NodeImportConverter {
 
     private fun parseMihomoProxiesArray(proxies: JSONArray): NodeImportResult {
         val nodes = mutableListOf<ProxyNode>()
+        val reasons = mutableListOf<String>()
         var skipped = 0
         for (i in 0 until proxies.length()) {
             val obj = proxies.optJSONObject(i) ?: run {
                 skipped++
+                reasons += "节点内容格式异常"
                 continue
             }
             val type = obj.optString("type").trim().lowercase()
             if (type in setOf("direct", "reject", "reject-drop", "pass")) continue
-            val converted = runCatching { convertMihomoProxy(obj) }.getOrNull()
+            val converted = runCatching { convertMihomoProxy(obj, reasons) }.getOrNull()
             if (converted != null) {
                 nodes += converted
             } else {
                 skipped++
             }
         }
-        return NodeImportResult(nodes = nodes, skippedCount = skipped)
+        return NodeImportResult(nodes = nodes, skippedCount = skipped, skippedReasons = reasons)
     }
 
-    private fun convertMihomoProxy(src: JSONObject): ProxyNode? {
+    private fun convertMihomoProxy(src: JSONObject, reasons: MutableList<String>? = null): ProxyNode? {
         val sourceType = src.optString("type").trim().lowercase()
         val name = src.optString("name").trim().ifEmpty {
             "${sourceType}-${src.optString("server")}"
         }
         val server = src.optString("server").trim()
         val port = src.optInt("port", 0)
-        if (server.isEmpty() || port !in 1..65535) return null
+        if (server.isEmpty() || port !in 1..65535) {
+            reasons?.add("节点缺失有效服务器地址或端口：$name")
+            return null
+        }
 
-        // Protocols that require the bundled Mihomo helper because Xray-core lacks wire support
-        if (sourceType in setOf("hysteria", "hysteria2", "tuic", "anytls", "snell", "ssr")) {
-            return buildMihomoAdapterNode(name, sourceType, src)
+        if (sourceType in setOf("hysteria2", "hy2")) {
+            return convertHysteria2(name, server, port, src, reasons)
+        }
+        if (src.optString("network") in setOf("http", "h2", "h3", "quic")) {
+            reasons?.add("$name：旧 HTTP/H2/QUIC 传输已移除，请使用服务端 XHTTP 配置")
+            return null
+        }
+        if (sourceType in setOf("hysteria", "tuic", "anytls", "snell", "ssr")) {
+            reasons?.add("协议暂缺少原生 Xray 支持：$sourceType（节点：$name）")
+            return null
         }
 
         val protocol = when (sourceType) {
             "vless", "vmess", "trojan", "http", "wireguard" -> sourceType
             "ss", "shadowsocks" -> "shadowsocks"
             "socks", "socks5" -> "socks"
-            else -> return null
+            else -> {
+                reasons?.add("协议暂缺少原生 Xray 支持：$sourceType（节点：$name）")
+                return null
+            }
         }
 
         if (protocol == "wireguard") {
@@ -204,15 +312,18 @@ internal object NodeImportConverter {
         var ssHttpObfsHost: String? = null
         if (protocol == "shadowsocks") {
             val plugin = src.optString("plugin").trim().lowercase()
+            if (src.optBoolean("udp-over-tcp", false) || plugin.isNotEmpty()) {
+                reasons?.add("$name：该 Shadowsocks 外置插件或 UoT 需要相应协议实现，请提供原生节点")
+                return null
+            }
             if (plugin.isNotEmpty()) {
                 val opts = src.optJSONObject("plugin-opts")
                 val mode = opts?.optString("mode")?.trim()?.lowercase().orEmpty()
                 if ((plugin == "obfs" || plugin == "obfs-local" || plugin == "simple-obfs") && mode == "http") {
                     ssHttpObfsHost = opts?.optString("host")?.trim().orEmpty()
                 } else {
-                    // obfs=tls, v2ray-plugin, shadow-tls -> delegate cleanly to bundled Mihomo adapter
-                    val clone = JSONObject(src.toString()).put("type", "ss").put("name", name)
-                    return buildMihomoAdapterNode(name, "ss", clone)
+                    reasons?.add("Shadowsocks 插件暂缺少原生 Xray 支持：$plugin（节点：$name）")
+                    return null
                 }
             }
         }
@@ -341,6 +452,36 @@ internal object NodeImportConverter {
         return ProxyNode(tag = name, protocol = "wireguard", outboundJson = outbound.toString())
     }
 
+    private fun convertHysteria2(
+        tag: String,
+        server: String,
+        port: Int,
+        src: JSONObject,
+        reasons: MutableList<String>?,
+    ): ProxyNode? {
+        if (src.opt("obfs")?.toString()?.isNotBlank() == true ||
+            src.optString("ports").isNotBlank() || src.optJSONArray("server_ports") != null
+        ) {
+            reasons?.add("$tag：Hysteria2 混淆或端口跳跃需提供对应 Xray 原生配置")
+            return null
+        }
+        val sourceTls = src.optJSONObject("tls")
+        val tls = JSONObject()
+            .put("serverName", src.optString("sni").ifBlank { sourceTls?.optString("server_name").orEmpty().ifBlank { server } })
+            .put("alpn", JSONArray().put("h3"))
+        if (src.optBoolean("skip-cert-verify") || sourceTls?.optBoolean("insecure") == true) {
+            reasons?.add("$tag：当前 Xray 要求有效 TLS 证书")
+            return null
+        }
+        val stream = JSONObject().put("network", "hysteria").put("security", "tls")
+            .put("tlsSettings", tls)
+            .put("hysteriaSettings", JSONObject().put("version", 2).put("auth", src.optString("password")))
+        val outbound = JSONObject().put("tag", tag).put("protocol", "hysteria")
+            .put("settings", JSONObject().put("version", 2).put("address", server).put("port", port))
+            .put("streamSettings", stream)
+        return ProxyNode(tag, "hysteria", outbound.toString())
+    }
+
     private fun buildMihomoStreamSettings(
         src: JSONObject,
         protocol: String,
@@ -398,29 +539,29 @@ internal object NodeImportConverter {
 
             "http", "h2" -> {
                 val httpOpts = src.optJSONObject("http-opts") ?: src.optJSONObject("h2-opts")
-                val rawSettings = JSONObject()
-                val header = JSONObject().put("type", "http")
-                val request = JSONObject()
+                val httpSettings = JSONObject()
                 val paths = httpOpts?.optJSONArray("path")
-                if (paths != null && paths.length() > 0) {
-                    request.put("path", paths)
+                val path = if (paths != null && paths.length() > 0) {
+                    paths.optString(0, "/")
                 } else {
-                    val singlePath = httpOpts?.optString("path").orEmpty().ifBlank { "/" }
-                    request.put("path", JSONArray().put(singlePath))
+                    httpOpts?.optString("path").orEmpty().ifBlank { "/" }
                 }
+                httpSettings.put("path", path)
                 val headers = httpOpts?.optJSONObject("headers")
-                if (headers != null && headers.length() > 0) {
-                    request.put("headers", JSONObject(headers.toString()))
+                val host = headers?.optJSONArray("Host")?.optString(0)
+                    ?: headers?.optString("Host")
+                    ?: headers?.optString("host")
+                    ?: server
+                if (host.isNotBlank()) {
+                    httpSettings.put("host", JSONArray().put(host))
                 }
-                header.put("request", request)
-                rawSettings.put("header", header)
-                stream.put("network", "raw").put("rawSettings", rawSettings)
+                stream.put("network", "http").put("httpSettings", httpSettings)
             }
 
             else -> {
-                stream.put("network", "raw")
+                stream.put("network", "tcp")
                 if (ssHttpObfsHost != null) {
-                    stream.put("rawSettings", buildHttpObfsRawSettings(ssHttpObfsHost))
+                    stream.put("tcpSettings", buildHttpObfsTcpSettings(ssHttpObfsHost))
                 }
             }
         }
@@ -465,27 +606,38 @@ internal object NodeImportConverter {
     // Sing-box outbound JSON converter (handles 3.jpg & sing-box outbounds)
     // -------------------------------------------------------------------------
 
-    private fun convertSingBoxOutbound(src: JSONObject): ProxyNode? {
+    private fun convertSingBoxOutbound(src: JSONObject, reasons: MutableList<String>? = null): ProxyNode? {
         val type = src.optString("type").trim().lowercase()
         if (type.isEmpty() || type in EXCLUDED_PROTOCOLS) return null
         val server = src.optString("server").trim()
         val port = src.optInt("server_port", 0)
         val tag = src.optString("tag").trim().ifEmpty { "$type-$server" }
-        if (server.isEmpty() || port !in 1..65535) return null
+        if (server.isEmpty() || port !in 1..65535) {
+            reasons?.add("节点缺失有效服务器地址或端口：$tag")
+            return null
+        }
 
-        if (type in setOf("hysteria2", "tuic", "anytls")) {
-            val mihomoObj = convertSingBoxToMihomoProxy(tag, type, src) ?: return null
-            return buildMihomoAdapterNode(tag, type, mihomoObj)
+        if (type == "hysteria2") return convertHysteria2(tag, server, port, src, reasons)
+        if (type in setOf("tuic", "anytls")) {
+            reasons?.add("协议暂缺少原生 Xray 支持：$type（节点：$tag）")
+            return null
         }
 
         when (type) {
             "shadowsocks" -> {
                 val method = src.optString("method").trim()
                 val password = src.optString("password")
-                if (method.isEmpty() || password.isEmpty()) return null
+                if (method.isEmpty() || password.isEmpty()) {
+                    reasons?.add("Shadowsocks 节点缺失加密方法或密码：$tag")
+                    return null
+                }
                 val plugin = src.optString("plugin").trim().lowercase()
                 val pluginOpts = parseKeyValueOpts(src.optString("plugin_opts"))
                 val uot = src.optBoolean("udp_over_tcp", false)
+                if (plugin.isNotEmpty() || uot || src.optJSONObject("udp_over_tcp")?.optBoolean("enabled") == true) {
+                    reasons?.add("$tag：Shadowsocks 外置插件或 UoT 需要相应协议实现，请提供原生节点")
+                    return null
+                }
 
                 if (plugin.isNotEmpty()) {
                     val obfsMode = pluginOpts["obfs"]?.lowercase().orEmpty()
@@ -504,35 +656,13 @@ internal object NodeImportConverter {
                             .put(
                                 "streamSettings",
                                 JSONObject()
-                                    .put("network", "raw")
-                                    .put("rawSettings", buildHttpObfsRawSettings(obfsHost))
+                                    .put("network", "tcp")
+                                    .put("tcpSettings", buildHttpObfsTcpSettings(obfsHost))
                             )
                         return ProxyNode(tag = tag, protocol = "shadowsocks", outboundJson = outbound.toString())
                     } else {
-                        val mihomoProxy = JSONObject()
-                            .put("name", tag)
-                            .put("type", "ss")
-                            .put("server", server)
-                            .put("port", port)
-                            .put("cipher", method)
-                            .put("password", password)
-                            .put("udp", true)
-                        if (uot) mihomoProxy.put("udp-over-tcp", true)
-                        if (plugin == "obfs-local" || plugin == "simple-obfs" || plugin == "obfs") {
-                            mihomoProxy.put("plugin", "obfs")
-                            mihomoProxy.put(
-                                "plugin-opts",
-                                JSONObject()
-                                    .put("mode", obfsMode.ifEmpty { "tls" })
-                                    .apply { if (obfsHost.isNotEmpty()) put("host", obfsHost) }
-                            )
-                        } else {
-                            mihomoProxy.put("plugin", plugin)
-                            val optsObj = JSONObject()
-                            pluginOpts.forEach { (k, v) -> optsObj.put(k, v) }
-                            if (optsObj.length() > 0) mihomoProxy.put("plugin-opts", optsObj)
-                        }
-                        return buildMihomoAdapterNode(tag, "ss", mihomoProxy)
+                        reasons?.add("Shadowsocks 插件暂缺少原生 Xray 支持：$plugin（节点：$tag）")
+                        return null
                     }
                 }
 
@@ -648,7 +778,7 @@ internal object NodeImportConverter {
                 ).put("grpcSettings", JSONObject().put("serviceName", transport.optString("service_name")))
             }
 
-            else -> stream.put("network", "raw")
+            else -> stream.put("network", "tcp")
         }
 
         val tls = src.optJSONObject("tls")
@@ -678,23 +808,6 @@ internal object NodeImportConverter {
         return stream
     }
 
-    private fun convertSingBoxToMihomoProxy(tag: String, type: String, src: JSONObject): JSONObject? {
-        val obj = JSONObject()
-            .put("name", tag)
-            .put("type", type)
-            .put("server", src.optString("server"))
-            .put("port", src.optInt("server_port"))
-            .put("udp", true)
-        src.optString("password").takeIf { it.isNotEmpty() }?.let { obj.put("password", it) }
-        src.optString("uuid").takeIf { it.isNotEmpty() }?.let { obj.put("uuid", it) }
-        src.optJSONObject("tls")?.let { tls ->
-            tls.optString("server_name").takeIf { it.isNotBlank() }?.let { obj.put("sni", it) }
-            if (tls.optBoolean("insecure", false)) obj.put("skip-cert-verify", true)
-            tls.optJSONArray("alpn")?.takeIf { it.length() > 0 }?.let { obj.put("alpn", it) }
-        }
-        return obj
-    }
-
     // -------------------------------------------------------------------------
     // V2Ray share links & Base64 subscription converter
     // -------------------------------------------------------------------------
@@ -706,15 +819,16 @@ internal object NodeImportConverter {
             decodeBase64Text(trimmed)?.takeIf { containsShareLink(it) } ?: return NodeImportResult()
         }
         val nodes = mutableListOf<ProxyNode>()
+        val reasons = mutableListOf<String>()
         var skipped = 0
         for (rawLine in decoded.lineSequence()) {
             val line = rawLine.trim()
             if (line.isEmpty() || line.startsWith("#")) continue
             if (LINK_SCHEMES.none { line.startsWith(it, ignoreCase = true) }) continue
-            val node = runCatching { parseSingleShareLink(line) }.getOrNull()
+            val node = runCatching { parseSingleShareLink(line, reasons) }.getOrNull()
             if (node != null) nodes += node else skipped++
         }
-        return NodeImportResult(nodes = nodes, skippedCount = skipped)
+        return NodeImportResult(nodes = nodes, skippedCount = skipped, skippedReasons = reasons)
     }
 
     private fun containsShareLink(text: String): Boolean =
@@ -734,16 +848,31 @@ internal object NodeImportConverter {
         }.getOrNull()
     }
 
-    private fun parseSingleShareLink(line: String): ProxyNode? {
+    private fun parseSingleShareLink(line: String, reasons: MutableList<String>? = null): ProxyNode? {
+        val uri = Uri.parse(line)
+        if (uri.isHierarchical && uri.getQueryParameter("plugin")?.isNotBlank() == true) {
+            reasons?.add("Shadowsocks 分享链接带外置插件，请提供原生节点")
+            return null
+        }
+        if (uri.isHierarchical && uri.getQueryParameter("type") in setOf("http", "h2", "h3", "quic")) {
+            reasons?.add("分享链接采用旧 HTTP/H2/QUIC 传输，请使用服务端 XHTTP 配置")
+            return null
+        }
         val lower = line.lowercase()
         return when {
             lower.startsWith("vless://") -> parseVlessLink(line)
             lower.startsWith("vmess://") -> parseVmessLink(line)
             lower.startsWith("trojan://") -> parseTrojanLink(line)
-            lower.startsWith("ss://") -> parseShadowsocksLink(line)
+            lower.startsWith("ss://") -> parseShadowsocksLink(line, reasons)
             lower.startsWith("socks://") || lower.startsWith("socks5://") -> parseSocksOrHttpLink(line, "socks")
             lower.startsWith("http://") || lower.startsWith("https://") -> parseSocksOrHttpLink(line, "http")
-            else -> null
+            else -> {
+                val scheme = line.substringBefore("://", "")
+                if (scheme.isNotBlank()) {
+                    reasons?.add("分享链接协议暂缺少原生 Xray 支持：$scheme")
+                }
+                null
+            }
         }
     }
 
@@ -846,9 +975,10 @@ internal object NodeImportConverter {
             }
 
             else -> {
-                stream.put("network", "raw")
+                val networkType = if (net == "kcp") "kcp" else "tcp"
+                stream.put("network", networkType)
                 if (json.optString("type").equals("http", ignoreCase = true)) {
-                    stream.put("rawSettings", buildHttpObfsRawSettings(reqHost, path.ifBlank { "/" }))
+                    stream.put("tcpSettings", buildHttpObfsTcpSettings(reqHost, path.ifBlank { "/" }))
                 }
             }
         }
@@ -881,7 +1011,7 @@ internal object NodeImportConverter {
         return ProxyNode(tag = tag, protocol = "vmess", outboundJson = outbound.toString())
     }
 
-    private fun parseShadowsocksLink(line: String): ProxyNode? {
+    private fun parseShadowsocksLink(line: String, reasons: MutableList<String>? = null): ProxyNode? {
         val withoutScheme = line.substringAfter("://")
         val fragment = withoutScheme.substringAfter('#', "")
         val beforeFragment = withoutScheme.substringBefore('#')
@@ -953,28 +1083,13 @@ internal object NodeImportConverter {
                     .put(
                         "streamSettings",
                         JSONObject()
-                            .put("network", "raw")
-                            .put("rawSettings", buildHttpObfsRawSettings(obfsHost))
+                            .put("network", "tcp")
+                            .put("tcpSettings", buildHttpObfsTcpSettings(obfsHost))
                     )
                 return ProxyNode(tag = finalTag, protocol = "shadowsocks", outboundJson = outbound.toString())
             } else {
-                val mihomoProxy = JSONObject()
-                    .put("name", finalTag)
-                    .put("type", "ss")
-                    .put("server", host)
-                    .put("port", port)
-                    .put("cipher", method)
-                    .put("password", password)
-                    .put("udp", true)
-                if (pluginName == "obfs-local" || pluginName == "simple-obfs") {
-                    mihomoProxy.put("plugin", "obfs").put(
-                        "plugin-opts",
-                        JSONObject()
-                            .put("mode", obfsMode.ifEmpty { "tls" })
-                            .apply { if (obfsHost.isNotEmpty()) put("host", obfsHost) }
-                    )
-                }
-                return buildMihomoAdapterNode(finalTag, "ss", mihomoProxy)
+                reasons?.add("Shadowsocks 插件暂缺少原生 Xray 支持：$pluginName（节点：$finalTag）")
+                return null
             }
         }
 
@@ -1058,9 +1173,9 @@ internal object NodeImportConverter {
             }
 
             else -> {
-                stream.put("network", "raw")
+                stream.put("network", "tcp")
                 if (uri.getQueryParameter("headerType").equals("http", ignoreCase = true)) {
-                    stream.put("rawSettings", buildHttpObfsRawSettings(host, path.ifBlank { "/" }))
+                    stream.put("tcpSettings", buildHttpObfsTcpSettings(host, path.ifBlank { "/" }))
                 }
             }
         }
@@ -1095,7 +1210,7 @@ internal object NodeImportConverter {
         return stream
     }
 
-    private fun buildHttpObfsRawSettings(host: String, path: String = "/"): JSONObject {
+    private fun buildHttpObfsTcpSettings(host: String, path: String = "/"): JSONObject {
         val request = JSONObject().put("path", JSONArray().put(path))
         if (host.isNotBlank()) {
             request.put("headers", JSONObject().put("Host", JSONArray().put(host)))
@@ -1104,17 +1219,6 @@ internal object NodeImportConverter {
             "header",
             JSONObject().put("type", "http").put("request", request)
         )
-    }
-
-    private fun buildMihomoAdapterNode(tag: String, mihomoType: String, proxyConfig: JSONObject): ProxyNode {
-        val settings = JSONObject(proxyConfig.toString())
-            .put("name", tag)
-            .put("type", mihomoType)
-        val outbound = JSONObject()
-            .put("tag", tag)
-            .put("protocol", "mihomo")
-            .put("settings", settings)
-        return ProxyNode(tag = tag, protocol = "mihomo", outboundJson = outbound.toString())
     }
 
     private fun parseKeyValueOpts(raw: String): Map<String, String> {

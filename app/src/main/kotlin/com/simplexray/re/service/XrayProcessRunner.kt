@@ -86,7 +86,6 @@ internal class XrayProcessRunner(
     private var startAttempt = 0
     private var scope: CoroutineScope? = null
     @Volatile private var groupSession: GroupCoreSession? = null
-    @Volatile private var mihomoProcess: MihomoOutboundProcess? = null
 
     fun resetAttempt() {
         startAttempt = 0
@@ -105,8 +104,6 @@ internal class XrayProcessRunner(
     }
 
     @Synchronized fun kill() {
-        mihomoProcess?.close()
-        mihomoProcess = null
         groupSession?.close()
         groupSession = null
         isStarted = false
@@ -142,7 +139,6 @@ internal class XrayProcessRunner(
         var currentPid = -1
         var reader: BufferedReader? = null
         var session: GroupCoreSession? = null
-        var mihomo: MihomoOutboundProcess? = null
 
         try {
             val prefs = Preferences(application)
@@ -160,6 +156,11 @@ internal class XrayProcessRunner(
             val globalStore = GlobalConfigStore(application)
             val workspaceStore = GroupWorkspaceStore(application)
             val workspace = workspaceStore.load()
+            val unsupported = com.simplexray.re.common.subscription.NodeImportConverter.findUnsupportedNodeReasons(workspace.allNodes())
+            if (unsupported.isNotEmpty()) {
+                failCurrentRun(runJob, unsupported.joinToString("\n"))
+                return
+            }
             if (workspace.groups.isEmpty() && workspace.allNodes().isEmpty()) {
                 failCurrentRun(runJob, "Add a proxy group with at least one node before starting Xray.")
                 return
@@ -187,25 +188,18 @@ internal class XrayProcessRunner(
                 "Local port allocation failed for runtime proxy listeners."
             }.also { usedPorts.add(it) }
             val runtimeConfig = JSONObject(configWithApi)
-            val dnsServers = buildList {
-                prefs.dnsIpv4.takeIf { it.isNotBlank() }?.let { add(it) }
-                if (prefs.ipv6) prefs.dnsIpv6.takeIf { it.isNotBlank() }?.let { add(it) }
-            }
-            mihomo = MihomoOutboundProcess.prepare(
-                runtimeConfig,
-                File("$libraryDir/libmihomo.so"),
-                application.cacheDir,
-                ::allocatePort,
-                dnsServers,
-                prefs.ipv6,
-            ) { owner, code -> onMihomoExited(owner, code, runJob) }
-            synchronized(this) {
-                requireCurrentRun(runJob)
-                mihomoProcess = mihomo
-            }
             if (workspace.groups.isNotEmpty()) {
                 val groups = OutboundGroupConfig(workspace, allocatePort(), allocatePort(), ::allocatePort)
-                session = GroupCoreSession(workspaceStore, groups, apiPort)
+                session = GroupCoreSession(
+                    store = workspaceStore,
+                    config = groups,
+                    apiPort = apiPort,
+                    logEvent = { message ->
+                        val line = formatAppLogLine(message)
+                        logFileManager.appendLog(line)
+                        callbacks.emitLog(line)
+                    },
+                )
                 synchronized(this) {
                     requireCurrentRun(runJob)
                     groupSession = session
@@ -215,7 +209,6 @@ internal class XrayProcessRunner(
             }
             val finalConfigContent = runtimeConfig.toString()
             Log.d(tag, "Injected final config (${finalConfigContent.length} chars) ready for stdin ($format)")
-            mihomo?.start()
             requireCurrentRun(runJob)
 
             val useXrayTun = prefs.tunnelMode == TunnelMode.XrayTun && !prefs.disableVpn
@@ -227,7 +220,6 @@ internal class XrayProcessRunner(
                 }
                 val spawnResult = synchronized(this) {
                     requireCurrentRun(runJob)
-                    mihomo?.requireAlive()
                     spawn(xrayPath, application.filesDir.path, vpnFd)?.also {
                         currentPid = it[0]
                         pid = currentPid
@@ -264,7 +256,6 @@ internal class XrayProcessRunner(
                 val processBuilder = getProcessBuilder(xrayPath)
                 val processRef = synchronized(this) {
                     requireCurrentRun(runJob)
-                    mihomo?.requireAlive()
                     processBuilder.start().also {
                         currentProcess = it
                         process = it
@@ -300,7 +291,6 @@ internal class XrayProcessRunner(
                         if (client.getSystemStats() != null) {
                             synchronized(this@XrayProcessRunner) {
                                 requireCurrentRun(runJob)
-                                mihomo?.requireAlive()
                                 if (callbacks.hasStartupFailed() || callbacks.isStopping()) return@launch
                                 isStarted = true
                                 startAttempt = 0
@@ -330,8 +320,6 @@ internal class XrayProcessRunner(
                             "Xray core startup timed out after ${STARTUP_PROBE_TIMEOUT_MS / 1000}s.",
                         )
                     }
-                } catch (e: MihomoOutboundProcess.StartupException) {
-                    failCurrentRun(runJob, e.message ?: "Mihomo runtime startup failed.")
                 } finally {
                     client.close()
                 }
@@ -366,8 +354,6 @@ internal class XrayProcessRunner(
             }
         } catch (e: CancellationException) {
             throw e
-        } catch (e: MihomoOutboundProcess.StartupException) {
-            failCurrentRun(runJob, e.message ?: "Mihomo runtime startup failed.")
         } catch (e: InterruptedIOException) {
             Log.d(tag, "Xray log stream interrupted during shutdown.")
             if (currentProcess != null) {
@@ -385,10 +371,8 @@ internal class XrayProcessRunner(
                 failCurrentRun(runJob, "Executing native Xray failed (${e.javaClass.simpleName}).")
             }
         } finally {
-            mihomo?.close()
             session?.close()
             synchronized(this) {
-                if (mihomoProcess === mihomo) mihomoProcess = null
                 if (groupSession === session) groupSession = null
                 if (currentProcess != null && process === currentProcess) {
                     process = null
@@ -416,20 +400,6 @@ internal class XrayProcessRunner(
             callbacks.hasStartupFailed() == false
         ) {
             callbacks.onStartFailure(reason)
-        }
-    }
-
-    @Synchronized private fun onMihomoExited(owner: MihomoOutboundProcess, code: Int, runJob: Job) {
-        if (mihomoProcess !== owner || job !== runJob || runJob.isActive == false || callbacks.isStopping()) return
-        val message = "Mihomo helper exited unexpectedly (code $code)."
-        Log.e(tag, message)
-        if (isStarted) {
-            val line = formatAppLogLine("[Error] $message")
-            logFileManager.appendLog(line)
-            callbacks.emitLog(line)
-            callbacks.onUnexpectedExit()
-        } else {
-            callbacks.onStartFailure(message)
         }
     }
 

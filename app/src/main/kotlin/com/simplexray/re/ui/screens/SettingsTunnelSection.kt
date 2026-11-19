@@ -74,24 +74,18 @@ internal fun SettingsTunnelSection(
     val vpnDisabled = settingsState.switches.disableVpn
     val backdrop = LocalLayerBackdrop.current
 
-    val xrayTunTitle = stringResource(R.string.tunnel_mode_xray_tun)
-    val xrayTunSummary = stringResource(R.string.tunnel_mode_xray_tun_summary)
     val hevTitle = stringResource(R.string.tunnel_mode_hev_socks5)
-    val hevSummary = stringResource(R.string.tunnel_mode_hev_socks5_summary)
-    val simpleTunTitle = stringResource(R.string.tunnel_mode_simpletun)
-    val simpleTunSummary = stringResource(R.string.tunnel_mode_simpletun_summary)
+    val hevSummary = stringResource(R.string.workspace_tunnel_backend_hev_summary)
 
-    val tunnelModes = remember {
-        listOf(TunnelMode.XrayTun, TunnelMode.HevSocks5Tunnel, TunnelMode.SimpleTun)
-    }
-    val tunnelModeTitles = remember(xrayTunTitle, hevTitle, simpleTunTitle) {
-        listOf(xrayTunTitle, hevTitle, simpleTunTitle)
-    }
-    val currentTunnelModeIndex = tunnelModes.indexOf(settingsState.switches.tunnelMode).coerceAtLeast(0)
-    val currentTunnelModeSummary = when (settingsState.switches.tunnelMode) {
-        TunnelMode.XrayTun -> xrayTunSummary
-        TunnelMode.HevSocks5Tunnel -> hevSummary
-        TunnelMode.SimpleTun -> simpleTunSummary
+    val tunnelModes = remember { listOf(TunnelMode.HevSocks5Tunnel) }
+    val tunnelModeTitles = remember(hevTitle) { listOf(hevTitle) }
+    val currentTunnelModeIndex = 0
+    val currentTunnelModeSummary = hevSummary
+
+    LaunchedEffect(settingsState.switches.tunnelMode) {
+        if (settingsState.switches.tunnelMode != TunnelMode.HevSocks5Tunnel) {
+            mainViewModel.setTunnelMode(TunnelMode.HevSocks5Tunnel)
+        }
     }
 
         SmallTitle(text = stringResource(R.string.vpn_interface))

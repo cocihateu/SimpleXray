@@ -1,0 +1,129 @@
+package com.simplexray.re.ui.screens
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import com.simplexray.re.R
+import com.simplexray.re.service.ClashApiPreferences
+import com.simplexray.re.viewmodel.MainViewModel
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.SmallTitle
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.preference.ArrowPreference
+import top.yukonga.miuix.kmp.preference.SwitchPreference
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+import java.util.UUID
+
+@Composable
+internal fun SettingsClashApiSection(
+    mainViewModel: MainViewModel,
+) {
+    val context = LocalContext.current
+    val prefs = remember { ClashApiPreferences(context) }
+    var enabled by remember { mutableStateOf(prefs.enabled) }
+    var port by remember { mutableIntStateOf(prefs.port) }
+    var secret by remember { mutableStateOf(prefs.secret) }
+    val controllerUrl = "http://127.0.0.1:$port"
+
+    SmallTitle(text = stringResource(R.string.clash_api_title))
+    Card(modifier = Modifier.fillMaxWidth()) {
+        SwitchPreference(
+            title = stringResource(R.string.clash_api_enable),
+            summary = stringResource(R.string.clash_api_enable_summary),
+            checked = enabled,
+            onCheckedChange = { newValue ->
+                enabled = newValue
+                prefs.enabled = newValue
+                mainViewModel.showSnackbar(context.getString(R.string.clash_api_restart_notice))
+            }
+        )
+
+        EditableListItemWithMiuixBottomSheet(
+            headline = stringResource(R.string.clash_api_port),
+            currentValue = port.toString(),
+            onValueConfirmed = { newValue ->
+                val parsed = newValue.toIntOrNull()
+                if (parsed != null && parsed in 1024..65535) {
+                    port = parsed
+                    prefs.port = parsed
+                    mainViewModel.showSnackbar(context.getString(R.string.clash_api_restart_notice))
+                }
+            },
+            label = stringResource(R.string.clash_api_port),
+            supportingText = "1024–65535",
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            enabled = enabled,
+        )
+
+        EditableListItemWithMiuixBottomSheet(
+            headline = stringResource(R.string.clash_api_secret),
+            currentValue = secret.ifBlank { "—" },
+            onValueConfirmed = { newValue ->
+                val trimmed = newValue.trim()
+                prefs.secret = trimmed
+                secret = prefs.secret
+                mainViewModel.showSnackbar(context.getString(R.string.clash_api_restart_notice))
+            },
+            label = stringResource(R.string.clash_api_secret),
+            supportingText = stringResource(R.string.clash_api_secret),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+            enabled = enabled,
+        )
+
+        ArrowPreference(
+            title = stringResource(R.string.clash_api_controller_url),
+            summary = controllerUrl,
+            onClick = {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Clash Controller URL", controllerUrl))
+                mainViewModel.showSnackbar(context.getString(R.string.clash_api_url_copied))
+            },
+            enabled = enabled,
+        )
+
+        ArrowPreference(
+            title = stringResource(R.string.clash_api_copy_secret),
+            summary = secret.ifBlank { null },
+            onClick = {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Clash Secret", secret))
+                mainViewModel.showSnackbar(context.getString(R.string.clash_api_secret_copied))
+            },
+            enabled = enabled && secret.isNotBlank(),
+        )
+
+        ArrowPreference(
+            title = stringResource(R.string.clash_api_generate_secret),
+            summary = secret.ifBlank { null },
+            onClick = {
+                prefs.resetSecret()
+                secret = prefs.secret
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Clash Secret", secret))
+                mainViewModel.showSnackbar(context.getString(R.string.clash_api_secret_copied))
+            },
+            enabled = enabled,
+        )
+
+        Text(
+            text = stringResource(R.string.clash_api_restart_notice),
+            style = MiuixTheme.textStyles.body2,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+        )
+    }
+}

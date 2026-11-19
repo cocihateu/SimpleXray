@@ -10,16 +10,17 @@
 <sub>Android 14+ (API 34) | arm64-v8a | MPL-2.0</sub>
 </div>
 
-SimpleXray Groups accepts complete Xray JSON or YAML configurations. In **Config → Import Mihomo subscription**, a subscription URL or local YAML file supplies nodes and groups. Xray routes connections, with a local Mihomo adapter handling nodes that use options such as Shadowsocks UDP-over-TCP or obfs.
+SimpleXray Groups uses Xray as its proxy core and Hev as its Android TUN backend. The proxy page manages local and subscription groups; settings owns global DNS, inbounds, routing, Lua scripts, and the local Clash API. Imports convert supported node formats into native Xray outbounds and report skipped protocol or plugin combinations. See [native imports](./xray-imports.md) and [Clash API](./clash-api.md).
 
-This repository is a personal fork of [SimpleXray](https://github.com/lhear/SimpleXray). It keeps the upstream full-configuration model and adds a selectable TUN data plane, a reworked configuration pipeline, rule-file management, a Miuix-based interface, and benchmark tooling.
+This repository is a personal fork of [SimpleXray](https://github.com/lhear/SimpleXray). The Groups branch combines a global configuration with a shared node and group workspace, rule-file management, and a Miuix-based interface.
 
 > [!NOTE]
 > This fork is maintained for personal use and experimentation. Issues and pull requests are not accepted, and no support is provided. If you need a maintained client, use upstream or fork this repository and build it through CI.
 
 ## Why This Fork
 
-- **Three TUN backends** — Hev (C/lwIP, default), SimpleTUN (in-tree Zig), and native Xray TUN.
+- **Xray + Hev** — a single proxy core and Android TUN backend.
+- **Unified groups** — manual selection, scheduled URL tests, nested fallback groups, editable rule bindings, and per-node destination DNS strategy.
 - **Complete configuration workflow** — JSON/YAML import, in-app editor, one-way Android sanitization, log controls, and runtime statistics injection.
 - **Rule-file management** — built-in `geoip.dat`/`geosite.dat`, arbitrary custom `.dat` files, `ext:` references, per-file update URLs, and background updates.
 - **Miuix interface** — Xiaomi HyperOS/MIUI-inspired Compose UI with adaptive phone and tablet layouts, NavigationRail, Light/Dark/System themes, and Android 12+ dynamic colors.
@@ -56,9 +57,8 @@ The full structural comparison is in [Differences from Upstream](./upstream-diff
 ### Xray-core
 
 - Xray-core runs as an independent child process and receives its configuration through stdin. No intermediate configuration file is written to disk.
-- Native Xray TUN mode uses the JNI launcher (`xray_exec.c`) to pass the Android VPN file descriptor to the child process.
-- The dashboard probes TCP handshake latency to supported outbound endpoints when it is shown or manually refreshed. UDP-only protocols, QUIC transports, and private, loopback, or link-local IP literals are skipped.
-- In Hev and SimpleTUN modes, Xray is started with `ProcessBuilder`; the selected backend forwards TUN traffic to Xray's local SOCKS5 inbound.
+- Hev owns the Android VPN file descriptor and forwards traffic to Xray's loopback SOCKS5 inbound.
+- URL-test groups measure their members on a configured schedule and honor the configured result trust duration. Fallback primaries receive recovery checks only after a working backup starts the countdown. Explicit dashboard measurements are user initiated.
 - Core status and traffic statistics are queried over plaintext gRPC on a dynamically allocated `127.0.0.1` port. Standard output and error are streamed to the UI and may be exported.
 
 ### Configuration
@@ -68,11 +68,19 @@ The full structural comparison is in [Differences from Upstream](./upstream-diff
 - Error, access, and DNS logs are controlled separately. The `Auto` log level maps to `warning` when no explicit level is configured.
 - The built-in [scripta](https://github.com/YuKongA/scripta) editor supports syntax highlighting, search and replace, undo/redo, and a quick-symbol bar.
 
-### TUN Backends
+### TUN Backend
 
-- **Hev** — C/lwIP implementation. Default backend.
-- **SimpleTUN** — in-tree Zig engine. IPv4 only, SOCKS5 no-auth, MTU fixed at 1500, no IPv6 route or address. See the [architecture specification](./simpletun_spec.md).
-- **Xray TUN** — native Xray TUN inbound with the VPN file descriptor delivered by the JNI launcher.
+Hev supplies the TUN-to-SOCKS data path. Historical SimpleTUN sources and benchmark reports remain reference material for the upstream project.
+
+### Routing and Fallback
+
+Each group has an editable list of routing targets. A Lua return value or JSON rule `outboundTag` matching one of these names enters that group. Internal measurements and relay redials use dedicated authenticated inbounds that select the physical outbound directly. Each physical outbound retains its own `targetStrategy`.
+
+Existing workspaces assign a unique physical primary's rule name to its fallback group during migration. Groups sharing a primary use explicit bindings in the group editor.
+
+The relay applies the group's timeout to each initial connection attempt, including its final candidate. A working backup response starts the primary recovery interval. A successful scheduled primary check returns new connections to primary. Established streams retain their current transport; application retries create connections using the current group selection.
+
+The first-response deadline starts when client payload is available, so idle browser preconnections remain idle. Initial payload replay retains up to 256 KiB; larger transfers stay on their current transport. Retrying application payload before a response can repeat an operation at the destination, while TLS handshake replay occurs before application requests. Connection telemetry covers sessions owned by the fallback relay.
 
 ### Rule Files & Scripts
 
@@ -108,7 +116,7 @@ This is client-side stale-connection reuse, not a listener or Xray-core defect. 
 
 ## Quick Start
 
-Prerequisites are summarized in the [building guide](./building.md). First build requires network access because Gradle downloads and verifies the pinned Xray-core prebuilt.
+Prerequisites are summarized in the [building guide](./building.md). The Groups workflow supplies the Xray Android prebuilt before Gradle packages the app.
 
 ```bash
 git clone --recursive https://github.com/ReRokutosei/SimpleXray.git
@@ -118,9 +126,7 @@ mkdir -p app/src/main/assets
 wget https://github.com/XTLS/Xray-rules-dat/releases/latest/download/geoip-lite.dat -O app/src/main/assets/geoip.dat
 wget https://github.com/XTLS/Xray-rules-dat/releases/latest/download/geosite.dat -O app/src/main/assets/geosite.dat
 
-(cd third_party/simpletun && zig build android)
-
-./gradlew :app:testDebugUnitTest :app:assembleDebug
+./gradlew :app:assembleDebug
 ```
 
 Debug APK: `app/build/outputs/apk/debug/simplexray-arm64-v8a.apk`. Release signing and CI details are documented in [Building from Source](./building.md).

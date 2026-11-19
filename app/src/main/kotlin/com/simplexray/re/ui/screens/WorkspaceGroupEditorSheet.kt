@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.runtime.Composable
@@ -87,6 +88,10 @@ internal fun WorkspaceGroupEditorSheet(
     var members by remember(editingGroup) {
         mutableStateOf(editingGroup?.effectiveMembers().orEmpty())
     }
+    var routingTargets by remember(editingGroup) {
+        mutableStateOf(editingGroup?.routingTargets.orEmpty())
+    }
+    var newRoutingTarget by remember { mutableStateOf("") }
     var memberToAdd by remember(editingGroup) { mutableStateOf<GroupMemberRef?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -158,6 +163,7 @@ internal fun WorkspaceGroupEditorSheet(
                         intervalSeconds = intervalSec,
                         trustSeconds = trustSec,
                         testUrl = testUrl.trim().ifBlank { DEFAULT_URL_TEST },
+                        routingTargets = routingTargets.map { it.trim() }.filter { it.isNotEmpty() }.distinct(),
                     )
                     val err = onSave(editingGroup?.tag, edited)
                     if (err != null) {
@@ -289,6 +295,74 @@ internal fun WorkspaceGroupEditorSheet(
                                 label = stringResource(R.string.workspace_url_test_url),
                                 modifier = Modifier.fillMaxWidth(),
                             )
+                        }
+                    }
+                }
+
+                item {
+                    SmallTitle(text = stringResource(R.string.workspace_routing_targets_title))
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                text = stringResource(R.string.workspace_routing_targets_summary),
+                                style = MiuixTheme.textStyles.body2,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
+                            if (routingTargets.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                routingTargets.forEach { target ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = target,
+                                            style = MiuixTheme.textStyles.body1,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        IconButton(
+                                            onClick = { routingTargets = routingTargets - target },
+                                            modifier = Modifier.size(28.dp),
+                                        ) {
+                                            Icon(
+                                                painter = painterResource(R.drawable.delete),
+                                                contentDescription = stringResource(R.string.delete_config),
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                TextField(
+                                    value = newRoutingTarget,
+                                    onValueChange = { newRoutingTarget = it },
+                                    label = stringResource(R.string.workspace_routing_target_hint),
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                IconButton(
+                                    onClick = {
+                                        val trimmed = newRoutingTarget.trim()
+                                        if (trimmed.isNotEmpty() && trimmed !in routingTargets) {
+                                            routingTargets = routingTargets + trimmed
+                                            newRoutingTarget = ""
+                                        }
+                                    },
+                                    enabled = newRoutingTarget.isNotBlank(),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Add,
+                                        contentDescription = stringResource(R.string.workspace_routing_target_add),
+                                    )
+                                }
+                            }
                         }
                     }
                 }

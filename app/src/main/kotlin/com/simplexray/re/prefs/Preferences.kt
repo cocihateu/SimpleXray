@@ -158,10 +158,10 @@ class Preferences(context: Context) {
     var enable: Boolean by booleanPref(ENABLE, false)
     var disableVpn: Boolean by booleanPref(DISABLE_VPN, false)
     var tunnelMode: TunnelMode
-        // Default to HevSocks5Tunnel for optimal throughput and power efficiency.
-        get() = sp.getString(TUNNEL_MODE, null)?.let { TunnelMode.fromString(it) } ?: TunnelMode.HevSocks5Tunnel
+        get() = TunnelMode.HevSocks5Tunnel
+        @Suppress("UNUSED_PARAMETER")
         set(value) {
-            sp.edit { putString(TUNNEL_MODE, value.value) }
+            sp.edit { putString(TUNNEL_MODE, TunnelMode.HevSocks5Tunnel.value) }
         }
 
     var tunnelMtu: Int by intPref(TUNNEL_MTU, 1500)

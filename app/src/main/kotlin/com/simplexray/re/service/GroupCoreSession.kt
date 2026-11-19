@@ -4,7 +4,6 @@ import android.os.SystemClock
 import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.common.config.GroupMemberRef
 import com.simplexray.re.common.config.GroupStrategy
-import com.simplexray.re.common.config.GroupWorkspace
 import com.simplexray.re.common.config.GroupWorkspaceStore
 import com.xray.app.router.command.OverrideBalancerTargetRequest
 import com.xray.app.router.command.RoutingServiceGrpc
@@ -15,7 +14,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
@@ -31,13 +29,17 @@ import java.net.Proxy
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 
+internal data class GroupNodeMeasurement(val delayMs: Long?, val completedAtMs: Long)
+
 internal object GroupRuntimeStatus {
     private val nodes = MutableStateFlow<Map<String, String>>(emptyMap())
     private val fallbacks = MutableStateFlow<Map<String, FallbackRuntimeInfo>>(emptyMap())
     private val latencies = MutableStateFlow<Map<String, Long>>(emptyMap())
+    private val measurements = MutableStateFlow<Map<String, GroupNodeMeasurement>>(emptyMap())
     val activeNodes = nodes.asStateFlow()
     val fallbackStates = fallbacks.asStateFlow()
     val nodeLatencies = latencies.asStateFlow()
+    val nodeMeasurements = measurements.asStateFlow()
     @Volatile
     private var owner: GroupCoreSession? = null
 
@@ -46,6 +48,7 @@ internal object GroupRuntimeStatus {
         nodes.value = emptyMap()
         fallbacks.value = emptyMap()
         latencies.value = emptyMap()
+        measurements.value = emptyMap()
     }
 
     @Synchronized fun publish(
@@ -67,11 +70,21 @@ internal object GroupRuntimeStatus {
             nodes.value = emptyMap()
             fallbacks.value = emptyMap()
             latencies.value = emptyMap()
+            measurements.value = emptyMap()
         }
     }
 
     fun switchGroupMemberLive(groupTag: String, member: GroupMemberRef) {
         owner?.switchGroupMemberLive(groupTag, member)
+    }
+
+    suspend fun measureTarget(member: GroupMemberRef, url: String, timeoutMs: Int): Long? =
+        owner?.measureTarget(member, url, timeoutMs)
+
+    @Synchronized fun recordMeasurement(session: GroupCoreSession, node: String, delay: Long?) {
+        if (owner === session) {
+            measurements.value = measurements.value + (node to GroupNodeMeasurement(delay, System.currentTimeMillis()))
+        }
     }
 }
 
@@ -79,15 +92,35 @@ internal class GroupCoreSession(
     private val store: GroupWorkspaceStore,
     private val config: OutboundGroupConfig,
     private val apiPort: Int,
+    private val logEvent: (String) -> Unit = VpnStateHub::emitLog,
 ) {
     private var job: Job? = null
     @Volatile private var closed = false
     @Volatile private var relayServer: FallbackRelayServer? = null
-    @Volatile private var controller: GroupRuntimeController? = null
+    @Volatile private var measureNode: (suspend (String, String, Int) -> Long?)? = null
+    @Volatile private var applyTarget: (suspend (String, String) -> Unit)? = null
+    @Volatile private var controller: GroupRuntimeController? = GroupRuntimeController(
+        initialWorkspace = config.workspace,
+        probeNode = { node, url -> measureNode?.invoke(node, url, 5_000) },
+        applyBalancerTarget = { group, target -> applyTarget?.invoke(group, target) },
+        fallbackRelayOutbounds = config.fallbackRelayOutbounds,
+        balancerTags = config.balancers.keys,
+        publishStatus = { active, fallback, latency ->
+            GroupRuntimeStatus.publish(this, active, fallback, latency)
+        },
+        logEvent = logEvent,
+    )
     private val initialGlobalVersion: Long = GlobalConfigStore.version.value
 
     fun switchGroupMemberLive(groupTag: String, member: GroupMemberRef) {
         controller?.forceSwitchMember(groupTag, member)
+    }
+
+    suspend fun measureTarget(member: GroupMemberRef, url: String, timeoutMs: Int): Long? {
+        val leaf = controller?.activeLeaf(member) ?: if (member.isGroup) return null else member.tag
+        val result = measureNode?.invoke(leaf, url, timeoutMs)
+        controller?.recordMeasurement(leaf, url, result)
+        return result
     }
 
     /**
@@ -102,10 +135,13 @@ internal class GroupCoreSession(
             nodeUsers = config.users,
             nodePassword = config.password,
             resolvePlan = { groupTag ->
-                controller?.buildFailoverPlan(groupTag) ?: initialFallbackPlan(groupTag)
+                controller?.buildFailoverPlan(groupTag) ?: FailoverPlan(null, emptyList(), 3_000)
             },
-            onPrimaryFailed = { groupTag, failedLeaf ->
-                controller?.onPrimaryFailed(groupTag, failedLeaf)
+            onCandidateFailed = { groupTag, failedLeaf ->
+                controller?.onCandidateFailed(groupTag, failedLeaf)
+            },
+            onCandidateConnected = { groupTag, leaf ->
+                controller?.onCandidateConnected(groupTag, leaf)
             },
         )
         relayServer = relay
@@ -134,69 +170,76 @@ internal class GroupCoreSession(
                 }.build()
             }
 
-            val runtimeController = GroupRuntimeController(
-                initialWorkspace = config.workspace,
-                probeNode = { node, testUrl ->
-                    val client = clients[node] ?: return@GroupRuntimeController null
+            val measurement: suspend (String, String, Int) -> Long? = measurement@{ node, testUrl, timeoutMs ->
+                    val client = clients[node] ?: return@measurement null
                     val req = Request.Builder().url(testUrl.ifBlank { "https://www.gstatic.com/generate_204" }).build()
                     val startedAt = SystemClock.elapsedRealtime()
                     suspendCancellableCoroutine { continuation ->
                         val call = client.newCall(req)
+                        call.timeout().timeout(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
                         continuation.invokeOnCancellation { call.cancel() }
                         call.enqueue(object : Callback {
                             override fun onFailure(call: Call, e: IOException) {
+                                GroupRuntimeStatus.recordMeasurement(this@GroupCoreSession, node, null)
                                 continuation.resume(null)
                             }
 
                             override fun onResponse(call: Call, response: Response) {
                                 response.use {
                                     if (it.code in 200..399) {
-                                        continuation.resume((SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(1L))
+                                        val latency = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(1L)
+                                        GroupRuntimeStatus.recordMeasurement(this@GroupCoreSession, node, latency)
+                                        continuation.resume(latency)
                                     } else {
+                                        GroupRuntimeStatus.recordMeasurement(this@GroupCoreSession, node, null)
                                         continuation.resume(null)
                                     }
                                 }
                             }
                         })
                     }
-                },
-                applyBalancerTarget = { group, target ->
-                    val balancerTag = config.balancers[group] ?: return@GroupRuntimeController
+                }
+            measureNode = measurement
+            applyTarget = apply@{ group, target ->
+                    val balancerTag = config.balancers[group] ?: return@apply
                     stub.withDeadlineAfter(2, TimeUnit.SECONDS).overrideBalancerTarget(
                         OverrideBalancerTargetRequest.newBuilder()
                             .setBalancerTag(balancerTag)
                             .setTarget(target)
                             .build()
                     )
-                },
-                fallbackRelayOutbounds = config.fallbackRelayOutbounds,
-                balancerTags = config.balancers.keys,
-                publishStatus = { active, fallbackState, latencies ->
-                    GroupRuntimeStatus.publish(this@GroupCoreSession, active, fallbackState, latencies)
-                },
-            )
-            controller = runtimeController
+                }
+            val runtimeController = controller ?: return@launch
 
             try {
                 runtimeController.start(this)
+                config.routingBindings.forEach { (target, group) ->
+                    logEvent("[Info] Routing target '$target' uses group '$group'.")
+                }
                 launch {
-                    GlobalConfigStore.version.drop(1).collect { version ->
+                    GlobalConfigStore.version.collect { version ->
                         if (version != initialGlobalVersion) {
                             reload()
                             throw CancellationException("Applying updated global configuration")
                         }
                     }
                 }
-                val initialNodeSignature = nodeStructuralSignature(config.workspace)
+                val initialNodes = config.workspace.allNodes()
                 val initialRelayGroups = config.fallbackRelayOutbounds.keys
                 val initialBalancerGroups = config.balancers.keys
                 store.observe().collect { updated ->
                     val newRelayGroups = updated.groups
-                        .filter { it.strategy == GroupStrategy.FALLBACK && it.effectiveMembers().size >= 2 }
+                        .filter {
+                            it.strategy == GroupStrategy.URL_TEST ||
+                                (it.strategy == GroupStrategy.FALLBACK && it.effectiveMembers().size >= 2)
+                        }
                         .map { it.tag }
                         .toSet()
                     val newBalancerGroups = updated.groups.map { it.tag }.toSet() - newRelayGroups
-                    if (nodeStructuralSignature(updated) != initialNodeSignature ||
+                    if (updated.allNodes() != initialNodes ||
+                        updated.effectiveRoutingBindings() != config.routingBindings ||
+                        updated.effectiveDefaultGroupTag() != config.workspace.effectiveDefaultGroupTag() ||
+                        updated.routingMode != config.workspace.routingMode ||
                         newRelayGroups != initialRelayGroups ||
                         newBalancerGroups != initialBalancerGroups
                     ) {
@@ -208,29 +251,14 @@ internal class GroupCoreSession(
             } finally {
                 runtimeController.stop()
                 if (controller === runtimeController) controller = null
+                measureNode = null
+                applyTarget = null
                 channel.shutdownNow()
                 base.connectionPool.evictAll()
                 GroupRuntimeStatus.stop(this@GroupCoreSession)
             }
         }
     }
-
-    private fun initialFallbackPlan(groupTag: String): FailoverPlan {
-        val group = config.workspace.groupByTag(groupTag)
-            ?: return FailoverPlan(null, emptyList(), 3_000)
-        val leaves = group.effectiveMembers().mapNotNull { member ->
-            if (member.isGroup) config.workspace.groupByTag(member.tag)?.effectiveMembers()?.firstOrNull()?.tag
-            else member.tag
-        }.distinct()
-        return FailoverPlan(
-            primaryLeaf = leaves.firstOrNull(),
-            candidates = leaves,
-            failoverTimeoutMs = group.failoverTimeoutSeconds.coerceAtLeast(1) * 1_000,
-        )
-    }
-
-    private fun nodeStructuralSignature(workspace: GroupWorkspace): String =
-        workspace.allNodes().joinToString("|") { "${it.tag}:${it.targetStrategy}:${it.outboundJson.length}" }
 
     @Synchronized fun close() {
         closed = true

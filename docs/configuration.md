@@ -2,7 +2,7 @@
 
 **English** | **[中文](./configuration_CN.md)**
 
-SimpleXray accepts complete Xray-core configurations, but it does not execute them unchanged. A one-way sanitizer runs when a JSON configuration is imported or saved, and once more immediately before the configuration is passed to Xray. YAML input is parsed, converted to JSON, and then sanitized.
+SimpleXray Groups separates imported global configuration from the node/group workspace. Legacy SAF file import preserves the supplied bytes. The editor applies its formatting pipeline on save; runtime combines the workspace with global settings, applies the preference-aware sanitizer once, and then injects statistics and group routing.
 
 At runtime the final configuration is always fed to Xray through stdin (`-config stdin:`), so a file named `config.json` in the working directory cannot shadow it.
 
@@ -14,7 +14,7 @@ The sanitized result is what the core actually receives. Keep an external copy o
 | --- | --- |
 | `geodata` | Removed entirely; Geo data updates are managed by the app. |
 | `log` | Created if missing. |
-| `api` | Replaced at runtime with the local `StatsService` API object. |
+| `api` | Replaced at runtime with local `StatsService` and `RoutingService` APIs. |
 | `stats` | Replaced at runtime with an empty object. |
 | `policy` | Replaced at runtime with a policy enabling outbound up/down statistics. |
 | `inbounds` | Created if missing; see inbound rules below. |
@@ -45,12 +45,10 @@ Configure rule files and update intervals directly in the app's **Settings > Rul
 
 | Field | Action |
 | --- | --- |
-| `tun` inbound when native Xray TUN is not active | Removed. |
-| `tun` inbound when native Xray TUN is active | Kept; a missing `settings.mtu` is set to the app tunnel MTU; `settings.name` defaults to `tun-inbound`; `settings.autoSystemRoutingTable` and `settings.autoOutboundsInterface` are removed; `sniffing` is created/updated and `fakedns` is added to `destOverride`. |
-| Primary SOCKS inbound (tag `socks-in`, or first SOCKS inbound) | `port` is replaced with the app SOCKS port; `listen` with the app SOCKS address (loopback only); `settings.auth` and `settings.accounts` are replaced when both app SOCKS credentials are configured. In SimpleTUN mode authentication is stripped (the backend supports no-auth SOCKS5 only). |
+| `tun` inbound | Removed; Hev owns the Android VPN interface. |
+| Primary SOCKS inbound (tag `socks-in`, or first SOCKS inbound) | `port` is replaced with the app SOCKS port; `listen` with the app SOCKS address (loopback only); `settings.auth` and `settings.accounts` are replaced when both app SOCKS credentials are configured. |
 | Other inbounds with `listen` missing, empty, `::` or `0.0.0.0` | `listen` is replaced with `127.0.0.1`. |
-| Missing SOCKS inbound | A default `socks-in` inbound is injected using the app SOCKS address/port and UDP enabled; it is always no-auth in SimpleTUN mode even when app credentials are set. |
-| Missing `tun` inbound when native Xray TUN is active | A default `tun-inbound` is injected with `tcp,udp`, the app tunnel MTU and default sniffing. |
+| Missing SOCKS inbound | A default `socks-in` inbound is injected using the app SOCKS address/port, UDP, and configured authentication. |
 
 ## App SOCKS Settings
 
@@ -81,13 +79,14 @@ Configure rule files and update intervals directly in the app's **Settings > Rul
 | `https://...alidns.com` DoH servers | Static hosts `223.5.5.5` and `223.6.6.6` are injected if absent. |
 | Outbound `tlsSettings.echConfigList` starting with `http://` or `https://` | Removed. |
 | TCP-based proxy outbounds (`vless`, `vmess`, `trojan`, `shadowsocks`, `socks`, `http`) | Missing `streamSettings.sockopt` values are injected: `tcpKeepAliveIdle=15`, `tcpKeepAliveInterval=3`, `tcpUserTimeout=15000`, plus custom sockopt `TCP_KEEPCNT=3` unless already present. Existing user values are not overwritten. |
-| `observatory.probeTimeout` | Set to `"2s"` if missing. |
+
+Group health checks use the application's HTTP call deadline. Primary recovery uses the group's configured interval after a working fallback connection, while standby URL-test groups use their own interval and result trust duration.
 
 ## Runtime Statistics Injection
 
 | Field | Action |
 | --- | --- |
-| `api` | Replaced with `tag=api`, the app API listen address, and `services=["StatsService"]`. |
+| `api` | Replaced with `tag=api`, the app API listen address, and `services=["StatsService","RoutingService"]`. |
 | `stats` | Replaced with an empty object. |
 | `policy` | Replaced with a policy whose `system` enables `statsOutboundUplink` and `statsOutboundDownlink`. |
 | HTTP inbound | When the app HTTP proxy is enabled, an existing HTTP inbound keeps its own endpoint and the system proxy follows its actual address/port; only when no HTTP inbound exists is `http-inbound` injected on `127.0.0.1:<httpPort>`. |

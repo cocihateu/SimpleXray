@@ -330,6 +330,10 @@ fun SettingsScreen(
         }
 
         item {
+            SettingsClashApiSection(mainViewModel = mainViewModel)
+        }
+
+        item {
             SettingsNetworkSection(
                 mainViewModel = mainViewModel,
                 onShowHelp = { title, summary -> activeHelpDialog = title to summary },

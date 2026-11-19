@@ -328,6 +328,8 @@ class MainViewModel(application: Application) :
 
     fun setDefaultWorkspaceGroup(tag: String) = workspaceController.setDefaultGroup(tag)
 
+    fun setRoutingMode(mode: String) = workspaceController.setRoutingMode(mode)
+
     fun importFromClipboardToGroup(groupTag: String) = workspaceController.importFromClipboardToGroup(groupTag)
 
     fun importFromUriToGroup(groupTag: String, uri: Uri) = workspaceController.importFromUriToGroup(groupTag, uri)

@@ -10,7 +10,6 @@ internal class TunnelBackendController(
     internal enum class NativeBackend {
         NONE,
         HEV,
-        SIMPLETUN
     }
 
     private val lifecycleLock = Any()
@@ -34,27 +33,12 @@ internal class TunnelBackendController(
         }
     }
 
-    fun startSimpleTun(fd: Int, host: String, port: Int): Int {
-        synchronized(lifecycleLock) {
-            val result = runCatching {
-                SimpleTunNative.nativeStart(fd, host, port)
-            }.onFailure {
-                Log.e(tag, "Failed to start SimpleTUN backend", it)
-            }.getOrDefault(-1)
-            if (result == 0) {
-                activeBackend = NativeBackend.SIMPLETUN
-            }
-            return result
-        }
-    }
-
     fun stop() {
         synchronized(lifecycleLock) {
             val backend = activeBackend
             activeBackend = NativeBackend.NONE
             val result: Result<Boolean>? = when (backend) {
                 NativeBackend.HEV -> runCatching { stopHev() }
-                NativeBackend.SIMPLETUN -> runCatching { SimpleTunNative.nativeStop() == 0 }
                 NativeBackend.NONE -> null
             }
             result?.onSuccess {

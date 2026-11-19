@@ -3,6 +3,7 @@ package com.simplexray.re.ui.screens
 import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,6 +27,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -41,6 +43,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
@@ -78,6 +81,13 @@ import java.io.File
 
 private val NODE_DNS_STRATEGY_CYCLE = listOf("", "UseIPv4", "ForceIP", "AsIs", "UseIP")
 
+private data class MemberActionTarget(
+    val groupTag: String,
+    val index: Int,
+    val member: GroupMemberRef,
+    val totalMembers: Int,
+)
+
 @Composable
 fun ConfigScreen(
     onReloadConfig: () -> Unit,
@@ -101,6 +111,7 @@ fun ConfigScreen(
     var addingNodesGroupTag by remember { mutableStateOf<String?>(null) }
     var pendingFileImportGroupTag by remember { mutableStateOf<String?>(null) }
     var editingNode by remember { mutableStateOf<ProxyNode?>(null) }
+    var memberActionTarget by remember { mutableStateOf<MemberActionTarget?>(null) }
     val expandedGroups = remember { mutableStateMapOf<String, Boolean>() }
 
     var elapsedNowMs by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
@@ -146,6 +157,33 @@ fun ConfigScreen(
             contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = topPadding, bottom = bottomPadding),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            item(key = "workspace_routing_mode_bar") {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    OverlayDropdownPreference(
+                        title = stringResource(R.string.workspace_routing_mode_title),
+                        items = listOf(
+                            stringResource(R.string.routing_mode_rule),
+                            stringResource(R.string.routing_mode_global),
+                            stringResource(R.string.routing_mode_direct),
+                        ),
+                        selectedIndex = when (workspace.routingMode) {
+                            "global" -> 1
+                            "direct" -> 2
+                            else -> 0
+                        },
+                        onSelectedIndexChange = { index ->
+                            mainViewModel.setRoutingMode(
+                                when (index) {
+                                    1 -> "global"
+                                    2 -> "direct"
+                                    else -> "rule"
+                                }
+                            )
+                        }
+                    )
+                }
+            }
+
             item(key = "workspace_add_group_bar") {
                 Card(
                     modifier = Modifier
@@ -215,14 +253,9 @@ fun ConfigScreen(
                     onRefreshSubscription = { mainViewModel.refreshSubscriptionGroup(group.tag) },
                     onSetDefault = { mainViewModel.setDefaultWorkspaceGroup(group.tag) },
                     onSelectMember = { member -> mainViewModel.selectGroupMember(group.tag, member) },
-                    onMoveMember = { idx, delta -> mainViewModel.moveMemberInGroup(group.tag, idx, delta) },
-                    onRemoveMember = { member -> mainViewModel.removeMemberFromGroup(group.tag, member) },
-                    onCycleNodeStrategy = { node ->
-                        val idx = NODE_DNS_STRATEGY_CYCLE.indexOf(node.targetStrategy)
-                        val next = NODE_DNS_STRATEGY_CYCLE[(idx + 1) % NODE_DNS_STRATEGY_CYCLE.size]
-                        mainViewModel.updateNodeTargetStrategy(node.tag, next)
+                    onShowMemberActions = { member, idx ->
+                        memberActionTarget = MemberActionTarget(group.tag, idx, member, group.effectiveMembers().size)
                     },
-                    onEditNodeJson = { node -> editingNode = node },
                 )
             }
         }
@@ -270,6 +303,35 @@ fun ConfigScreen(
             onDismiss = { editingNode = null },
         )
     }
+
+    memberActionTarget?.let { target ->
+        MemberActionSheet(
+            target = target,
+            workspace = workspace,
+            latencyMs = if (target.member.isGroup == false) {
+                runtimeLatencies[target.member.tag]
+                    ?: manualLatencies[target.member.tag]?.takeIf { it.alive }?.delayMs
+            } else null,
+            onDismiss = { memberActionTarget = null },
+            onSelectMember = {
+                mainViewModel.selectGroupMember(target.groupTag, target.member)
+            },
+            onCycleNodeStrategy = { node ->
+                val idx = NODE_DNS_STRATEGY_CYCLE.indexOf(node.targetStrategy)
+                val next = NODE_DNS_STRATEGY_CYCLE[(idx + 1) % NODE_DNS_STRATEGY_CYCLE.size]
+                mainViewModel.updateNodeTargetStrategy(node.tag, next)
+            },
+            onEditNodeJson = { node ->
+                editingNode = node
+            },
+            onMoveMember = { delta ->
+                mainViewModel.moveMemberInGroup(target.groupTag, target.index, delta)
+            },
+            onRemoveMember = {
+                mainViewModel.removeMemberFromGroup(target.groupTag, target.member)
+            },
+        )
+    }
 }
 
 @Composable
@@ -289,10 +351,7 @@ private fun WorkspaceGroupCard(
     onRefreshSubscription: () -> Unit,
     onSetDefault: () -> Unit,
     onSelectMember: (GroupMemberRef) -> Unit,
-    onMoveMember: (Int, Int) -> Unit,
-    onRemoveMember: (GroupMemberRef) -> Unit,
-    onCycleNodeStrategy: (ProxyNode) -> Unit,
-    onEditNodeJson: (ProxyNode) -> Unit,
+    onShowMemberActions: (GroupMemberRef, Int) -> Unit,
 ) {
     val members = group.effectiveMembers()
     val sourceLabel = if (group.sourceType == GroupSourceType.SUBSCRIPTION) {
@@ -348,14 +407,22 @@ private fun WorkspaceGroupCard(
                         )
                     }
                     if (fallbackInfo != null && fallbackInfo.inFallback) {
-                        val remainSec = ((fallbackInfo.nextRecoveryAtElapsedMs - elapsedNowMs) / 1000L)
-                            .coerceAtLeast(0L)
                         Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = stringResource(R.string.workspace_status_in_fallback, remainSec.toInt()),
-                            style = MiuixTheme.textStyles.body2,
-                            color = MiuixTheme.colorScheme.error,
-                        )
+                        if (fallbackInfo.nextRecoveryAtElapsedMs == 0L) {
+                            Text(
+                                text = stringResource(R.string.workspace_status_waiting_backup),
+                                style = MiuixTheme.textStyles.body2,
+                                color = MiuixTheme.colorScheme.error,
+                            )
+                        } else {
+                            val remainSec = ((fallbackInfo.nextRecoveryAtElapsedMs - elapsedNowMs) / 1000L)
+                                .coerceAtLeast(0L)
+                            Text(
+                                text = stringResource(R.string.workspace_status_recovery_countdown, remainSec.toInt()),
+                                style = MiuixTheme.textStyles.body2,
+                                color = MiuixTheme.colorScheme.error,
+                            )
+                        }
                     }
                 }
 
@@ -442,9 +509,17 @@ private fun WorkspaceGroupCard(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { onSelectMember(member) }
-                                .padding(vertical = 6.dp),
+                                .padding(vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            if (isActiveMember) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .background(MiuixTheme.colorScheme.primary, shape = CircleShape)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                            }
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = titleText,
@@ -462,61 +537,28 @@ private fun WorkspaceGroupCard(
                                 )
                             }
 
-                            if (node != null) {
+                            if (latencyMs != null) {
+                                val latencyColor = when {
+                                    latencyMs <= 100 -> Color(0xFF4CAF50)
+                                    latencyMs <= 300 -> Color(0xFFFF9800)
+                                    else -> MiuixTheme.colorScheme.error
+                                }
                                 Text(
-                                    text = node.targetStrategy.ifBlank { "DNS" },
+                                    text = "${latencyMs}ms",
                                     style = MiuixTheme.textStyles.footnote1,
-                                    color = MiuixTheme.colorScheme.primary,
+                                    color = latencyColor,
                                     fontFamily = FontFamily.Monospace,
-                                    modifier = Modifier
-                                        .clickable { onCycleNodeStrategy(node) }
-                                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                                    modifier = Modifier.padding(horizontal = 6.dp),
                                 )
-                                IconButton(
-                                    onClick = { onEditNodeJson(node) },
-                                    modifier = Modifier.size(32.dp),
-                                ) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.code),
-                                        contentDescription = stringResource(R.string.workspace_edit_node_json),
-                                        tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                }
-                            }
-
-                            if (members.size > 1) {
-                                IconButton(
-                                    onClick = { onMoveMember(index, -1) },
-                                    enabled = index > 0,
-                                    modifier = Modifier.size(28.dp),
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.KeyboardArrowUp,
-                                        contentDescription = stringResource(R.string.outbound_group_move_up, member.tag),
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                }
-                                IconButton(
-                                    onClick = { onMoveMember(index, 1) },
-                                    enabled = index + 1 < members.size,
-                                    modifier = Modifier.size(28.dp),
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.KeyboardArrowDown,
-                                        contentDescription = stringResource(R.string.outbound_group_move_down, member.tag),
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                }
                             }
 
                             IconButton(
-                                onClick = { onRemoveMember(member) },
-                                modifier = Modifier.size(30.dp),
+                                onClick = { onShowMemberActions(member, index) },
+                                modifier = Modifier.size(32.dp),
                             ) {
                                 Icon(
-                                    painter = painterResource(R.drawable.delete),
-                                    contentDescription = stringResource(R.string.outbound_group_remove_fallback, member.tag),
+                                    painter = painterResource(R.drawable.edit),
+                                    contentDescription = stringResource(R.string.workspace_node_actions),
                                     tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                                     modifier = Modifier.size(18.dp),
                                 )
@@ -613,5 +655,146 @@ private fun AddNodesToGroupSheet(
                 }
             }
         },
+    )
+}
+
+@Composable
+private fun MemberActionSheet(
+    target: MemberActionTarget,
+    workspace: GroupWorkspace,
+    latencyMs: Long?,
+    onDismiss: () -> Unit,
+    onSelectMember: () -> Unit,
+    onCycleNodeStrategy: (ProxyNode) -> Unit,
+    onEditNodeJson: (ProxyNode) -> Unit,
+    onMoveMember: (Int) -> Unit,
+    onRemoveMember: () -> Unit,
+) {
+    val group = workspace.groupByTag(target.groupTag)
+    val member = target.member
+    val node = if (member.isGroup == false) workspace.nodeByTag(member.tag) else null
+    val isSelected = group?.selectedMember == member
+
+    GlassBottomSheet(
+        title = "${stringResource(R.string.workspace_node_actions)} · ${member.tag}",
+        show = true,
+        backdrop = LocalLayerBackdrop.current,
+        onDismissRequest = onDismiss,
+        startAction = {
+            IconButton(onClick = onDismiss) {
+                Icon(imageVector = MiuixIcons.Close, contentDescription = stringResource(R.string.cancel))
+            }
+        },
+        content = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text(
+                            text = stringResource(R.string.workspace_node_details),
+                            style = MiuixTheme.textStyles.title4,
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = buildString {
+                                append("Tag: ")
+                                append(member.tag)
+                                if (member.isGroup) {
+                                    append(" (Group)")
+                                } else if (node != null) {
+                                    append("\nProtocol: ")
+                                    append(node.protocol)
+                                    append("\nDNS Strategy: ")
+                                    append(node.targetStrategy.ifBlank { "default" })
+                                }
+                                if (latencyMs != null) {
+                                    append("\nLatency: ")
+                                    append(latencyMs)
+                                    append("ms")
+                                }
+                            },
+                            style = MiuixTheme.textStyles.body2,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                }
+
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column {
+                        ArrowPreference(
+                            title = stringResource(R.string.workspace_node_select_hint),
+                            summary = if (isSelected) "Active" else null,
+                            onClick = {
+                                onSelectMember()
+                                onDismiss()
+                            }
+                        )
+
+                        if (node != null) {
+                            ArrowPreference(
+                                title = stringResource(R.string.outbound_group_target_strategy),
+                                summary = node.targetStrategy.ifBlank { "default" },
+                                onClick = { onCycleNodeStrategy(node) }
+                            )
+                            ArrowPreference(
+                                title = stringResource(R.string.workspace_edit_node_json),
+                                onClick = {
+                                    onDismiss()
+                                    onEditNodeJson(node)
+                                }
+                            )
+                        }
+
+                        if (target.totalMembers > 1) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.outbound_group_move_up, ""),
+                                    style = MiuixTheme.textStyles.body1
+                                )
+                                Row {
+                                    IconButton(
+                                        onClick = { onMoveMember(-1) },
+                                        enabled = target.index > 0
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.KeyboardArrowUp,
+                                            contentDescription = stringResource(R.string.outbound_group_move_up, member.tag)
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { onMoveMember(1) },
+                                        enabled = target.index + 1 < target.totalMembers
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.KeyboardArrowDown,
+                                            contentDescription = stringResource(R.string.outbound_group_move_down, member.tag)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        ArrowPreference(
+                            title = stringResource(R.string.outbound_group_remove_fallback, member.tag),
+                            onClick = {
+                                onDismiss()
+                                onRemoveMember()
+                            }
+                        )
+                    }
+                }
+            }
+        }
     )
 }

@@ -11,6 +11,7 @@ import android.os.PowerManager
 import android.util.Log
 import com.simplexray.re.R
 import com.simplexray.re.common.ConfigUtils
+import com.simplexray.re.common.SocksAuthenticatorInstaller
 import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.common.isLoopbackAddress
 import com.simplexray.re.prefs.TunnelMode
@@ -115,6 +116,7 @@ class TProxyService : VpnService() {
 
                 override fun onCoreReady() {
                     VpnStateHub.updateState(VpnRunningState.Connected)
+                    startClashApi()
                     geoUpdateScheduler.start(serviceScope)
                     socksHealthMonitor.start()
                 }
@@ -151,6 +153,25 @@ class TProxyService : VpnService() {
     private var pendingStartFailure: String? = null
 
     private var tunFd: ParcelFileDescriptor? = null
+    private var clashApi: ClashApiServer? = null
+
+    @Synchronized private fun startClashApi() {
+        if (clashApi != null || ClashApiPreferences(this).enabled == false) return
+        val server = ClashApiServer(applicationContext)
+        runCatching { server.start() }
+            .onSuccess { clashApi = server }
+            .onFailure {
+                server.close()
+                val line = XrayProcessRunner.formatAppLogLine("[Error] Clash API startup failed (${it.javaClass.simpleName}).")
+                logFileManager.appendLog(line)
+                VpnStateHub.emitLog(line)
+            }
+    }
+
+    @Synchronized private fun stopClashApi() {
+        clashApi?.close()
+        clashApi = null
+    }
 
 
 
@@ -163,6 +184,7 @@ class TProxyService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         logFileManager = LogFileManager(this)
+        SocksAuthenticatorInstaller.install(applicationContext)
         Log.d(TAG, "TProxyService created.")
     }
 
@@ -205,6 +227,7 @@ class TProxyService : VpnService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        stopClashApi()
         isStartingLock.set(false)
         networkMonitor.stop()
         geoUpdateScheduler.stop()
@@ -349,6 +372,7 @@ class TProxyService : VpnService() {
 
     private fun stopXray() {
         isStopping = true
+        stopClashApi()
         Log.d(TAG, "stopXray called with keepExecutorAlive=" + false)
         geoUpdateScheduler.stop()
         xrayProcessRunner.stop()
@@ -363,25 +387,11 @@ class TProxyService : VpnService() {
         if (stopRequestedByUser) return false
         val prefs = Preferences(this)
 
-        var tunMtu = prefs.tunnelMtu
-
-        // Read the selected config once when the VPN setup needs raw values from
-        // it: the XrayTun MTU and/or an existing HTTP inbound port. The full
-        // runtime sanitization happens later in XrayProcessRunner.
-        val needsRawConfig = prefs.httpProxyEnabled ||
-            (prefs.tunnelMode == TunnelMode.XrayTun && !prefs.disableVpn)
-        val rawConfigContent = if (needsRawConfig) {
+        val tunMtu = prefs.tunnelMtu
+        val rawConfigContent = if (prefs.httpProxyEnabled) {
             runCatching { GlobalConfigStore(this).readText() }.getOrNull()
         } else {
             null
-        }
-
-        if (prefs.tunnelMode == TunnelMode.SimpleTun) {
-            tunMtu = 1500
-        } else if (prefs.tunnelMode == TunnelMode.XrayTun && !prefs.disableVpn) {
-            rawConfigContent?.let { content ->
-                ConfigUtils.extractTunMtu(content)?.let { tunMtu = it }
-            }
         }
 
         val httpProxyEndpoint = if (prefs.httpProxyEnabled) {
@@ -414,43 +424,7 @@ class TProxyService : VpnService() {
         }
         networkMonitor.start()
 
-        if (prefs.tunnelMode == TunnelMode.XrayTun && !prefs.disableVpn) {
-            Log.d(TAG, "Using Xray Native TUN mode, skipping external tunnel.")
-        } else if (prefs.tunnelMode == TunnelMode.SimpleTun && !prefs.disableVpn) {
-            val fd = tunFd?.fd
-            if (fd == null) {
-                Log.e(TAG, "tunFd is null after establish()")
-                pendingStartFailure = getString(R.string.vpn_establish_failed)
-                stopXray()
-                return false
-            }
-            Log.d(TAG, "Starting SimpleTUN backend on fd=$fd")
-            val host = prefs.socksAddress.ifEmpty { "127.0.0.1" }
-            if (prefs.socksUsername.isNotEmpty() || prefs.socksPassword.isNotEmpty()) {
-                // ConfigSanitizer forces the primary SOCKS inbound to no-auth in
-                // SimpleTUN mode; the backend has no auth path, so stored
-                // credentials are simply ignored instead of failing startup.
-                Log.w(TAG, "SimpleTUN ignores configured SOCKS credentials (no-auth mode).")
-            }
-            val isIpv4 = host.split('.').let { parts ->
-                parts.size == 4 && parts.all { part ->
-                    part.isNotEmpty() && part.length <= 3 && part.toIntOrNull() in 0..255
-                }
-            }
-            if (!isIpv4) {
-                Log.e(TAG, "SimpleTUN currently supports IPv4 dotted-decimal SOCKS5 inbounds only: $host")
-                pendingStartFailure = getString(R.string.backend_start_failed, TunnelMode.SimpleTun.displayName)
-                stopXray()
-                return false
-            }
-            val result = tunnelBackendController.startSimpleTun(fd, host, prefs.socksPort)
-            if (result != 0) {
-                Log.e(TAG, "SimpleTUN nativeStart failed: $result")
-                pendingStartFailure = getString(R.string.backend_start_failed, TunnelMode.SimpleTun.displayName)
-                stopXray()
-                return false
-            }
-        } else {
+        run {
             val tproxyFile = File(cacheDir, "tproxy.conf")
             try {
                 tproxyFile.createNewFile()
@@ -486,6 +460,7 @@ class TProxyService : VpnService() {
 
 
     private fun stopService(finalState: VpnRunningState = VpnRunningState.Disconnected) {
+        stopClashApi()
         socksHealthMonitor.stop()
         isStartingLock.set(false)
         networkMonitor.stop()

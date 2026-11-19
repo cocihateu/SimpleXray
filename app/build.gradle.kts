@@ -178,6 +178,7 @@ android {
             useLegacyPackaging = true
             // Ship the supported native backends from their configured source directories.
             excludes += "**/libmipstun.so"
+            excludes += "**/libmihomo.so"
         }
         resources {
             excludes += "META-INF/*.txt"
@@ -240,6 +241,7 @@ android {
 }
 
 dependencies {
+    implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
     implementation(libs.grpc.okhttp)
     implementation(libs.grpc.protobuf)
     implementation(libs.grpc.stub)

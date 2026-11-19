@@ -58,28 +58,8 @@ internal object MihomoProxyConverter {
         val port = fields.integer("port", 0)
         if (port !in 1..65535) fields.typeError("port")
 
-        // These wire options belong to the original Mihomo dialer.
-        val shadowsocksExtensions = protocol == "shadowsocks" &&
-            (fields.boolean("udp-over-tcp") || fields.has("udp-over-tcp-version") ||
-                fields.has("plugin") || fields.has("plugin-opts") || fields.has("client-fingerprint"))
-        if (shadowsocksExtensions || fields.boolean("skip-cert-verify") ||
-            (fields.has("udp") && fields.boolean("udp") == false)
-        ) {
-            when (protocol) {
-                "shadowsocks" -> {
-                    fields.requiredText("cipher")
-                    fields.requiredText("password")
-                }
-                "trojan" -> fields.requiredText("password")
-                "vmess", "vless" -> fields.requiredText("uuid")
-            }
-            val mihomoType = when (protocol) {
-                "shadowsocks" -> "ss"
-                "socks" -> "socks5"
-                else -> protocol
-            }
-            val settings = JSONObject(fields.json.toString()).put("type", mihomoType)
-            return JSONObject().put("tag", tag).put("protocol", "mihomo").put("settings", settings)
+        if (protocol == "shadowsocks" && (fields.has("plugin") || fields.has("plugin-opts"))) {
+            fields.capability("plugin", "unsupported-plugin")
         }
 
         if (fields.has("udp")) {
@@ -125,6 +105,9 @@ internal object MihomoProxyConverter {
                 val method = fields.requiredText("cipher").lowercase()
                 if (method !in shadowsocksMethods) fields.capability("cipher", method)
                 endpoint.put("method", method).put("password", fields.requiredText("password"))
+                if (fields.boolean("udp-over-tcp")) {
+                    endpoint.put("uot", true)
+                }
                 JSONObject().put("servers", JSONArray().put(endpoint))
             }
             else -> {
@@ -161,7 +144,7 @@ internal object MihomoProxyConverter {
     private fun transport(fields: MihomoFields): JSONObject {
         val network = fields.text("network", "tcp").lowercase().ifEmpty { "tcp" }
         val activeOption = when (network) {
-            "tcp", "raw" -> ""
+            "tcp" -> ""
             "http" -> "http-opts"
             "ws", "websocket", "httpupgrade" -> "ws-opts"
             "grpc" -> "grpc-opts"
@@ -176,24 +159,15 @@ internal object MihomoProxyConverter {
         }
         val stream = JSONObject()
         when (activeOption) {
-            "" -> stream.put("network", "raw")
+            "" -> stream.put("network", "tcp")
             "http-opts" -> {
                 val options = fields.objectValue(activeOption)
                     ?: MihomoFields(JSONObject(), "${fields.location}.$activeOption")
                 options.allow(setOf("method", "path", "headers"))
-                val request = JSONObject()
-                    .put("method", options.text("method", "GET"))
-                    .put("path", JSONArray(if (options.has("path")) options.strings("path") else listOf("/")))
-                val headers = JSONObject()
-                options.objectValue("headers")?.let { values ->
-                    values.json.keys().forEach { key -> headers.put(key, JSONArray(values.strings(key))) }
-                }
-                if (headers.keys().asSequence().none { it.equals("host", ignoreCase = true) }) {
-                    headers.put("Host", JSONArray().put(fields.requiredText("server")))
-                }
-                request.put("headers", headers)
-                stream.put("network", "raw")
-                    .put("rawSettings", JSONObject().put("header", JSONObject().put("type", "http").put("request", request)))
+                val path = if (options.has("path")) options.strings("path").firstOrNull().orEmpty().ifBlank { "/" } else options.text("path", "/")
+                val hostArray = JSONArray().put(fields.requiredText("server"))
+                val httpSettings = JSONObject().put("path", path).put("host", hostArray)
+                stream.put("network", "http").put("httpSettings", httpSettings)
             }
             "ws-opts" -> {
                 val options = fields.objectValue(activeOption)
@@ -296,7 +270,7 @@ internal object MihomoProxyConverter {
         }
         if (reality != null) {
             reality.allow(setOf("public-key", "short-id"))
-            if (stream.getString("network") !in setOf("raw", "xhttp", "grpc")) {
+            if (stream.getString("network") !in setOf("tcp", "xhttp", "grpc")) {
                 fields.capability("reality-opts", "reality-transports")
             }
             if (fields.has("alpn") || fields.has("name-cert-verify")) {
@@ -312,6 +286,9 @@ internal object MihomoProxyConverter {
                 )
         } else if (tls) {
             val settings = JSONObject().put("serverName", sni)
+            if (fields.boolean("skip-cert-verify")) {
+                settings.put("allowInsecure", true)
+            }
             if (fields.has("alpn")) {
                 settings.put("alpn", JSONArray(fields.strings("alpn")))
             } else {
