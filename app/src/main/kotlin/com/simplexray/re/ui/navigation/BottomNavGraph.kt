@@ -1,5 +1,6 @@
 package com.simplexray.re.ui.navigation
 
+import android.net.Uri
 import androidx.activity.result.ActivityResultLauncher
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,12 +12,16 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.simplexray.re.common.ROUTE_OVERVIEW
 import com.simplexray.re.common.ROUTE_PROXIES
+import com.simplexray.re.common.ROUTE_GROUPS
+import com.simplexray.re.common.ROUTE_GROUP_SETTINGS
 import com.simplexray.re.common.ROUTE_RULES
 import com.simplexray.re.common.ROUTE_SETTINGS
 import com.simplexray.re.ui.screens.DashboardScreen
 import com.simplexray.re.ui.screens.ProxiesScreen
 import com.simplexray.re.ui.screens.RulesScreen
 import com.simplexray.re.ui.screens.SettingsScreen
+import com.simplexray.re.ui.screens.GroupManagementScreen
+import com.simplexray.re.ui.screens.GroupSettingsScreen
 import com.simplexray.re.viewmodel.LogViewModel
 import com.simplexray.re.viewmodel.MainViewModel
 import java.io.File
@@ -41,9 +46,16 @@ fun BottomNavHost(
         composable(ROUTE_OVERVIEW) { DashboardScreen(mainViewModel, onSwitchVpnService, paddingValues) }
         composable(ROUTE_PROXIES) {
             ProxiesScreen(mainViewModel, paddingValues, onManageGroups = {
-                mainViewModel.settingsCategory = 8
-                navController.navigate(ROUTE_SETTINGS)
+                navController.navigate(ROUTE_GROUPS)
             })
+        }
+        composable(ROUTE_GROUPS) {
+            GroupManagementScreen(mainViewModel, paddingValues,
+                onOpenGroup = { navController.navigate("proxy_group_settings/${Uri.encode(it)}") })
+        }
+        composable(ROUTE_GROUP_SETTINGS) { entry ->
+            GroupSettingsScreen(mainViewModel, entry.arguments?.getString("tag").orEmpty(), paddingValues,
+                onDeleted = { navController.popBackStack() })
         }
         composable(ROUTE_RULES) { RulesScreen(mainViewModel, paddingValues = paddingValues) }
         composable(ROUTE_SETTINGS) {

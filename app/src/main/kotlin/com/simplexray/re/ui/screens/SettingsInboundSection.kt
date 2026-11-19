@@ -73,6 +73,12 @@ internal fun SettingsInboundSection(
 
         SmallTitle(text = stringResource(R.string.inbound_settings))
         Card(modifier = Modifier.fillMaxWidth()) {
+            SwitchPreference(
+                title = "仅用于路由 · routeOnly",
+                summary = "开启：嗅探域名仅用于匹配规则。关闭：嗅探域名同时作为连接目标。默认关闭。",
+                checked = settingsState.switches.sniffingRouteOnly,
+                onCheckedChange = mainViewModel::setSniffingRouteOnly,
+            )
             EditableListItemWithMiuixBottomSheet(
                 headline = stringResource(R.string.socks_address),
                 currentValue = settingsState.socksAddress.value,

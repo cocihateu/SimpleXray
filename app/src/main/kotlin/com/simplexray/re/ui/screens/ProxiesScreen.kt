@@ -16,15 +16,18 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,20 +38,21 @@ import com.simplexray.re.common.config.GroupSourceType
 import com.simplexray.re.common.config.GroupWorkspace
 import com.simplexray.re.common.config.ProxyGroup
 import com.simplexray.re.common.config.ProxyNode
-import com.simplexray.re.service.GroupRuntimeStatus
 import com.simplexray.re.ui.components.ConfirmOverlayDialog
 import com.simplexray.re.ui.scaffold.LocalLayerBackdrop
 import com.simplexray.re.viewmodel.MainViewModel
-import kotlinx.coroutines.launch
 import org.json.JSONObject
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.DropdownEntry
+import top.yukonga.miuix.kmp.basic.DropdownItem
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.glass.GlassBottomSheet
+import top.yukonga.miuix.kmp.menu.OverlayIconDropdownMenu
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -61,18 +65,28 @@ fun ProxiesScreen(
     val workspace by mainViewModel.groupWorkspace.collectAsStateWithLifecycle()
     val active by mainViewModel.activeGroupNodes.collectAsStateWithLifecycle()
     val latencies by mainViewModel.runtimeNodeLatencies.collectAsStateWithLifecycle()
+    val measuredLatencies by mainViewModel.proxyLatency.collectAsStateWithLifecycle()
+    val measuringTargets by mainViewModel.measuringProxyTargets.collectAsStateWithLifecycle()
     val refreshing by mainViewModel.refreshingGroups.collectAsStateWithLifecycle()
-    var selectedTag by rememberSaveable { mutableStateOf("") }
+    val selectedTag = mainViewModel.selectedProxyGroupTag
     val group = workspace.groupByTag(selectedTag) ?: workspace.groupByTag(workspace.effectiveDefaultGroupTag().orEmpty())
     var editingNode by remember { mutableStateOf<ProxyNode?>(null) }
     var addingNode by remember { mutableStateOf(false) }
     var deletingNode by remember { mutableStateOf<String?>(null) }
     var editingPolicy by remember { mutableStateOf(false) }
     var editingChain by remember { mutableStateOf(false) }
+    var creatingGroup by remember { mutableStateOf(false) }
+    var editingSource by remember { mutableStateOf<ProxyGroup?>(null) }
     var importTarget by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         importTarget?.let { target -> if (uri != null) mainViewModel.importFromUriToGroup(target, uri) }
+    }
+    LaunchedEffect(mainViewModel.proxyPageAction) {
+        when (mainViewModel.proxyPageAction) {
+            "group" -> creatingGroup = true
+            "measure" -> group?.let { mainViewModel.measureGroupLatency(it.tag) }
+        }
+        mainViewModel.proxyPageAction = null
     }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -83,7 +97,7 @@ fun ProxiesScreen(
         item {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 workspace.groups.forEach { item ->
-                    Button(onClick = { selectedTag = item.tag },
+                    Button(onClick = { mainViewModel.selectedProxyGroupTag = item.tag },
                         colors = if (item.tag == group?.tag) ButtonDefaults.buttonColorsPrimary() else ButtonDefaults.buttonColors()) {
                         Text(item.tag)
                     }
@@ -91,55 +105,68 @@ fun ProxiesScreen(
             }
         }
         if (group == null) {
-            item { Button(onClick = onManageGroups, modifier = Modifier.fillMaxWidth()) { Text("设置 → 分组 · 新建分组") } }
+            item {
+                Text("点右上角 + 新建基本或订阅分组。订阅组保存后自动拉取节点。",
+                    modifier = Modifier.padding(vertical = 24.dp), color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            }
         } else {
             item {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(group.tag, style = MiuixTheme.textStyles.title3, modifier = Modifier.weight(1f))
-                            Text(if (group.sourceType == GroupSourceType.LOCAL) "基本" else "订阅",
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(group.tag, style = MiuixTheme.textStyles.title3)
+                            Text("${if (group.sourceType == GroupSourceType.LOCAL) "基本" else "订阅"} · ${group.nodes.size} 个节点 · ${strategyShortLabel(group.strategy)}",
                                 style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                         }
-                        Text("${group.nodes.size} 个节点 · ${strategyShortLabel(group.strategy)}", style = MiuixTheme.textStyles.body2)
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Button(onClick = { mainViewModel.importFromClipboardToGroup(group.tag) }, modifier = Modifier.weight(1f)) { Text("剪贴板导入") }
-                            Button(onClick = { importTarget = group.tag; filePicker.launch(arrayOf("*/*")) }, modifier = Modifier.weight(1f)) { Text("文件导入") }
-                            Button(onClick = { addingNode = true }, modifier = Modifier.weight(1f)) { Text("新增节点") }
+                        OverlayIconDropdownMenu(entry = DropdownEntry(listOf(
+                            DropdownItem("从剪贴板导入", onClick = { mainViewModel.importFromClipboardToGroup(group.tag) }),
+                            DropdownItem("从文件导入", onClick = { importTarget = group.tag; filePicker.launch(arrayOf("*/*")) }),
+                            DropdownItem("手动添加节点", onClick = { addingNode = true }),
+                        ))) {
+                            Icon(Icons.Default.Add, contentDescription = "导入节点到 ${group.tag}")
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Button(onClick = { editingChain = true }, modifier = Modifier.weight(1f)) { Text("链式代理") }
-                            Button(onClick = { editingPolicy = true }, modifier = Modifier.weight(1f)) { Text("出站策略") }
-                            Button(onClick = { mainViewModel.setDefaultWorkspaceGroup(group.tag) }, modifier = Modifier.weight(1f)) {
-                                Text(if (workspace.effectiveDefaultGroupTag() == group.tag) "默认组" else "设为默认")
+                        IconButton(onClick = { mainViewModel.measureGroupLatency(group.tag) }, enabled = measuringTargets.isEmpty()) {
+                            Icon(Icons.Default.Speed, contentDescription = "测延迟")
+                        }
+                        if (group.sourceType == GroupSourceType.SUBSCRIPTION) {
+                            IconButton(onClick = { mainViewModel.refreshSubscriptionGroup(group.tag) },
+                                enabled = group.tag !in refreshing) {
+                                Icon(Icons.Default.Refresh, contentDescription = "更新订阅")
                             }
                         }
-                        group.frontProxy?.let { Text("链路：本机 → ${it.tag} → 组内节点 → 目标", style = MiuixTheme.textStyles.body2) }
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Button(onClick = {
-                                scope.launch {
-                                    group.effectiveMembers().forEach { GroupRuntimeStatus.measureTarget(it, group.testUrl, 5_000) }
-                                }
-                            }, modifier = Modifier.weight(1f)) { Text("测延迟") }
-                            if (group.sourceType == GroupSourceType.SUBSCRIPTION) {
-                                Button(onClick = { mainViewModel.refreshSubscriptionGroup(group.tag) },
-                                    enabled = group.tag !in refreshing, modifier = Modifier.weight(1f)) {
-                                    Text(if (group.tag in refreshing) "更新中" else "更新订阅")
-                                }
-                            }
+                        OverlayIconDropdownMenu(entry = DropdownEntry(listOf(
+                            DropdownItem("编辑分组", onClick = { editingSource = group }),
+                            DropdownItem("链式代理", onClick = { editingChain = true }),
+                            DropdownItem("出站策略", onClick = { editingPolicy = true }),
+                            DropdownItem(if (workspace.effectiveDefaultGroupTag() == group.tag) "默认组" else "设为默认组",
+                                selected = workspace.effectiveDefaultGroupTag() == group.tag,
+                                onClick = { mainViewModel.setDefaultWorkspaceGroup(group.tag) }),
+                            DropdownItem("分组管理", onClick = onManageGroups),
+                        ))) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "分组菜单")
                         }
                     }
+                    group.frontProxy?.let { Text("链路：本机 → ${it.tag} → 组内节点 → 目标", style = MiuixTheme.textStyles.body2) }
+                    if (group.tag in refreshing) Text("正在更新订阅…", style = MiuixTheme.textStyles.body2)
                 }
             }
             val members = (group.effectiveMembers() + group.nodes.map { GroupMemberRef(it.tag) }).distinct()
             items(members, key = { "${it.isGroup}:${it.tag}" }) { member ->
                 val node = if (member.isGroup) null else workspace.nodeByTag(member.tag)
-                val selected = active[group.tag]?.let { it == member.tag } ?: (group.selectedMember == member)
+                val measured = measuredLatencies[member]
+                val delayText = when {
+                    member in measuringTargets -> "测量中"
+                    measured != null -> if (measured.alive) "${measured.delayMs} ms" else "失败"
+                    latencies[member.tag] != null -> "${latencies[member.tag]} ms"
+                    else -> "待测"
+                }
+                val selected = active[group.tag]?.let { it == member.tag }
+                    ?: ((group.selectedMember ?: group.effectiveMembers().firstOrNull()) == member)
                 Card(Modifier.fillMaxWidth(), onClick = { mainViewModel.selectGroupMember(group.tag, member) }) {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(member.tag, style = MiuixTheme.textStyles.body1)
-                            Text(if (member.isGroup) "节点组" else "${node?.protocol.orEmpty().uppercase()} · ${latencies[member.tag]?.let { "${it}ms" } ?: "待测"}",
+                            Text("${if (member.isGroup) "节点组" else node?.protocol.orEmpty().uppercase()} · $delayText",
                                 style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                             if (node != null && node.udpOverTcpVersion > 0) {
                                 Text("UDP over TCP v${node.udpOverTcpVersion}", style = MiuixTheme.textStyles.body2,
@@ -148,7 +175,7 @@ fun ProxiesScreen(
                         }
                         if (selected) Icon(Icons.Default.Check, contentDescription = "已选择", tint = MiuixTheme.colorScheme.primary)
                         IconButton(onClick = {
-                            if (node != null) editingNode = node else if (member.isGroup) selectedTag = member.tag
+                            if (node != null) editingNode = node else if (member.isGroup) mainViewModel.selectedProxyGroupTag = member.tag
                         }) { Icon(Icons.Default.Edit, contentDescription = "编辑") }
                         IconButton(onClick = {
                             if (node != null) deletingNode = node.tag else mainViewModel.removeMemberFromGroup(group.tag, member)
@@ -156,6 +183,16 @@ fun ProxiesScreen(
                     }
                 }
             }
+        }
+    }
+    if (creatingGroup || editingSource != null) {
+        GroupSourceEditorSheet(editingSource, onSave = { originalTag, edited ->
+            mainViewModel.saveWorkspaceGroup(originalTag, edited).also { error ->
+                if (error == null) mainViewModel.selectedProxyGroupTag = edited.tag
+            }
+        }) {
+            creatingGroup = false
+            editingSource = null
         }
     }
     if (editingNode != null || addingNode) {
@@ -221,7 +258,7 @@ private fun NodeConfigSheet(node: ProxyNode?, onSave: (String, Int?) -> String?,
 }
 
 @Composable
-private fun GroupChainSheet(
+internal fun GroupChainSheet(
     workspace: GroupWorkspace,
     group: ProxyGroup,
     onSave: (String?, ProxyGroup) -> String?,

@@ -14,9 +14,8 @@ private const val TAG = "AppIconController"
 
 private const val APP_ICON_DEFAULT = "lineal"
 private val APP_ICON_OPTIONS = listOf("flat", "lineal", "lineal_color")
-// Full component class names: manifest relative names (".MainActivityFlat") are
-// resolved against the namespace (com.simplexray.re), NOT the applicationId —
-// the debug build has applicationIdSuffix ".debug" and must keep working.
+// Manifest aliases resolve against the source namespace; the installed package
+// uses com.fallback.xm in both build variants.
 private val APP_ICON_ALIASES = listOf(
     "flat" to "com.simplexray.re.MainActivityFlat",
     "lineal" to "com.simplexray.re.MainActivityLineal",
@@ -53,9 +52,7 @@ internal class AppIconController(
     private fun applyAppIcon(key: String) {
         val pm = application.packageManager
         APP_ICON_ALIASES.forEach { (option, className) ->
-            // packageName here is the applicationId (may carry the ".debug"
-            // suffix); className is the full component name (namespace-based),
-            // which is what the merged manifest actually declares.
+            // Pair the installed applicationId with the namespace-based alias.
             val component = ComponentName(application.packageName, className)
             val targetState = if (option == key) PackageManager.COMPONENT_ENABLED_STATE_ENABLED
             else PackageManager.COMPONENT_ENABLED_STATE_DISABLED

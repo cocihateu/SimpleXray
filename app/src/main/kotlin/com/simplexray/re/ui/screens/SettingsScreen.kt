@@ -101,7 +101,7 @@ fun SettingsScreen(
     val geositeUrlDefault = stringResource(R.string.geosite_url)
     val backdrop = LocalLayerBackdrop.current
     val category = mainViewModel.settingsCategory
-    val categories = listOf("通用", "TUN", "入站", "规则资源", "全局 DNS 与配置", "zashboard", "网络", "关于", "分组")
+    val categories = listOf("通用", "TUN", "入站", "规则资源", "DNS", "zashboard", "日志", "关于")
 
     if (editingRuleFile != null) {
         GlassBottomSheet(
@@ -299,6 +299,8 @@ fun SettingsScreen(
 
         if (category == 1) item {
             SettingsTunnelSection(mainViewModel = mainViewModel)
+            SettingsLanSection(mainViewModel = mainViewModel,
+                onShowHelp = { title, summary -> activeHelpDialog = title to summary })
         }
 
         if (category == 2) item {
@@ -346,9 +348,6 @@ fun SettingsScreen(
                 mainViewModel = mainViewModel,
                 isCheckingForUpdates = isCheckingForUpdates,
             )
-        }
-        if (category == 8) {
-            groupManagementItems(mainViewModel)
         }
     }
 }

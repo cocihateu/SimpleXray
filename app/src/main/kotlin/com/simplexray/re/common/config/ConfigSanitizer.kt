@@ -213,6 +213,17 @@ internal object ConfigSanitizer {
             Log.d(TAG, "Injected default SOCKS inbound at port $targetPort.")
         }
 
+        if (prefs != null) {
+            for (i in 0 until inbounds.length()) {
+                val inbound = inbounds.optJSONObject(i) ?: continue
+                if (inbound.optString("protocol") in setOf("socks", "http", "tun")) {
+                    val sniffing = inbound.optJSONObject("sniffing")
+                        ?: createDefaultSniffingObject().also { inbound.put("sniffing", it) }
+                    sniffing.put("routeOnly", prefs.sniffingRouteOnly)
+                }
+            }
+        }
+
         // 2. Process routing & domainMatcher
         val routing = rootJson.optJSONObject("routing")
         if (routing != null) {

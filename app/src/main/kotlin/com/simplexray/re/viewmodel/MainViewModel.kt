@@ -183,6 +183,12 @@ class MainViewModel(application: Application) :
         get() = workspaceController.workspace
 
     var settingsCategory by mutableStateOf(0)
+    var selectedProxyGroupTag by mutableStateOf("")
+    var proxyPageAction by mutableStateOf<String?>(null)
+    var createGroupRequested by mutableStateOf(false)
+    val proxyLatency get() = dashboardController.proxyLatency
+    val measuringProxyTargets get() = dashboardController.measuringProxyTargets
+    fun measureGroupLatency(groupTag: String) = dashboardController.measureGroupLatency(groupTag)
 
     private val trafficRulesController = TrafficRulesController(application, viewModelScope)
     val trafficRules get() = trafficRulesController.rules
@@ -424,6 +430,8 @@ class MainViewModel(application: Application) :
     fun updateTunnelMtu(mtuString: String): Boolean = settingsController.updateTunnelMtu(mtuString)
 
     fun setHttpProxyEnabled(enabled: Boolean) = settingsController.setHttpProxyEnabled(enabled)
+
+    fun setSniffingRouteOnly(enabled: Boolean) = settingsController.setSniffingRouteOnly(enabled)
 
     fun setBypassLanEnabled(enabled: Boolean) = settingsController.setBypassLanEnabled(enabled)
 

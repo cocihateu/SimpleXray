@@ -24,7 +24,8 @@ data class SwitchStates(
     val colorMode: ColorMode = ColorMode.Monochrome,
     val logLevel: LogLevel = LogLevel.Auto,
     val accessLog: Boolean = true,
-    val dnsLog: Boolean = false
+    val dnsLog: Boolean = false,
+    val sniffingRouteOnly: Boolean = false,
 )
 
 data class InfoStates(

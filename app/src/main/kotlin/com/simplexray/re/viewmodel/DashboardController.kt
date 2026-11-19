@@ -9,6 +9,8 @@ import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.common.config.GroupProfile
 import com.simplexray.re.common.config.GroupProfileStore
 import com.simplexray.re.common.config.GroupWorkspaceStore
+import com.simplexray.re.common.config.GroupMemberRef
+import com.simplexray.re.service.StandaloneLatencySession
 import com.simplexray.re.prefs.Preferences
 import com.simplexray.re.service.GroupRuntimeStatus
 import kotlinx.coroutines.CoroutineScope
@@ -28,6 +30,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.update
 import java.io.File
 
 private const val TAG = "DashboardController"
@@ -39,6 +43,7 @@ internal class DashboardController(
     private val selectedConfig: StateFlow<File?>,
     private val isVpnEnabled: () -> Boolean,
 ) {
+    private val appContext = context.applicationContext
     @Volatile
     private var coreStatsClient: CoreStatsClient? = null
     private val statsClientLock = Any()
@@ -62,6 +67,41 @@ internal class DashboardController(
 
     private val _outboundLatency = MutableStateFlow<Map<String, OutboundLatency>>(emptyMap())
     val outboundLatency: StateFlow<Map<String, OutboundLatency>> = _outboundLatency.asStateFlow()
+    private val _proxyLatency = MutableStateFlow<Map<GroupMemberRef, OutboundLatency>>(emptyMap())
+    val proxyLatency = _proxyLatency.asStateFlow()
+    private val _measuringProxyTargets = MutableStateFlow<Set<GroupMemberRef>>(emptySet())
+    val measuringProxyTargets = _measuringProxyTargets.asStateFlow()
+    private var proxyLatencyJob: Job? = null
+
+    fun measureGroupLatency(groupTag: String) {
+        if (proxyLatencyJob?.isActive == true) return
+        proxyLatencyJob = scope.launch(Dispatchers.IO) {
+            val workspace = workspaceStore.load()
+            val group = workspace.groupByTag(groupTag) ?: return@launch
+            val members = (group.effectiveMembers() + group.nodes.map { GroupMemberRef(it.tag) }).distinct()
+            _measuringProxyTargets.value = members.toSet()
+            fun record(member: GroupMemberRef, delay: Long?) {
+                _proxyLatency.update { it + (member to OutboundLatency(delay != null, delay ?: -1L, System.currentTimeMillis())) }
+                _measuringProxyTargets.update { it - member }
+            }
+            try {
+                if (isVpnEnabled()) {
+                    members.forEach { member ->
+                        record(member, GroupRuntimeStatus.measureTarget(member, group.testUrl, 5_000))
+                    }
+                } else {
+                    StandaloneLatencySession.measure(appContext, workspace, members, group.testUrl, ::record)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Proxy latency measurement failed: ${e.message}")
+                _measuringProxyTargets.value.forEach { record(it, null) }
+            } finally {
+                _measuringProxyTargets.value = emptySet()
+            }
+        }
+    }
 
     private val _groupProfile = MutableStateFlow(
         GroupProfile(groups = emptyList(), targetStrategies = emptyMap())

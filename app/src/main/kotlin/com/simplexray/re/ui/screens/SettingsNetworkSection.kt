@@ -73,12 +73,11 @@ import com.simplexray.re.ui.components.InfoOverlayDialog
 import com.simplexray.re.ui.scaffold.LocalLayerBackdrop
 
 @Composable
-internal fun SettingsNetworkSection(
+internal fun SettingsLanSection(
     mainViewModel: MainViewModel,
     onShowHelp: (String, String) -> Unit,
 ) {
     val context = LocalContext.current
-    val backdrop = LocalLayerBackdrop.current
     val localNetworkLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) {
@@ -87,11 +86,7 @@ internal fun SettingsNetworkSection(
 
     val settingsState by mainViewModel.settingsState.collectAsStateWithLifecycle()
     val vpnDisabled = settingsState.switches.disableVpn
-    val logLevelOptions = com.simplexray.re.prefs.LogLevel.entries
-    val logLevelNames = logLevelOptions.map { it.name }
-    val currentLogLevelIndex = logLevelOptions.indexOf(settingsState.switches.logLevel).coerceAtLeast(0)
-
-        SmallTitle(text = stringResource(R.string.network_settings))
+        SmallTitle(text = "局域网")
         Card(modifier = Modifier.fillMaxWidth()) {
             val bypassLanTitle = stringResource(R.string.bypass_lan_title)
             val bypassLanHelp = stringResource(R.string.bypass_lan_help)
@@ -135,7 +130,22 @@ internal fun SettingsNetworkSection(
                 enabled = !vpnDisabled
             )
 
-            val errorLogTitle = stringResource(R.string.error_log_title)
+        }
+}
+
+@Composable
+internal fun SettingsNetworkSection(
+    mainViewModel: MainViewModel,
+    onShowHelp: (String, String) -> Unit,
+) {
+    val backdrop = LocalLayerBackdrop.current
+    val settingsState by mainViewModel.settingsState.collectAsStateWithLifecycle()
+    val logLevelOptions = com.simplexray.re.prefs.LogLevel.entries
+    val logLevelNames = logLevelOptions.map { it.name }
+    val currentLogLevelIndex = logLevelOptions.indexOf(settingsState.switches.logLevel).coerceAtLeast(0)
+    SmallTitle(text = "日志")
+    Card(modifier = Modifier.fillMaxWidth()) {
+            val errorLogTitle = "日志级别"
             val loglevelSummary = stringResource(R.string.loglevel_summary)
             GlassDropdownPreference(
                 title = "",

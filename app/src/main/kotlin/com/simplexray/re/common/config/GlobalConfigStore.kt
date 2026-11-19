@@ -50,6 +50,16 @@ class GlobalConfigStore(context: Context) {
         return true
     }
 
+    fun updateDns(edit: (JSONObject) -> Unit) {
+        synchronized(lock) {
+            val root = loadJson()
+            val dns = root.optJSONObject("dns") ?: JSONObject().also { root.put("dns", it) }
+            edit(dns)
+            writeText(root.toString(2))
+            notifyModified()
+        }
+    }
+
     /**
      * Extracts global sections (log, dns, inbounds, routing, fakedns, policy, and builtin outbounds)
      * from a full Xray JSON configuration and saves them as the active global config.

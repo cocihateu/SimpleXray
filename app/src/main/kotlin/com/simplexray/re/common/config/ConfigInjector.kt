@@ -75,6 +75,9 @@ internal object ConfigInjector {
                 httpInbound.put("listen", "127.0.0.1")
                 httpInbound.put("port", prefs.httpPort)
                 httpInbound.put("protocol", "http")
+                httpInbound.put("sniffing", ConfigSanitizer.createDefaultSniffingObject().apply {
+                    put("routeOnly", prefs.sniffingRouteOnly)
+                })
                 inbounds.put(httpInbound)
             }
         }

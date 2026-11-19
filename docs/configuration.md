@@ -4,6 +4,8 @@
 
 SimpleXray Groups separates imported global configuration from the node/group workspace. Legacy SAF file import preserves the supplied bytes. The editor applies its formatting pipeline on save; runtime combines the workspace with global settings, applies the preference-aware sanitizer once, and then injects statistics and group routing.
 
+Settings exposes structured DNS controls for `queryStrategy`, servers, and hosts. Inbounds and logs have dedicated categories; routing lives on the Rules page. Proxy groups are created with the Proxies page add button and managed through its overflow menu. Each group's add menu imports nodes into that group.
+
 At runtime the final configuration is always fed to Xray through stdin (`-config stdin:`), so a file named `config.json` in the working directory cannot shadow it.
 
 The core receives the assembled workspace after preference overrides.
@@ -49,6 +51,7 @@ Configure rule files and update intervals directly in the app's **Settings > Rul
 | Primary SOCKS inbound (tag `socks-in`, or first SOCKS inbound) | `port` is replaced with the app SOCKS port; `listen` with the app SOCKS address (loopback only); `settings.auth` and `settings.accounts` are replaced when both app SOCKS credentials are configured. |
 | Other inbounds with `listen` missing, empty, `::` or `0.0.0.0` | `listen` is replaced with `127.0.0.1`. |
 | Missing SOCKS inbound | A default `socks-in` inbound is injected using the app SOCKS address/port, UDP, and configured authentication. |
+| SOCKS, HTTP, and TUN `sniffing.routeOnly` | Set from Settings > Inbounds, default `false`. Changes apply on the next connection. |
 
 ## App SOCKS Settings
 
@@ -81,6 +84,8 @@ Configure rule files and update intervals directly in the app's **Settings > Rul
 | TCP-based proxy outbounds (`vless`, `vmess`, `trojan`, `shadowsocks`, `socks`, `http`) | Missing `streamSettings.sockopt` values are injected: `tcpKeepAliveIdle=15`, `tcpKeepAliveInterval=3`, `tcpUserTimeout=15000`, plus custom sockopt `TCP_KEEPCNT=3` unless already present. Existing user values are not overwritten. |
 
 Group health checks use the application's HTTP call deadline. Primary recovery uses the group's configured interval after a working fallback connection, while standby URL-test groups use their own interval and result trust duration.
+
+Manual group latency measurements use HTTP round trips through Xray. With the VPN stopped, a temporary Xray process and group relay retain per-node DNS and chain settings; both close when measurement ends. The UI reports pending, measuring, successful latency, or failure.
 
 Structured rules live in `rules_workspace.json`. Legacy Lua rules are migrated during initial loading; runtime routing uses Xray JSON. Every business target enters a shared local relay, including individual nodes and direct traffic. Internal health checks select physical nodes through a dedicated entry. Rule edits use Xray `adrules`; topology changes restart the core.
 

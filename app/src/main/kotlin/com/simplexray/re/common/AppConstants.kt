@@ -3,6 +3,8 @@ package com.simplexray.re.common
 const val ROUTE_STATS = "stats"
 const val ROUTE_OVERVIEW = "overview"
 const val ROUTE_PROXIES = "proxies"
+const val ROUTE_GROUPS = "proxy_groups"
+const val ROUTE_GROUP_SETTINGS = "proxy_group_settings/{tag}"
 const val ROUTE_CONNECTIONS = "connections"
 const val ROUTE_RULES = "rules"
 const val ROUTE_CONFIG = "config"

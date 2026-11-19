@@ -88,7 +88,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.simplexray.groups"
+        applicationId = "com.fallback.xm"
         versionCode = appVersionCode
         versionName = appVersionName
         targetSdk = 37
@@ -157,7 +157,6 @@ android {
                 signingConfigs.getByName("debug")
             }
             isDebuggable = true
-            applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
         }
     }

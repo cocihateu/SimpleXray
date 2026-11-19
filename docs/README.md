@@ -10,7 +10,7 @@
 <sub>Android 14+ (API 34) | arm64-v8a | MPL-2.0</sub>
 </div>
 
-SimpleXray Groups uses Xray as its proxy core and Hev as its Android TUN backend. The proxy page manages local and subscription groups; settings owns global DNS, inbounds, routing, Lua scripts, and the local Clash API. Imports convert supported node formats into native Xray outbounds and report skipped protocol or plugin combinations. See [native imports](./xray-imports.md) and [Clash API](./clash-api.md).
+SimpleXray Groups uses one Xray proxy core with Xray TUN, Hev TUN, and Simple TUN options. The Proxies page creates basic and subscription groups, imports nodes within each group, and opens group management from its overflow menu. Settings provides structured DNS, inbound, log, and local Clash API controls; the Rules page edits live routing. Imports convert supported node formats into native Xray outbounds and report skipped protocol or plugin combinations. See [native imports](./xray-imports.md) and [Clash API](./clash-api.md).
 
 This repository is a personal fork of [SimpleXray](https://github.com/lhear/SimpleXray). The Groups branch combines a global configuration with a shared node and group workspace, rule-file management, and a Miuix-based interface.
 
@@ -19,7 +19,7 @@ This repository is a personal fork of [SimpleXray](https://github.com/lhear/Simp
 
 ## Why This Fork
 
-- **Xray + Hev** — a single proxy core and Android TUN backend.
+- **Xray core** — Xray TUN, Hev TUN, and Simple TUN backends.
 - **Unified groups** — manual selection, scheduled URL tests, nested fallback groups, editable rule bindings, and per-node destination DNS strategy.
 - **Complete configuration workflow** — JSON/YAML import, in-app editor, one-way Android sanitization, log controls, and runtime statistics injection.
 - **Rule-file management** — built-in `geoip.dat`/`geosite.dat`, arbitrary custom `.dat` files, `ext:` references, per-file update URLs, and background updates.
@@ -74,7 +74,7 @@ Hev supplies the TUN-to-SOCKS data path. Historical SimpleTUN sources and benchm
 
 ### Routing and Fallback
 
-Each group has an editable list of routing targets. A Lua return value or JSON rule `outboundTag` matching one of these names enters that group. Internal measurements and relay redials use dedicated authenticated inbounds that select the physical outbound directly. Each physical outbound retains its own `targetStrategy`.
+Each group has an editable list of routing targets. A structured rule `outboundTag` matching one of these names enters that group. Legacy Lua rules are migrated during initial loading. Internal measurements and relay redials use dedicated authenticated inbounds that select the physical outbound directly. Each physical outbound retains its own `targetStrategy`.
 
 Existing workspaces assign a unique physical primary's rule name to its fallback group during migration. Groups sharing a primary use explicit bindings in the group editor.
 

@@ -61,7 +61,8 @@ internal class SettingsController(
                 colorMode = prefs.colorMode,
                 logLevel = prefs.logLevel,
                 accessLog = prefs.accessLog,
-                dnsLog = prefs.dnsLog
+                dnsLog = prefs.dnsLog,
+                sniffingRouteOnly = prefs.sniffingRouteOnly,
             ),
             info = InfoStates(
                 appVersion = BuildConfig.VERSION_NAME,
@@ -102,7 +103,8 @@ internal class SettingsController(
                 colorMode = prefs.colorMode,
                 logLevel = prefs.logLevel,
                 accessLog = prefs.accessLog,
-                dnsLog = prefs.dnsLog
+                dnsLog = prefs.dnsLog,
+                sniffingRouteOnly = prefs.sniffingRouteOnly,
             ),
             info = _settingsState.value.info.copy(
                 appVersion = BuildConfig.VERSION_NAME,
@@ -454,6 +456,14 @@ internal class SettingsController(
         _settingsState.value = _settingsState.value.copy(
             switches = _settingsState.value.switches.copy(httpProxyEnabled = enabled)
         )
+    }
+
+    fun setSniffingRouteOnly(enabled: Boolean) {
+        prefs.sniffingRouteOnly = enabled
+        _settingsState.value = _settingsState.value.copy(
+            switches = _settingsState.value.switches.copy(sniffingRouteOnly = enabled)
+        )
+        notifySocksSettingsChangedWhileRunning()
     }
 
     fun setBypassLanEnabled(enabled: Boolean) {

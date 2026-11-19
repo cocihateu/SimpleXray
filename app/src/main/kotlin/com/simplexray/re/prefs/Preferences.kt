@@ -181,6 +181,7 @@ class Preferences(context: Context) {
     var geoUpdateIntervalHours: Int by intPref(GEO_UPDATE_INTERVAL_HOURS, 0)
     var lastGeoUpdateTime: Long by longPref(LAST_GEO_UPDATE_TIME, 0L)
     var httpProxyEnabled: Boolean by booleanPref(HTTP_PROXY_ENABLED, false)
+    var sniffingRouteOnly: Boolean by booleanPref(SNIFFING_ROUTE_ONLY, false)
     var httpPort: Int by intPref(HTTP_PORT, 10809)
     var customGeoipImported: Boolean by booleanPref(CUSTOM_GEOIP_IMPORTED, false)
     var customGeositeImported: Boolean by booleanPref(CUSTOM_GEOSITE_IMPORTED, false)
@@ -276,6 +277,7 @@ class Preferences(context: Context) {
         const val SELECTED_CONFIG_PATH: String = "SelectedConfigPath"
         const val BYPASS_LAN: String = "BypassLan"
         const val HTTP_PROXY_ENABLED: String = "HttpProxyEnabled"
+        const val SNIFFING_ROUTE_ONLY: String = "SniffingRouteOnly"
         const val CUSTOM_GEOIP_IMPORTED: String = "CustomGeoipImported"
         const val CUSTOM_GEOSITE_IMPORTED: String = "CustomGeositeImported"
         const val CONFIG_FILES_ORDER: String = "ConfigFilesOrder"
