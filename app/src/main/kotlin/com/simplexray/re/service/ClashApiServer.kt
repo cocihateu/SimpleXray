@@ -37,8 +37,6 @@ import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.time.Instant
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -57,6 +55,13 @@ internal class ClashApiServer(context: Context) :
     private val serverScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val activeSockets = CopyOnWriteArrayList<ClashWebSocket>()
     private val httpClient: OkHttpClient = OkHttpClient.Builder().build()
+
+    private enum class GatewayStatus(private val code: Int, private val label: String) : Response.IStatus {
+        BAD_GATEWAY(502, "Bad Gateway"),
+        GATEWAY_TIMEOUT(504, "Gateway Timeout");
+        override fun getRequestStatus() = code
+        override fun getDescription() = "$code $label"
+    }
 
     @Volatile
     private var coreStatsClient: CoreStatsClient? = null
@@ -126,6 +131,12 @@ internal class ClashApiServer(context: Context) :
     }
 
     private fun readRequestBody(session: IHTTPSession): String {
+        if (session.method == Method.PATCH) {
+            val size = session.headers["content-length"]?.toIntOrNull() ?: 0
+            val bytes = ByteArray(size)
+            java.io.DataInputStream(session.inputStream).readFully(bytes)
+            return bytes.toString(Charsets.UTF_8)
+        }
         val files = HashMap<String, String>()
         runCatching { session.parseBody(files) }
         val postData = files["postData"]
@@ -172,14 +183,18 @@ internal class ClashApiServer(context: Context) :
 
             uri == "/configs" -> {
                 val ws = workspaceStore.load()
+                val global = GlobalConfigStore(appContext).loadJson()
+                val configuredLevel = corePrefs.logLevel.value.let {
+                    if (it == "auto") global.optJSONObject("log")?.optString("loglevel", "warning") ?: "warning" else it
+                }
                 val cfg = JSONObject()
-                    .put("port", 0)
+                    .put("port", if (corePrefs.httpProxyEnabled) corePrefs.httpPort else 0)
                     .put("socks-port", corePrefs.socksPort)
                     .put("redir-port", 0)
                     .put("tproxy-port", 0)
                     .put("mixed-port", 0)
                     .put("mode", ws.routingMode)
-                    .put("log-level", "info")
+                    .put("log-level", configuredLevel)
                     .put("allow-lan", false)
                     .put("bind-address", "127.0.0.1")
                 jsonResponse(Response.Status.OK, cfg.toString())
@@ -211,7 +226,7 @@ internal class ClashApiServer(context: Context) :
                 if (measured != null && measured >= 0) {
                     jsonResponse(Response.Status.OK, JSONObject().put("delay", measured).toString())
                 } else {
-                    jsonResponse(Response.Status.GATEWAY_TIMEOUT, """{"message":"Timeout or measure failure"}""")
+                    jsonResponse(GatewayStatus.GATEWAY_TIMEOUT, """{"message":"Timeout or measure failure"}""")
                 }
             }
 
@@ -278,10 +293,14 @@ internal class ClashApiServer(context: Context) :
                 } else {
                     val rules = routing?.optJSONArray("rules") ?: JSONArray()
                     val mapped = JSONArray()
+                    val workspace = workspaceStore.load()
+                    val mapper = ClashTagMapper(workspace)
                     for (index in 0 until rules.length()) {
                         val rule = rules.getJSONObject(index)
+                        val target = rule.optString("outboundTag")
+                        val group = workspace.effectiveRoutingBindings()[target]
                         mapped.put(JSONObject().put("type", "Xray").put("payload", rule.toString())
-                            .put("proxy", rule.optString("outboundTag")).put("size", 1))
+                            .put("proxy", mapper.toApiName(group != null, group ?: target)).put("size", 1))
                     }
                     jsonResponse(Response.Status.OK, JSONObject().put("rules", mapped).toString())
                 }
@@ -291,6 +310,35 @@ internal class ClashApiServer(context: Context) :
                 val ws = workspaceStore.load()
                 val root = assembleProviders(ws)
                 jsonResponse(Response.Status.OK, JSONObject().put("providers", root).toString())
+            }
+
+            uri == "/providers/rules" ->
+                jsonResponse(Response.Status.OK, JSONObject().put("providers", JSONObject()).toString())
+
+            uri.startsWith("/providers/proxies/") && uri.endsWith("/healthcheck") -> {
+                val path = uri.removePrefix("/providers/proxies/").removeSuffix("/healthcheck")
+                val ws = workspaceStore.load()
+                val group = ws.groups.filter { it.sourceType == GroupSourceType.SUBSCRIPTION }
+                    .sortedByDescending { it.tag.length }.firstOrNull { path == it.tag || path.startsWith("${it.tag}/") }
+                    ?: return jsonResponse(Response.Status.NOT_FOUND, """{"message":"Provider missing"}""")
+                val mapper = ClashTagMapper(ws)
+                val nodeName = path.removePrefix(group.tag).removePrefix("/")
+                val nodes = if (nodeName.isBlank()) group.nodes else group.nodes.filter {
+                    mapper.toApiName(false, it.tag) == nodeName
+                }
+                if (nodes.isEmpty()) return jsonResponse(Response.Status.NOT_FOUND, """{"message":"Provider node missing"}""")
+                val url = session.parms["url"] ?: group.testUrl
+                val timeout = session.parms["timeout"]?.toIntOrNull() ?: 5000
+                val results = runBlocking {
+                    coroutineScope {
+                        nodes.map { node -> async {
+                            mapper.toApiName(false, node.tag) to GroupRuntimeStatus.measureTarget(GroupMemberRef(node.tag), url, timeout)
+                        } }.awaitAll()
+                    }
+                }
+                val json = if (nodeName.isNotBlank()) JSONObject().put("delay", results.first().second ?: 0L)
+                else JSONObject().apply { results.forEach { (name, latency) -> put(name, latency ?: 0L) } }
+                jsonResponse(Response.Status.OK, json.toString())
             }
 
             uri.startsWith("/providers/proxies/") -> {
@@ -365,7 +413,7 @@ internal class ClashApiServer(context: Context) :
 
                 val result = runCatching { runBlocking { refreshSubscriptionGroup(group.tag, group.subscriptionUrl) } }
                 if (result.isSuccess) emptyResponse(Response.Status.NO_CONTENT)
-                else jsonResponse(Response.Status.BAD_GATEWAY, JSONObject().put("message", result.exceptionOrNull()?.message).toString())
+                else jsonResponse(GatewayStatus.BAD_GATEWAY, JSONObject().put("message", result.exceptionOrNull()?.message).toString())
             }
 
             else -> jsonResponse(Response.Status.NOT_FOUND, """{"message":"Endpoint not found"}""")
@@ -381,6 +429,14 @@ internal class ClashApiServer(context: Context) :
     }
 
     private fun handleDelete(uri: String): Response = when {
+        uri.startsWith("/proxies/") -> {
+            val ws = workspaceStore.load()
+            val ref = ClashTagMapper(ws).resolve(uri.removePrefix("/proxies/"))
+            if (ref?.isGroup == true && ws.groupByTag(ref.tag) != null) {
+                GroupRuntimeStatus.clearGroupSelection(ref.tag)
+                emptyResponse(Response.Status.NO_CONTENT)
+            } else jsonResponse(Response.Status.NOT_FOUND, """{"message":"Group missing"}""")
+        }
         uri == "/connections" -> {
             RelayConnectionRegistry.closeAll()
             emptyResponse(Response.Status.NO_CONTENT)

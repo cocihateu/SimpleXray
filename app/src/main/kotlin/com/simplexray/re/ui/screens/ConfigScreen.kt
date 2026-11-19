@@ -43,7 +43,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
@@ -354,6 +353,12 @@ private fun WorkspaceGroupCard(
     onShowMemberActions: (GroupMemberRef, Int) -> Unit,
 ) {
     val members = group.effectiveMembers()
+    fun containsActiveLeaf(ref: GroupMemberRef, visited: Set<String> = emptySet()): Boolean {
+        if (ref.isGroup == false) return ref.tag == activeLeaf
+        if (ref.tag in visited) return false
+        return workspace.groupByTag(ref.tag)?.effectiveMembers()
+            ?.any { containsActiveLeaf(it, visited + ref.tag) } == true
+    }
     val sourceLabel = if (group.sourceType == GroupSourceType.SUBSCRIPTION) {
         stringResource(R.string.workspace_source_subscription)
     } else {
@@ -472,7 +477,7 @@ private fun WorkspaceGroupCard(
                     members.forEachIndexed { index, member ->
                         val node = if (member.isGroup == false) workspace.nodeByTag(member.tag) else null
                         val isActiveMember = when {
-                            member.isGroup == false && activeLeaf == member.tag -> true
+                            containsActiveLeaf(member) -> true
                             group.strategy == GroupStrategy.SELECT && group.selectedMember == member -> true
                             else -> false
                         }
@@ -539,8 +544,8 @@ private fun WorkspaceGroupCard(
 
                             if (latencyMs != null) {
                                 val latencyColor = when {
-                                    latencyMs <= 100 -> Color(0xFF4CAF50)
-                                    latencyMs <= 300 -> Color(0xFFFF9800)
+                                    latencyMs <= 100 -> MiuixTheme.colorScheme.primary
+                                    latencyMs <= 300 -> MiuixTheme.colorScheme.onSurfaceVariantSummary
                                     else -> MiuixTheme.colorScheme.error
                                 }
                                 Text(

@@ -73,7 +73,7 @@
     <string name="app_icon">应用图标</string>
 
     <!-- 配置文件与管理 -->
-    <string name="configuration">配置</string>
+    <string name="configuration">代理</string>
     <string name="config">编辑配置</string>
     <string name="content">内容</string>
     <string name="filename">文件名</string>
@@ -129,7 +129,7 @@
     <string name="icon_lineal_color">Lineal Color</string>
 
     <!-- 仪表盘与统计 -->
-    <string name="core_stats_title">面板</string>
+    <string name="core_stats_title">概览</string>
     <string name="traffic_info">流量信息</string>
     <string name="outbound_nodes">出站节点</string>
     <string name="refresh_latency">重新测试延迟</string>

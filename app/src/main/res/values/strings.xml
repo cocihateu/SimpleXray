@@ -78,7 +78,7 @@
     <string name="app_icon">App Icon</string>
 
     <!-- Profile & File Management -->
-    <string name="configuration">Configuration</string>
+    <string name="configuration">Proxies</string>
     <string name="config">Edit Configuration</string>
     <string name="content">Content</string>
     <string name="filename">Filename</string>

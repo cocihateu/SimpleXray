@@ -216,6 +216,11 @@ internal class GroupRuntimeController(
         runtimeScope?.launch(Dispatchers.IO) { syncAllBalancersAndPublish() }
     }
 
+    fun clearSelection(groupTag: String) {
+        manualMembers.remove(groupTag)
+        runtimeScope?.launch(Dispatchers.IO) { syncAllBalancersAndPublish() }
+    }
+
     fun buildFailoverPlan(groupTag: String): FailoverPlan {
         val group = workspace.groupByTag(groupTag)
             ?: return FailoverPlan(null, emptyList(), 3_000)

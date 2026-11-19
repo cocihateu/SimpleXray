@@ -78,6 +78,8 @@ internal object GroupRuntimeStatus {
         owner?.switchGroupMemberLive(groupTag, member)
     }
 
+    fun clearGroupSelection(groupTag: String) { owner?.clearGroupSelection(groupTag) }
+
     suspend fun measureTarget(member: GroupMemberRef, url: String, timeoutMs: Int): Long? =
         owner?.measureTarget(member, url, timeoutMs)
 
@@ -115,6 +117,8 @@ internal class GroupCoreSession(
     fun switchGroupMemberLive(groupTag: String, member: GroupMemberRef) {
         controller?.forceSwitchMember(groupTag, member)
     }
+
+    fun clearGroupSelection(groupTag: String) { controller?.clearSelection(groupTag) }
 
     suspend fun measureTarget(member: GroupMemberRef, url: String, timeoutMs: Int): Long? {
         val leaf = controller?.activeLeaf(member) ?: if (member.isGroup) return null else member.tag

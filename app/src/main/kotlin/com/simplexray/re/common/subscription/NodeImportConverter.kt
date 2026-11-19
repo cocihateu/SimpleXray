@@ -618,6 +618,10 @@ internal object NodeImportConverter {
         }
 
         if (type == "hysteria2") return convertHysteria2(tag, server, port, src, reasons)
+        if (src.optJSONObject("transport")?.optString("type") in setOf("http", "h2", "quic")) {
+            reasons?.add("$tag：旧 HTTP/H2/QUIC 传输已移除，请使用服务端 XHTTP 配置")
+            return null
+        }
         if (type in setOf("tuic", "anytls")) {
             reasons?.add("协议暂缺少原生 Xray 支持：$type（节点：$tag）")
             return null
