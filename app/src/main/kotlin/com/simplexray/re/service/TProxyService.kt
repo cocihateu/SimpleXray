@@ -11,6 +11,7 @@ import android.os.PowerManager
 import android.util.Log
 import com.simplexray.re.R
 import com.simplexray.re.common.ConfigUtils
+import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.common.isLoopbackAddress
 import com.simplexray.re.prefs.TunnelMode
 import com.simplexray.re.data.source.LogFileManager
@@ -362,7 +363,6 @@ class TProxyService : VpnService() {
         if (stopRequestedByUser) return false
         val prefs = Preferences(this)
 
-        val selectedConfigPath = prefs.selectedConfigPath
         var tunMtu = prefs.tunnelMtu
 
         // Read the selected config once when the VPN setup needs raw values from
@@ -370,13 +370,8 @@ class TProxyService : VpnService() {
         // runtime sanitization happens later in XrayProcessRunner.
         val needsRawConfig = prefs.httpProxyEnabled ||
             (prefs.tunnelMode == TunnelMode.XrayTun && !prefs.disableVpn)
-        val rawConfigContent = if (needsRawConfig && selectedConfigPath != null) {
-            val configFile = File(selectedConfigPath)
-            if (configFile.exists()) {
-                runCatching { configFile.readText() }.getOrDefault("")
-            } else {
-                null
-            }
+        val rawConfigContent = if (needsRawConfig) {
+            runCatching { GlobalConfigStore(this).readText() }.getOrNull()
         } else {
             null
         }

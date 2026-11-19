@@ -319,6 +319,10 @@ fun SettingsScreen(
         }
 
         item {
+            SettingsGlobalConfigSection(mainViewModel = mainViewModel)
+        }
+
+        item {
             SettingsLuaScriptsSection(
                 mainViewModel = mainViewModel,
                 onDeleteLuaScript = { fileName -> deletingLuaFileName = fileName },

@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.activity.result.ActivityResultLauncher
 import java.io.File
 import com.simplexray.re.R
+import com.simplexray.re.common.config.GroupWorkspaceStore
 import com.simplexray.re.prefs.Preferences
 import com.simplexray.re.service.TProxyService
 import kotlinx.coroutines.CoroutineScope
@@ -34,9 +35,10 @@ internal class VpnServiceController(
 
     fun startTProxyService(action: String) {
         scope.launch {
-            if (selectedConfig.value == null) {
+            val workspace = GroupWorkspaceStore(application).load()
+            if (workspace.groups.isEmpty() && workspace.allNodes().isEmpty()) {
                 sendEvent(MainViewUiEvent.ShowSnackbar(application.getString(R.string.not_select_config)))
-                Log.w(TAG, "Cannot start service: no config file selected.")
+                Log.w(TAG, "Start deferred: add at least one proxy group first.")
                 return@launch
             }
             val intent = Intent(application, TProxyService::class.java).setAction(action)
@@ -56,9 +58,10 @@ internal class VpnServiceController(
 
     fun prepareAndStartVpn(vpnPrepareLauncher: ActivityResultLauncher<Intent>) {
         scope.launch {
-            if (selectedConfig.value == null) {
+            val workspace = GroupWorkspaceStore(application).load()
+            if (workspace.groups.isEmpty() && workspace.allNodes().isEmpty()) {
                 sendEvent(MainViewUiEvent.ShowSnackbar(application.getString(R.string.not_select_config)))
-                Log.w(TAG, "Cannot prepare VPN: no config file selected.")
+                Log.w(TAG, "VPN preparation deferred: add at least one proxy group first.")
                 return@launch
             }
             val vpnIntent = VpnService.prepare(application)

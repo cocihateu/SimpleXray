@@ -16,9 +16,15 @@ import com.simplexray.re.common.SocksAuthenticatorInstaller
 import com.simplexray.re.common.ROUTE_APP_LIST
 import com.simplexray.re.common.ThemeMode
 import com.simplexray.re.common.config.GroupProfile
+import com.simplexray.re.common.config.GlobalConfigStore
+import com.simplexray.re.common.config.GlobalConfigSummary
+import com.simplexray.re.common.config.GroupMemberRef
+import com.simplexray.re.common.config.GroupWorkspace
+import com.simplexray.re.common.config.ProxyGroup
 import com.simplexray.re.data.source.FileManager
 import com.simplexray.re.prefs.LogLevel
 import com.simplexray.re.prefs.Preferences
+import com.simplexray.re.service.FallbackRuntimeInfo
 import com.simplexray.re.service.VpnRunningState
 import com.simplexray.re.service.VpnStateHub
 import kotlinx.coroutines.Dispatchers
@@ -123,6 +129,14 @@ class MainViewModel(application: Application) :
         { isVpnEnabled() },
     )
 
+    private val workspaceController: GroupWorkspaceController = GroupWorkspaceController(
+        application = application,
+        scope = viewModelScope,
+        onGlobalConfigUpdated = { path -> settingsController.syncSocksCredentialsFromConfig(path) },
+        onEditFile = { path -> configFileController.editConfig(path) },
+        showMessage = { message -> showSnackbar(message) },
+    )
+
     private val vpnServiceController by lazy {
         VpnServiceController(
             application,
@@ -161,6 +175,21 @@ class MainViewModel(application: Application) :
 
     val activeGroupNodes: StateFlow<Map<String, String>>
         get() = dashboardController.activeGroupNodes
+
+    val groupWorkspace: StateFlow<GroupWorkspace>
+        get() = workspaceController.workspace
+
+    val globalConfigSummary: StateFlow<GlobalConfigSummary>
+        get() = workspaceController.globalSummary
+
+    val fallbackRuntimeStates: StateFlow<Map<String, FallbackRuntimeInfo>>
+        get() = workspaceController.fallbackStates
+
+    val runtimeNodeLatencies: StateFlow<Map<String, Long>>
+        get() = workspaceController.runtimeNodeLatencies
+
+    val refreshingGroups: StateFlow<Set<String>>
+        get() = workspaceController.refreshingGroups
 
     val isServiceEnabled: StateFlow<Boolean>
         get() = vpnServiceController.isServiceEnabled
@@ -292,6 +321,43 @@ class MainViewModel(application: Application) :
 
     fun saveGroupProfile(profile: GroupProfile) = dashboardController.saveGroupProfile(profile)
 
+    fun saveWorkspaceGroup(originalTag: String?, group: ProxyGroup): String? =
+        workspaceController.saveGroup(originalTag, group)
+
+    fun deleteWorkspaceGroup(tag: String) = workspaceController.deleteGroup(tag)
+
+    fun setDefaultWorkspaceGroup(tag: String) = workspaceController.setDefaultGroup(tag)
+
+    fun importFromClipboardToGroup(groupTag: String) = workspaceController.importFromClipboardToGroup(groupTag)
+
+    fun importFromUriToGroup(groupTag: String, uri: Uri) = workspaceController.importFromUriToGroup(groupTag, uri)
+
+    fun refreshSubscriptionGroup(groupTag: String) = workspaceController.refreshSubscriptionGroup(groupTag)
+
+    fun importGlobalConfigFromUri(uri: Uri) = workspaceController.importGlobalConfigFromUri(uri)
+
+    fun openGlobalConfigEditor() = workspaceController.openGlobalConfigEditor()
+
+    fun openLuaScriptEditor(fileName: String) = workspaceController.openLuaScriptEditor(fileName)
+
+    fun selectGroupMember(groupTag: String, member: GroupMemberRef) =
+        workspaceController.selectGroupMember(groupTag, member)
+
+    fun removeMemberFromGroup(groupTag: String, member: GroupMemberRef) =
+        workspaceController.removeMemberFromGroup(groupTag, member)
+
+    fun moveMemberInGroup(groupTag: String, index: Int, delta: Int) =
+        workspaceController.moveMemberInGroup(groupTag, index, delta)
+
+    fun addMemberRefToGroup(groupTag: String, member: GroupMemberRef): String? =
+        workspaceController.addMemberRefToGroup(groupTag, member)
+
+    fun updateNodeTargetStrategy(nodeTag: String, strategy: String) =
+        workspaceController.updateNodeTargetStrategy(nodeTag, strategy)
+
+    fun updateNodeJson(nodeTag: String, rawJson: String): String? =
+        workspaceController.updateNodeJson(nodeTag, rawJson)
+
     /**
      * Latency-tests every TCP-capable outbound endpoint (1-RTT TCP connect,
      * independent of the core). Called when the dashboard is shown and on
@@ -389,7 +455,10 @@ class MainViewModel(application: Application) :
 
     fun onConfigEditFinished(savedSelectedConfig: Boolean) {
         refreshConfigFileList()
+        refreshLuaScriptFiles()
+        settingsController.syncSocksCredentialsFromConfig(GlobalConfigStore(application).file().absolutePath)
         if (savedSelectedConfig && isVpnEnabled()) {
+            startTProxyService(com.simplexray.re.service.TProxyService.ACTION_RELOAD_CONFIG)
             showSnackbar(application.getString(R.string.config_edited_service_running))
         }
     }

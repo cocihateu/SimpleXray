@@ -94,6 +94,12 @@ private fun LuaScriptFilesList(
                 summary = mainViewModel.getLuaFileSummary(fileName),
                 endActions = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { mainViewModel.openLuaScriptEditor(fileName) }) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.edit),
+                                contentDescription = stringResource(R.string.edit_lua_script)
+                            )
+                        }
                         IconButton(onClick = { onReplace(fileName) }) {
                             Icon(
                                 painter = painterResource(id = R.drawable.upload_file),

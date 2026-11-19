@@ -10,7 +10,8 @@ import android.util.Log
 import com.simplexray.re.common.ConfigUtils
 import com.simplexray.re.common.ConfigUtils.extractPortsFromJson
 import com.simplexray.re.common.CoreStatsClient
-import com.simplexray.re.common.config.GroupProfileStore
+import com.simplexray.re.common.config.GlobalConfigStore
+import com.simplexray.re.common.config.GroupWorkspaceStore
 import com.simplexray.re.data.source.LogFileManager
 import com.simplexray.re.prefs.Preferences
 import com.simplexray.re.prefs.TunnelMode
@@ -155,24 +156,20 @@ internal class XrayProcessRunner(
             }
             Log.d(tag, "Attempting to start native Xray process with TUN fd & local gRPC API.")
             val libraryDir = TProxyService.getNativeLibraryDir(application)
-            val selectedConfigPath = prefs.selectedConfigPath ?: run {
-                failCurrentRun(runJob, "Select a configuration file to start Xray.")
-                return
-            }
             val xrayPath = "$libraryDir/libxray.so"
-            val configFile = File(selectedConfigPath)
-            if (!configFile.exists()) {
-                failCurrentRun(runJob, "The selected configuration file is required: $selectedConfigPath")
+            val globalStore = GlobalConfigStore(application)
+            val workspaceStore = GroupWorkspaceStore(application)
+            val workspace = workspaceStore.load()
+            if (workspace.groups.isEmpty() && workspace.allNodes().isEmpty()) {
+                failCurrentRun(runJob, "Add a proxy group with at least one node before starting Xray.")
                 return
             }
-
-            val rawConfigContent = runCatching { configFile.readText() }.getOrDefault("")
-            Log.d(tag, "Loaded raw user config: ${configFile.name}, ${rawConfigContent.length} chars")
+            val assembled = workspace.assembleRuntimeConfig(globalStore.loadJson())
+            val rawConfigContent = assembled.toString()
+            Log.d(tag, "Assembled global + workspace config: ${workspace.groups.size} groups, ${workspace.allNodes().size} nodes")
 
             val sanitizedConfigContent = ConfigUtils.sanitizeConfig(rawConfigContent, prefs)
-
-            val isYaml = configFile.extension.lowercase() in listOf("yaml", "yml")
-            val format = if (isYaml) "yaml" else "json"
+            val format = "json"
 
             val ports = runCatching { extractPortsFromJson(sanitizedConfigContent) }.getOrDefault(emptySet())
             val apiPort = findAvailablePort(ports) ?: run {
@@ -185,7 +182,6 @@ internal class XrayProcessRunner(
                 prefs.apiAddress = "127.0.0.1"
                 ConfigUtils.injectStatsServiceIntoSanitized(prefs, sanitizedConfigContent)
             }
-            val nodes = ConfigUtils.extractOutbounds(sanitizedConfigContent).map { it.tag }
             val usedPorts = (ports + apiPort + prefs.httpPort).toMutableSet()
             fun allocatePort(): Int = requireNotNull(findAvailablePort(usedPorts)) {
                 "Local port allocation failed for runtime proxy listeners."
@@ -207,16 +203,15 @@ internal class XrayProcessRunner(
                 requireCurrentRun(runJob)
                 mihomoProcess = mihomo
             }
-            if (nodes.isNotEmpty()) {
-                val store = GroupProfileStore(application)
-                val profile = store.load(selectedConfigPath, nodes)
-                val groups = OutboundGroupConfig(nodes, profile, allocatePort(), ::allocatePort)
-                session = GroupCoreSession(store, selectedConfigPath, groups, apiPort)
+            if (workspace.groups.isNotEmpty()) {
+                val groups = OutboundGroupConfig(workspace, allocatePort(), allocatePort(), ::allocatePort)
+                session = GroupCoreSession(workspaceStore, groups, apiPort)
                 synchronized(this) {
                     requireCurrentRun(runJob)
                     groupSession = session
                 }
                 groups.inject(runtimeConfig, application.filesDir, application.cacheDir)
+                session.startRelayBeforeCore(runScope)
             }
             val finalConfigContent = runtimeConfig.toString()
             Log.d(tag, "Injected final config (${finalConfigContent.length} chars) ready for stdin ($format)")
@@ -348,14 +343,12 @@ internal class XrayProcessRunner(
             while (line != null) {
                 val batch = mutableListOf<String>()
                 val stampedLine = stampLogLine(line)
-                session?.acceptLog(line)
                 Log.d(tag, "XrayLog: $stampedLine")
                 batch.add(stampedLine)
                 callbacks.emitLog(stampedLine)
 
                 while (activeReader.ready() && batch.size < 50) {
                     val nextLine = activeReader.readLine() ?: break
-                    session?.acceptLog(nextLine)
                     val stampedNext = stampLogLine(nextLine)
                     Log.d(tag, "XrayLog: $stampedNext")
                     batch.add(stampedNext)

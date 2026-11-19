@@ -1,96 +1,82 @@
 package com.simplexray.re.ui.screens
 
-import android.content.res.Configuration
-import android.util.Log
-import androidx.activity.compose.BackHandler
+import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.simplexray.re.R
+import com.simplexray.re.common.config.BUILTIN_GROUP_TARGET_TAGS
+import com.simplexray.re.common.config.GroupMemberRef
+import com.simplexray.re.common.config.GroupSourceType
+import com.simplexray.re.common.config.GroupStrategy
+import com.simplexray.re.common.config.GroupWorkspace
+import com.simplexray.re.common.config.ProxyGroup
+import com.simplexray.re.common.config.ProxyNode
+import com.simplexray.re.service.FallbackRuntimeInfo
 import com.simplexray.re.ui.scaffold.LocalLayerBackdrop
-import com.simplexray.re.viewmodel.ConfigEditViewModel
 import com.simplexray.re.viewmodel.MainViewModel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import sh.calvin.reorderable.ReorderableItem
-import sh.calvin.reorderable.rememberReorderableLazyListState
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.SmallTitle
-import top.yukonga.miuix.kmp.basic.SnackbarHostState
-import top.yukonga.miuix.kmp.basic.Surface
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.glass.GlassBottomSheet
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.preference.ArrowPreference
+import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import com.simplexray.re.ui.components.ConfirmOverlayDialog
 import java.io.File
 
-private const val TAG = "ConfigScreen"
+private val NODE_DNS_STRATEGY_CYCLE = listOf("", "UseIPv4", "ForceIP", "AsIs", "UseIP")
 
 @Composable
 fun ConfigScreen(
@@ -101,540 +87,531 @@ fun ConfigScreen(
     onImportConfigFromClipboard: () -> Unit = {},
     mainViewModel: MainViewModel,
     listState: LazyListState,
-    paddingValues: PaddingValues = PaddingValues()
+    paddingValues: PaddingValues = PaddingValues(),
 ) {
-    val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val isMasterDetailSupported = isLandscape && with(LocalDensity.current) {
-        LocalWindowInfo.current.containerSize.width >= 840.dp.roundToPx()
-    }
-    val safePadding = WindowInsets.safeDrawing.asPaddingValues()
-    val topPadding = paddingValues.calculateTopPadding()
-        .coerceAtLeast(safePadding.calculateTopPadding())
-    val bottomPadding = paddingValues.calculateBottomPadding()
-        .coerceAtLeast(safePadding.calculateBottomPadding() + 12.dp)
+    val workspace by mainViewModel.groupWorkspace.collectAsStateWithLifecycle()
+    val activeGroupNodes by mainViewModel.activeGroupNodes.collectAsStateWithLifecycle()
+    val fallbackStates by mainViewModel.fallbackRuntimeStates.collectAsStateWithLifecycle()
+    val runtimeLatencies by mainViewModel.runtimeNodeLatencies.collectAsStateWithLifecycle()
+    val manualLatencies by mainViewModel.outboundLatency.collectAsStateWithLifecycle()
+    val refreshingGroups by mainViewModel.refreshingGroups.collectAsStateWithLifecycle()
 
-    val files by mainViewModel.configFiles.collectAsStateWithLifecycle()
-    val selectedFile by mainViewModel.selectedConfigFile.collectAsStateWithLifecycle()
-    var selectedFileForDetail by remember { mutableStateOf<File?>(null) }
-    var isEditorExpanded by remember { mutableStateOf(false) }
-    var showSubscriptionSheet by remember { mutableStateOf(false) }
-    val openSubscriptionSheet = {
-        showSubscriptionSheet = true
-    }
+    var showGroupEditor by remember { mutableStateOf(false) }
+    var editingGroup by remember { mutableStateOf<ProxyGroup?>(null) }
+    var addingNodesGroupTag by remember { mutableStateOf<String?>(null) }
+    var pendingFileImportGroupTag by remember { mutableStateOf<String?>(null) }
+    var editingNode by remember { mutableStateOf<ProxyNode?>(null) }
+    val expandedGroups = remember { mutableStateMapOf<String, Boolean>() }
 
-    BackHandler(enabled = isEditorExpanded) {
-        isEditorExpanded = false
-    }
-
-    LaunchedEffect(files, selectedFile) {
-        if (selectedFileForDetail == null || !files.contains(selectedFileForDetail)) {
-            selectedFileForDetail = selectedFile ?: files.firstOrNull()
+    var elapsedNowMs by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    LaunchedEffect(fallbackStates) {
+        if (fallbackStates.values.any { it.inFallback }) {
+            while (true) {
+                elapsedNowMs = SystemClock.elapsedRealtime()
+                delay(1000)
+            }
         }
     }
 
-    val snackbarHostState = remember { SnackbarHostState() }
-
-    val scope = rememberCoroutineScope()
-    val filePickerLauncher = rememberLauncherForActivityResult(
+    val fileImportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
-        if (uri != null) {
-            mainViewModel.importConfigFromFile(uri)
+        val targetGroup = pendingFileImportGroupTag
+        pendingFileImportGroupTag = null
+        if (uri != null && targetGroup != null) {
+            mainViewModel.importFromUriToGroup(targetGroup, uri)
         }
     }
 
-    if (files.isEmpty()) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .widthIn(max = 480.dp)
-                    .padding(start = 24.dp, end = 24.dp, top = topPadding + 24.dp, bottom = bottomPadding + 12.dp)
-                    .verticalScroll(rememberScrollState()),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.code),
-                    contentDescription = null,
-                    modifier = Modifier
-                        .padding(bottom = 12.dp),
-                    tint = MiuixTheme.colorScheme.onSurfaceSecondary
-                )
-                Text(
-                    text = stringResource(R.string.no_config_files),
-                    style = MiuixTheme.textStyles.title3,
-                    color = MiuixTheme.colorScheme.onSurface,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(bottom = 20.dp)
-                )
-
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column {
-                        ArrowPreference(
-                            title = stringResource(R.string.create_new_config_title),
-                            summary = stringResource(R.string.create_new_config_summary),
-                            onClick = { onCreateNewConfigFileAndEdit() }
-                        )
-                        ArrowPreference(
-                            title = stringResource(R.string.import_from_clipboard),
-                            summary = stringResource(R.string.import_from_clipboard_summary),
-                            onClick = {
-                                scope.launch {
-                                    delay(100)
-                                    onImportConfigFromClipboard()
-                                }
-                            }
-                        )
-                        ArrowPreference(
-                            title = stringResource(R.string.import_from_local_file_title),
-                            summary = stringResource(R.string.import_from_local_file_summary),
-                            onClick = { filePickerLauncher.launch(arrayOf("*/*")) }
-                        )
-                        ArrowPreference(
-                            title = stringResource(R.string.subscription_title),
-                            summary = stringResource(R.string.subscription_entry_summary),
-                            onClick = openSubscriptionSheet
-                        )
-                    }
-                }
-            }
-        }
-    } else if (isMasterDetailSupported) {
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
-        ) {
-            if (!isEditorExpanded) {
-                Box(
-                    modifier = Modifier
-                        .width(360.dp)
-                        .fillMaxHeight()
-                ) {
-                    ConfigListPane(
-                        files = files,
-                        selectedFile = selectedFile,
-                        selectedFileForDetail = selectedFileForDetail,
-                        onFileSelectedForDetail = { file ->
-                            selectedFileForDetail = file
-                        },
-                        onOpenFullscreenEditor = { file ->
-                            selectedFileForDetail = file
-                            isEditorExpanded = true
-                        },
-                        onReloadConfig = onReloadConfig,
-                        onEditConfigClick = onEditConfigClick,
-                        onDeleteConfigClick = onDeleteConfigClick,
-                        onCreateNewConfigFileAndEdit = onCreateNewConfigFileAndEdit,
-                        onImportConfigFromClipboard = onImportConfigFromClipboard,
-                        onImportSubscription = openSubscriptionSheet,
-                        mainViewModel = mainViewModel,
-                        listState = listState,
-                        isWideScreen = true,
-                        paddingValues = paddingValues
-                    )
-                }
-            }
-
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .padding(
-                        start = if (isEditorExpanded) 0.dp else 8.dp,
-                        top = topPadding,
-                        bottom = safePadding.calculateBottomPadding()
-                    )
-                    .consumeWindowInsets(
-                        PaddingValues(top = topPadding, bottom = safePadding.calculateBottomPadding())
-                    )
-            ) {
-                if (selectedFileForDetail != null) {
-                    val activeFile = selectedFileForDetail!!
-                    key(activeFile.absolutePath) {
-                        val editViewModel: ConfigEditViewModel = viewModel(
-                            key = activeFile.absolutePath,
-                            factory = ConfigEditViewModel.factory(
-                                application = mainViewModel.getApplication(),
-                                initialFilePath = activeFile.absolutePath,
-                                prefs = mainViewModel.prefs
-                            )
-                        )
-                        val collapseExpandedEditor = {
-                            if (isEditorExpanded) {
-                                isEditorExpanded = false
-                                mainViewModel.onConfigEditFinished(
-                                    editViewModel.consumeSavedSelectedConfig()
-                                )
-                            }
-                        }
-                        ConfigEditPane(
-                            onBackClick = collapseExpandedEditor,
-                            viewModel = editViewModel,
-                            snackbarHostState = snackbarHostState,
-                            showNavigationIcon = false,
-                            onToggleExpand = {
-                                if (isEditorExpanded) {
-                                    collapseExpandedEditor()
-                                } else {
-                                    isEditorExpanded = true
-                                }
-                            },
-                            isExpanded = isEditorExpanded
-                        )
-                    }
-                } else {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = stringResource(R.string.no_config_files),
-                            style = MiuixTheme.textStyles.body1,
-                            color = MiuixTheme.colorScheme.onSurfaceSecondary
-                        )
-                    }
-                }
-            }
-        }
-    } else {
-        ConfigListPane(
-            files = files,
-            selectedFile = selectedFile,
-            selectedFileForDetail = null,
-            onFileSelectedForDetail = {},
-            onOpenFullscreenEditor = { file ->
-                onEditConfigClick(file)
-            },
-            onReloadConfig = onReloadConfig,
-            onEditConfigClick = onEditConfigClick,
-            onDeleteConfigClick = onDeleteConfigClick,
-            onCreateNewConfigFileAndEdit = onCreateNewConfigFileAndEdit,
-            onImportConfigFromClipboard = onImportConfigFromClipboard,
-            onImportSubscription = openSubscriptionSheet,
-            mainViewModel = mainViewModel,
-            listState = listState,
-            isWideScreen = false,
-            paddingValues = paddingValues
-        )
+    val isWideScreen = with(LocalDensity.current) {
+        LocalWindowInfo.current.containerSize.width >= 600.dp.roundToPx()
     }
-
-    if (showSubscriptionSheet) {
-        MihomoSubscriptionSheet(
-            mainViewModel = mainViewModel,
-            onDismiss = { showSubscriptionSheet = false }
-        )
-    }
-}
-
-@Composable
-private fun ConfigListPane(
-    files: List<File>,
-    selectedFile: File?,
-    selectedFileForDetail: File?,
-    onFileSelectedForDetail: (File) -> Unit,
-    onOpenFullscreenEditor: (File) -> Unit,
-    onReloadConfig: () -> Unit,
-    onEditConfigClick: (File) -> Unit,
-    onDeleteConfigClick: (File) -> Unit,
-    onCreateNewConfigFileAndEdit: () -> Unit,
-    onImportConfigFromClipboard: () -> Unit,
-    onImportSubscription: () -> Unit,
-    mainViewModel: MainViewModel,
-    listState: LazyListState,
-    isWideScreen: Boolean,
-    paddingValues: PaddingValues = PaddingValues()
-) {
     val safePadding = WindowInsets.safeDrawing.asPaddingValues()
     val topPadding = paddingValues.calculateTopPadding()
         .coerceAtLeast(safePadding.calculateTopPadding()) + 12.dp
     val bottomPadding = paddingValues.calculateBottomPadding()
         .coerceAtLeast(safePadding.calculateBottomPadding() + 12.dp)
-    val showDeleteDialog = remember { mutableStateOf<File?>(null) }
-    var showAddConfigSheet by remember { mutableStateOf(false) }
 
-    val isServiceEnabled by mainViewModel.isServiceEnabled.collectAsStateWithLifecycle()
-    val lifecycleOwner = LocalLifecycleOwner.current
-    val scope = rememberCoroutineScope()
-
-    val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            mainViewModel.importConfigFromFile(uri)
-        }
-    }
-
-    var targetFileForReplace by remember { mutableStateOf<File?>(null) }
-    val replaceConfigPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        val target = targetFileForReplace
-        if (uri != null && target != null) {
-            mainViewModel.replaceConfigFile(uri, target)
-        }
-        targetFileForReplace = null
-    }
-
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                mainViewModel.refreshConfigFileList()
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        mainViewModel.refreshConfigFileList()
-    }
-
-    val hapticFeedback = LocalHapticFeedback.current
-    val reorderableLazyListState = rememberReorderableLazyListState(listState) { from, to ->
-        if (from.index > 0 && to.index > 0) {
-            mainViewModel.moveConfigFile(from.index - 1, to.index - 1)
-            hapticFeedback.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
-        }
-    }
-
-    LaunchedEffect(reorderableLazyListState) {
-        var hadDragged = false
-        snapshotFlow { reorderableLazyListState.isAnyItemDragging }.collect { isDragging ->
-            if (isDragging) {
-                hadDragged = true
-            } else if (hadDragged) {
-                hadDragged = false
-                mainViewModel.persistConfigFilesOrder()
-            }
-        }
-    }
-
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
+        contentAlignment = Alignment.TopCenter,
     ) {
         LazyColumn(
-            modifier = Modifier.fillMaxHeight(),
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize()
+                .then(if (isWideScreen) Modifier.widthIn(max = 840.dp) else Modifier),
             contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = topPadding, bottom = bottomPadding),
-            state = listState
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            item(key = "add_config_item") {
+            item(key = "workspace_add_group_bar") {
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 4.dp)
-                        .clickable { showAddConfigSheet = true }
+                        .clickable {
+                            editingGroup = null
+                            showGroupEditor = true
+                        }
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(14.dp),
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
+                        horizontalArrangement = Arrangement.Center,
                     ) {
                         Icon(
                             imageVector = Icons.Default.Add,
-                            contentDescription = "Add Config",
-                            tint = MiuixTheme.colorScheme.primary,
-                            modifier = Modifier.padding(end = 8.dp)
+                            contentDescription = stringResource(R.string.workspace_add_group),
+                            tint = MiuixTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(20.dp),
                         )
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = stringResource(R.string.add_config_profile),
-                            fontSize = MiuixTheme.textStyles.title4.fontSize,
-                            color = MiuixTheme.colorScheme.primary
+                            text = stringResource(R.string.workspace_add_group),
+                            style = MiuixTheme.textStyles.body1,
+                            color = MiuixTheme.colorScheme.onSurface,
                         )
                     }
                 }
             }
 
-            items(files, key = { it }) { file ->
-                ReorderableItem(state = reorderableLazyListState, key = file) {
-                    val isSelected = file == selectedFile
-                    val isEditingDetail = isWideScreen && file == selectedFileForDetail
-
-                    val cardModifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp)
-                        .then(
-                            if (isEditingDetail) Modifier.border(
-                                width = 2.dp,
-                                color = MiuixTheme.colorScheme.primary,
-                                shape = RoundedCornerShape(12.dp)
-                            ) else Modifier
+            if (workspace.groups.isEmpty()) {
+                item(key = "workspace_empty_hint") {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = stringResource(R.string.workspace_empty_hint),
+                            modifier = Modifier.padding(16.dp),
+                            style = MiuixTheme.textStyles.body2,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                         )
-                        .clickable {
-                            if (isWideScreen) {
-                                onFileSelectedForDetail(file)
+                    }
+                }
+            }
+
+            items(workspace.groups, key = { "group:${it.tag}" }) { group ->
+                val isExpanded = expandedGroups[group.tag] ?: (group.effectiveMembers().size <= 8)
+                WorkspaceGroupCard(
+                    group = group,
+                    workspace = workspace,
+                    isDefault = workspace.effectiveDefaultGroupTag() == group.tag,
+                    isExpanded = isExpanded,
+                    activeLeaf = activeGroupNodes[group.tag],
+                    fallbackInfo = fallbackStates[group.tag],
+                    elapsedNowMs = elapsedNowMs,
+                    isRefreshing = group.tag in refreshingGroups,
+                    latencyOf = { nodeTag ->
+                        runtimeLatencies[nodeTag]
+                            ?: manualLatencies[nodeTag]?.takeIf { it.alive }?.delayMs
+                    },
+                    onToggleExpand = { expandedGroups[group.tag] = !isExpanded },
+                    onEditGroup = {
+                        editingGroup = group
+                        showGroupEditor = true
+                    },
+                    onAddNodes = { addingNodesGroupTag = group.tag },
+                    onRefreshSubscription = { mainViewModel.refreshSubscriptionGroup(group.tag) },
+                    onSetDefault = { mainViewModel.setDefaultWorkspaceGroup(group.tag) },
+                    onSelectMember = { member -> mainViewModel.selectGroupMember(group.tag, member) },
+                    onMoveMember = { idx, delta -> mainViewModel.moveMemberInGroup(group.tag, idx, delta) },
+                    onRemoveMember = { member -> mainViewModel.removeMemberFromGroup(group.tag, member) },
+                    onCycleNodeStrategy = { node ->
+                        val idx = NODE_DNS_STRATEGY_CYCLE.indexOf(node.targetStrategy)
+                        val next = NODE_DNS_STRATEGY_CYCLE[(idx + 1) % NODE_DNS_STRATEGY_CYCLE.size]
+                        mainViewModel.updateNodeTargetStrategy(node.tag, next)
+                    },
+                    onEditNodeJson = { node -> editingNode = node },
+                )
+            }
+        }
+    }
+
+    if (showGroupEditor) {
+        WorkspaceGroupEditorSheet(
+            workspace = workspace,
+            editingGroup = editingGroup,
+            onSave = { originalTag, edited -> mainViewModel.saveWorkspaceGroup(originalTag, edited) },
+            onDelete = { tag -> mainViewModel.deleteWorkspaceGroup(tag) },
+            onDismiss = { showGroupEditor = false },
+        )
+    }
+
+    addingNodesGroupTag?.let { groupTag ->
+        AddNodesToGroupSheet(
+            groupTag = groupTag,
+            workspace = workspace,
+            onImportClipboard = {
+                addingNodesGroupTag = null
+                mainViewModel.importFromClipboardToGroup(groupTag)
+            },
+            onImportFile = {
+                addingNodesGroupTag = null
+                pendingFileImportGroupTag = groupTag
+                fileImportLauncher.launch(arrayOf("*/*"))
+            },
+            onAddRef = { ref ->
+                val err = mainViewModel.addMemberRefToGroup(groupTag, ref)
+                if (err != null) {
+                    mainViewModel.showSnackbar(err)
+                } else {
+                    addingNodesGroupTag = null
+                }
+            },
+            onDismiss = { addingNodesGroupTag = null },
+        )
+    }
+
+    editingNode?.let { node ->
+        NodeJsonEditorSheet(
+            node = node,
+            onSave = { rawJson -> mainViewModel.updateNodeJson(node.tag, rawJson) },
+            onDismiss = { editingNode = null },
+        )
+    }
+}
+
+@Composable
+private fun WorkspaceGroupCard(
+    group: ProxyGroup,
+    workspace: GroupWorkspace,
+    isDefault: Boolean,
+    isExpanded: Boolean,
+    activeLeaf: String?,
+    fallbackInfo: FallbackRuntimeInfo?,
+    elapsedNowMs: Long,
+    isRefreshing: Boolean,
+    latencyOf: (String) -> Long?,
+    onToggleExpand: () -> Unit,
+    onEditGroup: () -> Unit,
+    onAddNodes: () -> Unit,
+    onRefreshSubscription: () -> Unit,
+    onSetDefault: () -> Unit,
+    onSelectMember: (GroupMemberRef) -> Unit,
+    onMoveMember: (Int, Int) -> Unit,
+    onRemoveMember: (GroupMemberRef) -> Unit,
+    onCycleNodeStrategy: (ProxyNode) -> Unit,
+    onEditNodeJson: (ProxyNode) -> Unit,
+) {
+    val members = group.effectiveMembers()
+    val sourceLabel = if (group.sourceType == GroupSourceType.SUBSCRIPTION) {
+        stringResource(R.string.workspace_source_subscription)
+    } else {
+        stringResource(R.string.workspace_source_local)
+    }
+    val metaLine = buildString {
+        append(strategyShortLabel(group.strategy))
+        append(" · ")
+        append(sourceLabel)
+        append(" · ")
+        append("${members.size}")
+        if (isDefault) {
+            append(" · ")
+            append(stringResource(R.string.workspace_default_badge))
+        }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.defaultColors(
+            color = if (isDefault) MiuixTheme.colorScheme.surfaceContainer else MiuixTheme.colorScheme.surfaceContainerLow
+        ),
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onToggleExpand),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = group.tag,
+                        style = MiuixTheme.textStyles.title4,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = metaLine,
+                        style = MiuixTheme.textStyles.body2,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                    activeLeaf?.let { leaf ->
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "${stringResource(R.string.outbound_group_live_leaf)}: $leaf",
+                            style = MiuixTheme.textStyles.body2,
+                            color = MiuixTheme.colorScheme.primary,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                    if (fallbackInfo != null && fallbackInfo.inFallback) {
+                        val remainSec = ((fallbackInfo.nextRecoveryAtElapsedMs - elapsedNowMs) / 1000L)
+                            .coerceAtLeast(0L)
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = stringResource(R.string.workspace_status_in_fallback, remainSec.toInt()),
+                            style = MiuixTheme.textStyles.body2,
+                            color = MiuixTheme.colorScheme.error,
+                        )
+                    }
+                }
+
+                if (group.sourceType == GroupSourceType.SUBSCRIPTION) {
+                    IconButton(onClick = onRefreshSubscription, enabled = isRefreshing == false) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = stringResource(R.string.workspace_refresh_subscription),
+                            tint = MiuixTheme.colorScheme.onSurface,
+                        )
+                    }
+                } else {
+                    IconButton(onClick = onAddNodes) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = stringResource(R.string.workspace_add_nodes),
+                            tint = MiuixTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+                IconButton(onClick = onEditGroup) {
+                    Icon(
+                        painter = painterResource(R.drawable.edit),
+                        contentDescription = stringResource(R.string.outbound_group_edit, group.tag),
+                        tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                }
+                IconButton(onClick = onToggleExpand) {
+                    Icon(
+                        imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                }
+            }
+
+            if (isExpanded) {
+                Spacer(modifier = Modifier.height(8.dp))
+                if (members.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.workspace_members_empty),
+                        style = MiuixTheme.textStyles.body2,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        modifier = Modifier.padding(vertical = 6.dp),
+                    )
+                } else {
+                    members.forEachIndexed { index, member ->
+                        val node = if (member.isGroup == false) workspace.nodeByTag(member.tag) else null
+                        val isActiveMember = when {
+                            member.isGroup == false && activeLeaf == member.tag -> true
+                            group.strategy == GroupStrategy.SELECT && group.selectedMember == member -> true
+                            else -> false
+                        }
+                        val roleBadge = when {
+                            group.strategy == GroupStrategy.FALLBACK && index == 0 ->
+                                "[${stringResource(R.string.workspace_role_primary)}] "
+                            group.strategy == GroupStrategy.FALLBACK ->
+                                "[${stringResource(R.string.workspace_role_fallback, index)}] "
+                            else -> ""
+                        }
+                        val titleText = roleBadge + if (member.isGroup) {
+                            stringResource(R.string.outbound_group_target_group, member.tag)
+                        } else {
+                            member.tag
+                        }
+                        val latencyMs = if (member.isGroup == false) latencyOf(member.tag) else null
+                        val subText = buildString {
+                            if (member.isGroup) {
+                                val child = workspace.groupByTag(member.tag)
+                                append(child?.let { strategyShortLabel(it.strategy) } ?: "group")
+                            } else if (node != null) {
+                                append(node.protocol)
+                                append(" · DNS: ")
+                                append(node.targetStrategy.ifBlank { "default" })
+                            } else {
+                                append("builtin")
                             }
-                            mainViewModel.updateSelectedConfigFile(file)
-                            if (isServiceEnabled) {
-                                Log.d(
-                                    TAG,
-                                    "Config selected while service is running, requesting reload."
-                                )
-                                onReloadConfig()
+                            if (latencyMs != null) {
+                                append(" · ${latencyMs}ms")
                             }
                         }
 
-                    Card(
-                        modifier = cardModifier,
-                        colors = CardDefaults.defaultColors(
-                            color = if (isSelected) MiuixTheme.colorScheme.primaryContainer
-                            else MiuixTheme.colorScheme.surfaceContainer
-                        )
-                    ) {
-                        Column(
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .longPressDraggableHandle()
-                                .padding(start = 16.dp, end = 8.dp, top = 14.dp, bottom = 8.dp)
+                                .clickable { onSelectMember(member) }
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            val extIndex = file.name.lastIndexOf('.')
-                            val displayName = if (extIndex > 0) file.name.substring(0, extIndex) else file.name
-                            val extTag = if (extIndex > 0) file.name.substring(extIndex + 1).uppercase() else "JSON"
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = titleText,
+                                    style = MiuixTheme.textStyles.body1,
+                                    color = if (isActiveMember) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = subText,
+                                    style = MiuixTheme.textStyles.body2,
+                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
 
-                            Text(
-                                text = displayName,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(end = 8.dp),
-                                fontSize = MiuixTheme.textStyles.title4.fontSize,
-                                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
-                                color = if (isSelected) MiuixTheme.colorScheme.onPrimaryContainer else MiuixTheme.colorScheme.onSurface,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Surface(
-                                    color = if (isSelected) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.secondaryContainer,
-                                    shape = RoundedCornerShape(6.dp)
+                            if (node != null) {
+                                Text(
+                                    text = node.targetStrategy.ifBlank { "DNS" },
+                                    style = MiuixTheme.textStyles.footnote1,
+                                    color = MiuixTheme.colorScheme.primary,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier
+                                        .clickable { onCycleNodeStrategy(node) }
+                                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                                )
+                                IconButton(
+                                    onClick = { onEditNodeJson(node) },
+                                    modifier = Modifier.size(32.dp),
                                 ) {
-                                    Text(
-                                        text = extTag,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                        fontSize = MiuixTheme.textStyles.body2.fontSize,
-                                        color = if (isSelected) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onSecondaryContainer
+                                    Icon(
+                                        painter = painterResource(R.drawable.code),
+                                        contentDescription = stringResource(R.string.workspace_edit_node_json),
+                                        tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                        modifier = Modifier.size(18.dp),
                                     )
                                 }
+                            }
 
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically
+                            if (members.size > 1) {
+                                IconButton(
+                                    onClick = { onMoveMember(index, -1) },
+                                    enabled = index > 0,
+                                    modifier = Modifier.size(28.dp),
                                 ) {
-                                    IconButton(onClick = {
-                                        onOpenFullscreenEditor(file)
-                                    }) {
-                                        Icon(
-                                            painter = painterResource(R.drawable.edit),
-                                            contentDescription = stringResource(R.string.edit),
-                                            tint = if (isSelected) MiuixTheme.colorScheme.onPrimaryContainer else MiuixTheme.colorScheme.onSurface
-                                        )
-                                    }
-                                    IconButton(onClick = {
-                                        targetFileForReplace = file
-                                        replaceConfigPickerLauncher.launch(arrayOf("*/*"))
-                                    }) {
-                                        Icon(
-                                            painter = painterResource(R.drawable.upload_file),
-                                            contentDescription = stringResource(R.string.replace_config),
-                                            tint = if (isSelected) MiuixTheme.colorScheme.onPrimaryContainer else MiuixTheme.colorScheme.onSurface
-                                        )
-                                    }
-                                    IconButton(onClick = { showDeleteDialog.value = file }) {
-                                        Icon(
-                                            painter = painterResource(R.drawable.delete),
-                                            contentDescription = stringResource(R.string.delete),
-                                            tint = if (isSelected) MiuixTheme.colorScheme.onPrimaryContainer else MiuixTheme.colorScheme.onSurface
-                                        )
-                                    }
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardArrowUp,
+                                        contentDescription = stringResource(R.string.outbound_group_move_up, member.tag),
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { onMoveMember(index, 1) },
+                                    enabled = index + 1 < members.size,
+                                    modifier = Modifier.size(28.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardArrowDown,
+                                        contentDescription = stringResource(R.string.outbound_group_move_down, member.tag),
+                                        modifier = Modifier.size(18.dp),
+                                    )
                                 }
                             }
+
+                            IconButton(
+                                onClick = { onRemoveMember(member) },
+                                modifier = Modifier.size(30.dp),
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.delete),
+                                    contentDescription = stringResource(R.string.outbound_group_remove_fallback, member.tag),
+                                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
                         }
+                    }
+                }
+
+                if (isDefault == false) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.workspace_set_default_group),
+                            style = MiuixTheme.textStyles.body2,
+                            color = MiuixTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clickable(onClick = onSetDefault)
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
                     }
                 }
             }
         }
     }
+}
 
-    if (showAddConfigSheet) {
-        GlassBottomSheet(
-            title = stringResource(R.string.add_config_profile),
-            show = true,
-            backdrop = LocalLayerBackdrop.current,
-            onDismissRequest = { showAddConfigSheet = false },
-            startAction = {
-                IconButton(onClick = { showAddConfigSheet = false }) {
-                    Icon(imageVector = MiuixIcons.Close, contentDescription = stringResource(R.string.cancel))
-                }
-            },
-            content = {
-                Column(modifier = Modifier.padding(bottom = 16.dp)) {
-                    ArrowPreference(
-                        title = stringResource(R.string.create_new_config_title),
-                        summary = stringResource(R.string.create_new_config_summary),
-                        onClick = {
-                            showAddConfigSheet = false
-                            onCreateNewConfigFileAndEdit()
-                        }
+@Composable
+private fun AddNodesToGroupSheet(
+    groupTag: String,
+    workspace: GroupWorkspace,
+    onImportClipboard: () -> Unit,
+    onImportFile: () -> Unit,
+    onAddRef: (GroupMemberRef) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var selectedRef by remember { mutableStateOf<GroupMemberRef?>(null) }
+    val refs = remember(workspace, groupTag) {
+        val groupRefs = workspace.groups
+            .filter { it.tag != groupTag }
+            .map { GroupMemberRef(it.tag, isGroup = true) }
+        val nodeRefs = workspace.allNodes().map { GroupMemberRef(it.tag, isGroup = false) }
+        val builtins = BUILTIN_GROUP_TARGET_TAGS.map { GroupMemberRef(it, isGroup = false) }
+        (groupRefs + nodeRefs + builtins).distinct()
+    }
+
+    GlassBottomSheet(
+        title = "${stringResource(R.string.workspace_add_nodes)} · $groupTag",
+        show = true,
+        backdrop = LocalLayerBackdrop.current,
+        onDismissRequest = onDismiss,
+        startAction = {
+            IconButton(onClick = onDismiss) {
+                Icon(imageVector = MiuixIcons.Close, contentDescription = stringResource(R.string.cancel))
+            }
+        },
+        content = {
+            Column(modifier = Modifier.padding(bottom = 16.dp)) {
+                ArrowPreference(
+                    title = stringResource(R.string.workspace_import_clipboard_nodes),
+                    summary = stringResource(R.string.workspace_import_clipboard_nodes_summary),
+                    onClick = onImportClipboard,
+                )
+                ArrowPreference(
+                    title = stringResource(R.string.workspace_import_file_nodes),
+                    summary = stringResource(R.string.workspace_import_file_nodes_summary),
+                    onClick = onImportFile,
+                )
+                if (refs.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    SmallTitle(text = stringResource(R.string.workspace_add_nested_ref))
+                    val labels = listOf(stringResource(R.string.outbound_group_select_target)) +
+                        refs.map { workspaceMemberLabel(it) }
+                    val selectedIndex = refs.indexOfFirst { it == selectedRef } + 1
+                    OverlayDropdownPreference(
+                        title = stringResource(R.string.workspace_add_nested_ref),
+                        items = labels,
+                        selectedIndex = selectedIndex,
+                        onSelectedIndexChange = { idx ->
+                            selectedRef = if (idx <= 0) null else refs.getOrNull(idx - 1)
+                        },
                     )
-                    ArrowPreference(
-                        title = stringResource(R.string.import_from_clipboard),
-                        summary = stringResource(R.string.import_from_clipboard_summary),
-                        onClick = {
-                            showAddConfigSheet = false
-                            scope.launch {
-                                delay(100)
-                                onImportConfigFromClipboard()
-                            }
-                        }
-                    )
-                    ArrowPreference(
-                        title = stringResource(R.string.import_from_local_file_title),
-                        summary = stringResource(R.string.import_from_local_file_summary),
-                        onClick = {
-                            showAddConfigSheet = false
-                            filePickerLauncher.launch(arrayOf("*/*"))
-                        }
-                    )
-                    ArrowPreference(
-                        title = stringResource(R.string.subscription_title),
-                        summary = stringResource(R.string.subscription_entry_summary),
-                        onClick = {
-                            showAddConfigSheet = false
-                            onImportSubscription()
-                        }
-                    )
+                    Button(
+                        onClick = { selectedRef?.let(onAddRef) },
+                        enabled = selectedRef != null,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                    ) {
+                        Text(text = stringResource(R.string.outbound_group_add_fallback))
+                    }
                 }
             }
-        )
-    }
-
-    showDeleteDialog.value?.let { fileToDelete ->
-        ConfirmOverlayDialog(
-            title = stringResource(R.string.delete_config),
-            summary = fileToDelete.name,
-            confirmText = stringResource(R.string.confirm),
-            cancelText = stringResource(R.string.cancel),
-            onConfirm = {
-                showDeleteDialog.value = null
-                onDeleteConfigClick(fileToDelete)
-            },
-            onDismiss = { showDeleteDialog.value = null }
-        )
-    }
+        },
+    )
 }

@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.simplexray.re.R
 import com.simplexray.re.common.ConfigUtils
 import com.simplexray.re.common.FilenameValidator
+import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.common.isConfigFile
 import com.simplexray.re.data.source.FileManager
 import com.simplexray.re.prefs.Preferences
@@ -133,18 +134,23 @@ class ConfigEditViewModel(
     fun saveConfigFile(rawContent: String, documentVersion: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             val oldFilePath = _configFile.absolutePath
+            val isGlobalConfig = _configFile.name == GlobalConfigStore.GLOBAL_CONFIG_FILENAME
+            val isLuaScript = _configFile.name.lowercase().endsWith(".lua")
 
-            var newFilename = _filename.value.trim()
-
-            val validationError = validateFilename(newFilename)
-            if (validationError != null) {
-                _uiEvent.trySend(ConfigEditUiEvent.ShowSnackbar(validationError))
-                return@launch
-            }
-
-            val originalExt = _configFile.extension.let { if (it.isNotEmpty()) ".$it" else ".json" }
-            if (!newFilename.isConfigFile()) {
-                newFilename += originalExt
+            var newFilename = if (isGlobalConfig) {
+                GlobalConfigStore.GLOBAL_CONFIG_FILENAME
+            } else {
+                val trimmed = _filename.value.trim()
+                val validationError = validateFilename(trimmed)
+                if (validationError != null) {
+                    _uiEvent.trySend(ConfigEditUiEvent.ShowSnackbar(validationError))
+                    return@launch
+                }
+                when {
+                    isLuaScript -> if (trimmed.lowercase().endsWith(".lua")) trimmed else "$trimmed.lua"
+                    trimmed.isConfigFile() -> trimmed
+                    else -> trimmed + _configFile.extension.let { if (it.isNotEmpty()) ".$it" else ".json" }
+                }
             }
 
             val parentDir = _configFile.parentFile
@@ -185,7 +191,10 @@ class ConfigEditViewModel(
                     _configFile = newFile
                     _originalFilePath = newFile.absolutePath
                 }
-                if (prefs.selectedConfigPath == _configFile.absolutePath) {
+                if (isGlobalConfig) {
+                    GlobalConfigStore.notifyModified()
+                    _savedSelectedConfig = true
+                } else if (isLuaScript || prefs.selectedConfigPath == _configFile.absolutePath) {
                     _savedSelectedConfig = true
                 }
 

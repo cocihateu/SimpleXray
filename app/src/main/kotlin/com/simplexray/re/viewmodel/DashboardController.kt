@@ -5,8 +5,10 @@ import android.util.Log
 import com.simplexray.re.common.ConfigUtils
 import com.simplexray.re.common.CoreStatsClient
 import com.simplexray.re.common.TcpPing
+import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.common.config.GroupProfile
 import com.simplexray.re.common.config.GroupProfileStore
+import com.simplexray.re.common.config.GroupWorkspaceStore
 import com.simplexray.re.prefs.Preferences
 import com.simplexray.re.service.GroupRuntimeStatus
 import kotlinx.coroutines.CoroutineScope
@@ -42,6 +44,8 @@ internal class DashboardController(
     private val statsClientLock = Any()
     private var latencyTestJob: Job? = null
     private val groupProfileStore = GroupProfileStore(context)
+    private val globalConfigStore = GlobalConfigStore(context)
+    private val workspaceStore = GroupWorkspaceStore(context)
     private val groupProfileLock = Any()
     private var groupProfileRefreshJob: Job? = null
     private var groupProfileObservationJob: Job? = null
@@ -64,17 +68,16 @@ internal class DashboardController(
     )
     val groupProfile: StateFlow<GroupProfile> = _groupProfile.asStateFlow()
 
-    val activeGroupNodes: StateFlow<Map<String, String>> = combine(
-        selectedConfig,
-        GroupRuntimeStatus.activePath,
-        GroupRuntimeStatus.activeNodes,
-    ) { file, activePath, nodes ->
-        if (file != null && file.absolutePath == activePath) nodes else emptyMap()
-    }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
+    val activeGroupNodes: StateFlow<Map<String, String>> = GroupRuntimeStatus.activeNodes
 
     init {
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            selectedConfig.collect { refreshConfig() }
+            workspaceStore.observe().collect { workspace ->
+                _outboundNodes.value = workspace.allNodes().map {
+                    ConfigUtils.OutboundInfo(tag = it.tag, protocol = it.protocol)
+                }
+                _outboundLoadError.value = null
+            }
         }
     }
 
@@ -227,10 +230,10 @@ internal class DashboardController(
     }
 
     suspend fun testOutboundLatency() {
-        val file = selectedConfig.value ?: return
         val content = withContext(Dispatchers.IO) {
-            runCatching { file.readText() }.getOrNull()
-        } ?: return
+            val workspace = workspaceStore.load()
+            workspace.assembleRuntimeConfig(globalConfigStore.loadJson()).toString()
+        }
         val endpoints = ConfigUtils.extractOutboundEndpoints(content)
         if (endpoints.isEmpty()) {
             _outboundLatency.value = emptyMap()

@@ -1,5 +1,6 @@
 package com.simplexray.re.ui.screens
 
+import android.os.SystemClock
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -44,12 +46,13 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.simplexray.re.R
-import com.simplexray.re.common.ConfigUtils
-import com.simplexray.re.common.config.GroupProfile
-import com.simplexray.re.common.config.OutboundGroup
+import com.simplexray.re.common.config.GroupStrategy
+import com.simplexray.re.common.config.ProxyGroup
+import com.simplexray.re.common.config.ProxyNode
 import com.simplexray.re.common.formatBytes
 import com.simplexray.re.common.formatNumber
 import com.simplexray.re.common.formatUptime
+import com.simplexray.re.service.FallbackRuntimeInfo
 import com.simplexray.re.viewmodel.MainViewModel
 import com.simplexray.re.viewmodel.OutboundLatency
 import kotlinx.coroutines.delay
@@ -75,22 +78,24 @@ fun DashboardScreen(
     paddingValues: PaddingValues = PaddingValues()
 ) {
     val coreStats by mainViewModel.coreStatsState.collectAsStateWithLifecycle()
-    val outboundNodes by mainViewModel.outboundNodes.collectAsStateWithLifecycle()
     val outboundLoadError by mainViewModel.outboundLoadError.collectAsStateWithLifecycle()
     val outboundLatency by mainViewModel.outboundLatency.collectAsStateWithLifecycle()
-    val groupProfile by mainViewModel.groupProfile.collectAsStateWithLifecycle()
+    val runtimeLatencies by mainViewModel.runtimeNodeLatencies.collectAsStateWithLifecycle()
+    val workspace by mainViewModel.groupWorkspace.collectAsStateWithLifecycle()
     val activeGroupNodes by mainViewModel.activeGroupNodes.collectAsStateWithLifecycle()
+    val fallbackStates by mainViewModel.fallbackRuntimeStates.collectAsStateWithLifecycle()
     val isServiceEnabled by mainViewModel.isServiceEnabled.collectAsStateWithLifecycle()
-    val nodeTags = remember(outboundNodes) { outboundNodes.map { it.tag }.toSet() }
+    val allNodes = remember(workspace) { workspace.allNodes() }
     var showGroupEditor by remember { mutableStateOf(false) }
-    var editingGroup by remember { mutableStateOf<OutboundGroup?>(null) }
+    var editingGroup by remember { mutableStateOf<ProxyGroup?>(null) }
+    var elapsedNowMs by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     val lifecycleOwner = LocalLifecycleOwner.current
 
     LaunchedEffect(Unit) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            mainViewModel.refreshOutboundNodes()
             launch {
                 while (isActive) {
+                    elapsedNowMs = SystemClock.elapsedRealtime()
                     mainViewModel.updateCoreStats()
                     delay(1000)
                 }
@@ -233,7 +238,7 @@ fun DashboardScreen(
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                if (groupProfile.groups.isEmpty() && outboundLoadError == null) {
+                if (workspace.groups.isEmpty() && outboundLoadError == null) {
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Text(
                             text = stringResource(R.string.outbound_group_empty),
@@ -245,10 +250,12 @@ fun DashboardScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                 }
             }
-            items(groupProfile.groups, key = { "outbound_group:${it.tag}" }) { group ->
-                OutboundGroupCard(
+            items(workspace.groups, key = { "outbound_group:${it.tag}" }) { group ->
+                DashboardGroupCard(
                     group = group,
                     activeLeaf = activeGroupNodes[group.tag],
+                    fallbackInfo = fallbackStates[group.tag],
+                    elapsedNowMs = elapsedNowMs,
                     onEdit = {
                         editingGroup = group
                         showGroupEditor = true
@@ -260,7 +267,7 @@ fun DashboardScreen(
                 Spacer(modifier = Modifier.height(12.dp))
             }
 
-            if (outboundNodes.isNotEmpty()) {
+            if (allNodes.isNotEmpty()) {
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -283,24 +290,13 @@ fun DashboardScreen(
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                 }
-                items(outboundNodes, key = { "outbound_node:${it.tag}" }) { node ->
-                    OutboundNodeCard(
+                items(allNodes, key = { "outbound_node:${it.tag}" }) { node ->
+                    DashboardNodeCard(
                         node = node,
+                        runtimeLatencyMs = runtimeLatencies[node.tag],
                         latency = outboundLatency[node.tag],
-                        serviceEnabled = isServiceEnabled,
-                        targetStrategy = groupProfile.targetStrategies[node.tag],
                         onTargetStrategyChange = { strategy ->
-                            val targetStrategies = if (strategy == null) {
-                                groupProfile.targetStrategies - node.tag
-                            } else {
-                                groupProfile.targetStrategies + (node.tag to strategy)
-                            }
-                            mainViewModel.saveGroupProfile(
-                                GroupProfile(
-                                    groups = groupProfile.groups,
-                                    targetStrategies = targetStrategies
-                                )
-                            )
+                            mainViewModel.updateNodeTargetStrategy(node.tag, strategy)
                         }
                     )
                     Spacer(modifier = Modifier.height(8.dp))
@@ -313,14 +309,11 @@ fun DashboardScreen(
     }
 
     if (showGroupEditor) {
-        OutboundGroupEditor(
-            profile = groupProfile,
-            nodeTags = nodeTags,
-            group = editingGroup,
-            onSave = { profile ->
-                mainViewModel.saveGroupProfile(profile)
-                showGroupEditor = false
-            },
+        WorkspaceGroupEditorSheet(
+            workspace = workspace,
+            editingGroup = editingGroup,
+            onSave = { originalTag, edited -> mainViewModel.saveWorkspaceGroup(originalTag, edited) },
+            onDelete = { tag -> mainViewModel.deleteWorkspaceGroup(tag) },
             onDismiss = { showGroupEditor = false }
         )
     }
@@ -349,22 +342,16 @@ fun StatRow(label: String, value: String) {
 }
 
 @Composable
-private fun OutboundGroupCard(
-    group: OutboundGroup,
+private fun DashboardGroupCard(
+    group: ProxyGroup,
     activeLeaf: String?,
+    fallbackInfo: FallbackRuntimeInfo?,
+    elapsedNowMs: Long,
     onEdit: () -> Unit
 ) {
-    val fallbackSummary = if (group.fallbacks.isEmpty()) {
-        stringResource(R.string.outbound_group_primary_only)
-    } else {
-        group.fallbacks.mapIndexed { index, target ->
-            stringResource(
-                R.string.outbound_group_ordered_target,
-                index + 1,
-                outboundGroupTargetLabel(target)
-            )
-        }.joinToString("\n")
-    }
+    val members = group.effectiveMembers()
+    val primaryLabel = members.firstOrNull()?.let { workspaceMemberLabel(it) }
+        ?: stringResource(R.string.outbound_group_live_idle)
 
     Card(
         modifier = Modifier
@@ -377,7 +364,7 @@ private fun OutboundGroupCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = group.tag,
+                    text = "${group.tag} (${strategyShortLabel(group.strategy)})",
                     style = MiuixTheme.textStyles.title4,
                     modifier = Modifier.weight(1f)
                 )
@@ -390,29 +377,42 @@ private fun OutboundGroupCard(
                 }
             }
             OutboundGroupDetail(
-                label = stringResource(R.string.outbound_group_primary),
-                value = outboundGroupTargetLabel(group.primary)
-            )
-            OutboundGroupDetail(
                 label = stringResource(R.string.outbound_group_live_leaf),
                 value = activeLeaf ?: stringResource(R.string.outbound_group_live_idle)
             )
-            OutboundGroupDetail(
-                label = stringResource(R.string.outbound_group_fallbacks),
-                value = fallbackSummary
-            )
-            StatRow(
-                label = stringResource(R.string.outbound_group_interval_seconds),
-                value = group.intervalSeconds.toString()
-            )
-            StatRow(
-                label = stringResource(R.string.outbound_group_recovery_interval_seconds),
-                value = group.recoveryIntervalSeconds.toString()
-            )
-            StatRow(
-                label = stringResource(R.string.outbound_group_trust_seconds),
-                value = group.trustSeconds.toString()
-            )
+            if (fallbackInfo != null && fallbackInfo.inFallback) {
+                val remainSec = ((fallbackInfo.nextRecoveryAtElapsedMs - elapsedNowMs) / 1000L)
+                    .coerceAtLeast(0L)
+                Text(
+                    text = stringResource(R.string.workspace_status_in_fallback, remainSec.toInt()),
+                    style = MiuixTheme.textStyles.body2,
+                    color = MiuixTheme.colorScheme.error,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+            }
+            if (group.strategy == GroupStrategy.FALLBACK) {
+                OutboundGroupDetail(
+                    label = stringResource(R.string.outbound_group_primary),
+                    value = primaryLabel
+                )
+                StatRow(
+                    label = stringResource(R.string.workspace_failover_timeout_seconds),
+                    value = "${group.failoverTimeoutSeconds}s"
+                )
+                StatRow(
+                    label = stringResource(R.string.outbound_group_recovery_interval_seconds),
+                    value = "${group.recoveryIntervalSeconds}s"
+                )
+            } else if (group.strategy == GroupStrategy.URL_TEST) {
+                StatRow(
+                    label = stringResource(R.string.outbound_group_interval_seconds),
+                    value = "${group.intervalSeconds}s"
+                )
+                StatRow(
+                    label = stringResource(R.string.outbound_group_trust_seconds),
+                    value = "${group.trustSeconds}s"
+                )
+            }
         }
     }
 }
@@ -438,27 +438,29 @@ private fun OutboundGroupDetail(label: String, value: String) {
 }
 
 @Composable
-private fun OutboundNodeCard(
-    node: ConfigUtils.OutboundInfo,
+private fun DashboardNodeCard(
+    node: ProxyNode,
+    runtimeLatencyMs: Long?,
     latency: OutboundLatency?,
-    serviceEnabled: Boolean,
-    targetStrategy: String?,
-    onTargetStrategyChange: (String?) -> Unit
+    onTargetStrategyChange: (String) -> Unit
 ) {
     val nowSeconds = System.currentTimeMillis() / 1000
     val stale = latency != null && nowSeconds - latency.lastTryTime > LatencyStaleSeconds
     val goodColor = MiuixTheme.colorScheme.primary
     val fairColor = lerp(goodColor, MiuixTheme.colorScheme.error, 0.5f)
 
+    val effectiveMs = runtimeLatencyMs
+        ?: latency?.takeIf { !stale && it.alive }?.delayMs
+
     val (text, color) = when {
-        !serviceEnabled || latency == null || stale || !latency.alive ->
+        effectiveMs == null ->
             "-ms" to MiuixTheme.colorScheme.onSurfaceVariantSummary
-        latency.delayMs <= 100 ->
-            "${latency.delayMs}ms" to goodColor
-        latency.delayMs <= 300 ->
-            "${latency.delayMs}ms" to fairColor
+        effectiveMs <= 100 ->
+            "${effectiveMs}ms" to goodColor
+        effectiveMs <= 300 ->
+            "${effectiveMs}ms" to fairColor
         else ->
-            "${latency.delayMs}ms" to MiuixTheme.colorScheme.error
+            "${effectiveMs}ms" to MiuixTheme.colorScheme.error
     }
 
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -494,20 +496,26 @@ private fun OutboundNodeCard(
                 title = stringResource(R.string.outbound_group_target_strategy),
                 items = listOf(
                     stringResource(R.string.outbound_group_strategy_original),
+                    stringResource(R.string.outbound_group_strategy_use_ipv4),
                     stringResource(R.string.outbound_group_strategy_force_ip),
-                    stringResource(R.string.outbound_group_strategy_as_is)
+                    stringResource(R.string.outbound_group_strategy_as_is),
+                    stringResource(R.string.outbound_group_strategy_use_ip)
                 ),
-                selectedIndex = when (targetStrategy) {
-                    "ForceIP" -> 1
-                    "AsIs" -> 2
+                selectedIndex = when (node.targetStrategy) {
+                    "UseIPv4" -> 1
+                    "ForceIP" -> 2
+                    "AsIs" -> 3
+                    "UseIP" -> 4
                     else -> 0
                 },
                 onSelectedIndexChange = { index ->
                     onTargetStrategyChange(
                         when (index) {
-                            1 -> "ForceIP"
-                            2 -> "AsIs"
-                            else -> null
+                            1 -> "UseIPv4"
+                            2 -> "ForceIP"
+                            3 -> "AsIs"
+                            4 -> "UseIP"
+                            else -> ""
                         }
                     )
                 }
