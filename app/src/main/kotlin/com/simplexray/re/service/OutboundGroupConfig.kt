@@ -268,8 +268,11 @@ internal class OutboundGroupConfig(
             else -> appendLine("  local tag, rule, err = original(ctx, inbound, sp, tp, lp, domain, net, proto, user, ...)")
         }
         appendLine("  if err then return tag, rule, err end")
-        appendLine("  local effective = (tag and tag ~= '' and tag) or ${luaString(defaultGroupTag)}")
-        appendLine("  effective = bindings[effective] or effective")
+        if (workspace.routingMode == "global") {
+            appendLine("  local effective = ${luaString(defaultGroupTag)}")
+        } else {
+            appendLine("  local effective = (tag and tag ~= '' and (bindings[tag] or tag)) or ${luaString(defaultGroupTag)}")
+        }
         appendLine("  local relay = relays[effective]")
         appendLine("  if relay then return relay, effective .. '/' .. (rule or 'default'), nil end")
         appendLine("  local bal = balancers[effective]")
