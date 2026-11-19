@@ -297,14 +297,17 @@ internal fun WorkspaceGroupEditorSheet(
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 modifier = Modifier.fillMaxWidth(),
                             )
-                            TextField(
-                                value = testUrl,
-                                onValueChange = { testUrl = it },
-                                label = stringResource(R.string.workspace_url_test_url),
-                                modifier = Modifier.fillMaxWidth(),
-                            )
                         }
                     }
+                }
+
+                item {
+                    TextField(
+                        value = testUrl,
+                        onValueChange = { testUrl = it },
+                        label = "测活与延迟请求地址",
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
 
                 item {
@@ -584,7 +587,7 @@ internal fun workspaceMemberLabel(member: GroupMemberRef): String = when {
 
 @Composable
 internal fun strategyShortLabel(strategy: GroupStrategy): String = when (strategy) {
-    GroupStrategy.FALLBACK -> "fallback"
-    GroupStrategy.URL_TEST -> "url-test"
-    GroupStrategy.SELECT -> "select"
+    GroupStrategy.FALLBACK -> "主备回落"
+    GroupStrategy.URL_TEST -> "自动测速"
+    GroupStrategy.SELECT -> "手动选择"
 }

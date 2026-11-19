@@ -2,72 +2,29 @@ package com.simplexray.re.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.simplexray.re.common.config.GroupSourceType
 import com.simplexray.re.common.config.GroupStrategy
-import com.simplexray.re.common.config.GroupWorkspace
 import com.simplexray.re.common.config.ProxyGroup
-import com.simplexray.re.ui.components.ConfirmOverlayDialog
 import com.simplexray.re.ui.scaffold.LocalLayerBackdrop
-import com.simplexray.re.viewmodel.MainViewModel
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.glass.GlassBottomSheet
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-
-internal fun LazyListScope.groupManagementItems(
-    mainViewModel: MainViewModel,
-    workspace: GroupWorkspace,
-    refreshing: Set<String>,
-    onEdit: (ProxyGroup) -> Unit,
-    onDelete: (String) -> Unit,
-) {
-    if (workspace.groups.isEmpty()) {
-        item { Text("点右上角 + 新建基本或订阅分组。", modifier = Modifier.padding(16.dp)) }
-    }
-    items(workspace.groups, key = { "source:${it.tag}" }) { group ->
-            Card(Modifier.fillMaxWidth().padding(top = 12.dp)) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(group.tag, style = MiuixTheme.textStyles.title3)
-                    Text("${if (group.sourceType == GroupSourceType.LOCAL) "基本" else "订阅"} · ${group.nodes.size} 个节点",
-                        style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { onEdit(group) }, modifier = Modifier.weight(1f)) { Text("编辑") }
-                        if (group.sourceType == GroupSourceType.SUBSCRIPTION) {
-                            Button(onClick = { mainViewModel.refreshSubscriptionGroup(group.tag) },
-                                enabled = group.tag !in refreshing, modifier = Modifier.weight(1f)) {
-                                Text(if (group.tag in refreshing) "更新中" else "更新")
-                            }
-                        }
-                        Button(onClick = { onDelete(group.tag) }, modifier = Modifier.weight(1f)) { Text("删除") }
-                    }
-                }
-            }
-    }
-}
 
 @Composable
 internal fun GroupSourceEditorSheet(

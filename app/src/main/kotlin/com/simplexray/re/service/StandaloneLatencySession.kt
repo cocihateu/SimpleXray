@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.common.config.GroupMemberRef
+import com.simplexray.re.common.config.GroupStrategy
 import com.simplexray.re.common.config.GroupWorkspace
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -111,6 +112,27 @@ internal object StandaloneLatencySession {
                 if (withTimeoutOrNull(10_000) { ready.await(); true } != true) {
                     throw IOException("测速核心启动超时")
                 }
+                fun leaves(member: GroupMemberRef): List<String> =
+                    if (member.isGroup) workspace.groupByTag(member.tag)?.effectiveMembers()
+                        ?.flatMap(::leaves).orEmpty() else listOf(member.tag)
+                val prepared = mutableSetOf<GroupMemberRef>()
+                suspend fun prepare(member: GroupMemberRef) {
+                    if (prepared.add(member) == false) return
+                    if (member.isGroup) {
+                        val group = workspace.groupByTag(member.tag) ?: return
+                        group.effectiveMembers().forEach { prepare(it) }
+                        if (group.strategy == GroupStrategy.URL_TEST) {
+                            leaves(member).distinct().forEach { leaf ->
+                                controller.recordMeasurement(leaf, group.testUrl,
+                                    clients[leaf]?.let { measureHttp(it, group.testUrl) })
+                            }
+                        }
+                    } else {
+                        workspace.groups.firstOrNull { owner -> owner.nodes.any { it.tag == member.tag } }
+                            ?.frontProxy?.let { prepare(it) }
+                    }
+                }
+                members.forEach { prepare(it) }
                 val concurrency = Semaphore(6)
                 members.map { member ->
                     async {
