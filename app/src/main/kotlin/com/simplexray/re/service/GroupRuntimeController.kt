@@ -112,18 +112,26 @@ internal class GroupRuntimeController(
 
     fun onCandidateFailed(groupTag: String, leaf: String) {
         val now = SystemClock.elapsedRealtime()
-        val primaries = reachableFallbackGroups(groupTag).associateWith { group ->
-            group.effectiveMembers().firstOrNull()?.let { resolvePreferredLeaf(it, mutableSetOf(group.tag)) }
-        }
+        val groups = reachableFallbackGroups(groupTag)
         probeResults.entries.forEach { (key, sample) ->
             if (key.first == leaf) probeResults[key] = sample.copy(healthy = false, completedAtElapsedMs = now)
         }
-        for ((group, primaryLeaf) in primaries) {
+        groups.forEach { group ->
+            probeResults[leaf to group.testUrl] = ProbeResult(false, -1L, now)
+        }
+        for (group in groups.asReversed()) {
+            val primaryMember = group.effectiveMembers().firstOrNull() ?: continue
+            val primaryLeaves = expandMemberLeaves(primaryMember, mutableSetOf(group.tag))
+            val primaryFailed = if (primaryMember.isGroup) {
+                primaryLeaves.isEmpty() || primaryLeaves.all { it == leaf || probeResults[it to group.testUrl]?.healthy == false }
+            } else {
+                primaryMember.tag == leaf
+            }
             synchronized(stateLock) {
                 val current = fallbackStates[group.tag]
-                if (leaf == primaryLeaf && current?.inFallback != true) {
+                if (primaryFailed && current?.inFallback != true) {
                     fallbackStates[group.tag] = FallbackRuntimeInfo(inFallback = true)
-                    logEvent("[Warning] Group '${group.tag}': primary '$leaf' failed; selecting a backup.")
+                    logEvent("[Warning] Group '${group.tag}': primary failed ($leaf); selecting a backup.")
                 } else if (current?.activeLeaf == leaf) {
                     fallbackStates[group.tag] = current.copy(activeLeaf = null)
                 }
@@ -167,7 +175,8 @@ internal class GroupRuntimeController(
                 delay((state.nextRecoveryAtElapsedMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
                 val group = workspace.groupByTag(groupTag) ?: break
                 val primary = group.effectiveMembers().firstOrNull() ?: break
-                val leaf = resolvePreferredLeaf(primary, mutableSetOf(groupTag))
+                val leaf = scheduledPrimaryLeaf(primary, mutableSetOf(groupTag))
+                    ?: resolvePreferredLeaf(primary, mutableSetOf(groupTag))
                 val rtt = when {
                     leaf == null -> null
                     leaf in BUILTIN_GROUP_TARGET_TAGS -> 0L
@@ -222,8 +231,25 @@ internal class GroupRuntimeController(
     }
 
     fun buildFailoverPlan(groupTag: String): FailoverPlan {
+        val physicalNode = when {
+            groupTag.startsWith(OutboundGroupConfig.PHYSICAL_PREFIX) ->
+                groupTag.removePrefix(OutboundGroupConfig.PHYSICAL_PREFIX)
+            workspace.groupByTag(groupTag) == null &&
+                (groupTag in BUILTIN_GROUP_TARGET_TAGS || workspace.allNodes().any { it.tag == groupTag }) ->
+                groupTag
+            else -> null
+        }
+        if (physicalNode != null) {
+            return FailoverPlan(physicalNode, listOf(physicalNode), 10_000, watchResponse = false)
+        }
         val group = workspace.groupByTag(groupTag)
             ?: return FailoverPlan(null, emptyList(), 3_000)
+        if (group.strategy == GroupStrategy.SELECT || group.effectiveMembers().size == 1) {
+            val leaf = resolveActiveLeaf(group, mutableSetOf())
+            val chosen = manualMembers[groupTag] ?: group.selectedMember ?: group.effectiveMembers().firstOrNull()
+            if (chosen?.isGroup == true) return buildFailoverPlan(chosen.tag)
+            return FailoverPlan(leaf, listOfNotNull(leaf), group.failoverTimeoutSeconds * 1_000, watchResponse = false)
+        }
         if (group.strategy == GroupStrategy.URL_TEST) {
             return FailoverPlan(null, rankUrlTestLeaves(group, mutableSetOf(groupTag)), group.failoverTimeoutSeconds * 1_000)
         }
@@ -268,7 +294,7 @@ internal class GroupRuntimeController(
                     val latest = workspace.groupByTag(group.tag) ?: break
                     if (latest.strategy != GroupStrategy.URL_TEST) break
                     val protectedPrimaries = workspace.groups
-                        .filter { it.strategy == GroupStrategy.FALLBACK && it.effectiveMembers().size > 1 }
+                        .filter { it.strategy == GroupStrategy.FALLBACK && it.effectiveMembers().isNotEmpty() }
                         .mapNotNull { it.effectiveMembers().firstOrNull()?.let { ref -> scheduledPrimaryLeaf(ref, mutableSetOf(it.tag)) } }
                         .toSet()
                     val leaves = latest.effectiveMembers()
@@ -339,7 +365,9 @@ internal class GroupRuntimeController(
                 ?: rankUrlTestLeaves(group, visited).firstOrNull()
             GroupStrategy.FALLBACK -> {
                 val state = fallbackStates[group.tag]
-                if (state?.inFallback == true) state.activeLeaf
+                if (state?.inFallback == true) {
+                    state.activeLeaf ?: orderedBackups(group).mapNotNull { resolvePreferredLeaf(it, visited) }.firstOrNull()
+                }
                 else members.firstOrNull()?.let { resolvePreferredLeaf(it, visited) }
             }
         }

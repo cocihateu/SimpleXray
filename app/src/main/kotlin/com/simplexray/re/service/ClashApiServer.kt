@@ -9,9 +9,12 @@ import com.simplexray.re.common.config.GroupStrategy
 import com.simplexray.re.common.config.GroupWorkspace
 import com.simplexray.re.common.config.GroupWorkspaceStore
 import com.simplexray.re.common.config.GlobalConfigStore
-import com.simplexray.re.common.config.ProxyGroup
-import com.simplexray.re.common.subscription.NodeImportConverter
+import com.simplexray.re.common.config.RuleWorkspaceStore
+import com.simplexray.re.common.config.TrafficRule
+import com.simplexray.re.common.subscription.SubscriptionException
+import com.simplexray.re.common.subscription.SubscriptionService
 import com.simplexray.re.prefs.Preferences
+import com.simplexray.re.prefs.LogLevel
 import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoWSD
 import kotlinx.coroutines.CoroutineScope
@@ -27,15 +30,11 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.Closeable
 import java.io.File
 import java.io.IOException
-import java.net.InetSocketAddress
-import java.net.Proxy
 import java.time.Instant
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
@@ -51,16 +50,22 @@ internal class ClashApiServer(context: Context) :
     private val appContext: Context = context.applicationContext
     private val apiPrefs: ClashApiPreferences = ClashApiPreferences(appContext)
     private val workspaceStore: GroupWorkspaceStore = GroupWorkspaceStore(appContext)
+    private val ruleStore = RuleWorkspaceStore(appContext)
+    private val subscriptions = SubscriptionService(appContext)
     private val corePrefs: Preferences = Preferences(appContext)
     private val serverScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val activeSockets = CopyOnWriteArrayList<ClashWebSocket>()
-    private val httpClient: OkHttpClient = OkHttpClient.Builder().build()
 
     private enum class GatewayStatus(private val code: Int, private val label: String) : Response.IStatus {
         BAD_GATEWAY(502, "Bad Gateway"),
         GATEWAY_TIMEOUT(504, "Gateway Timeout");
         override fun getRequestStatus() = code
         override fun getDescription() = "$code $label"
+    }
+
+    private class SubscriptionStatus(private val code: Int) : Response.IStatus {
+        override fun getRequestStatus() = code
+        override fun getDescription() = "$code Subscription Refresh"
     }
 
     @Volatile
@@ -177,7 +182,7 @@ internal class ClashApiServer(context: Context) :
                     .put("premium", false)
                     .put("meta", false)
                     .put("core", "Xray")
-                    .put("connectionScope", "group-relays")
+                    .put("connectionScope", "business-connections")
                 jsonResponse(Response.Status.OK, versionJson.toString())
             }
 
@@ -194,7 +199,7 @@ internal class ClashApiServer(context: Context) :
                     .put("tproxy-port", 0)
                     .put("mixed-port", 0)
                     .put("mode", ws.routingMode)
-                    .put("log-level", configuredLevel)
+                    .put("log-level", if (configuredLevel == "none") "silent" else configuredLevel)
                     .put("allow-lan", false)
                     .put("bind-address", "127.0.0.1")
                 jsonResponse(Response.Status.OK, cfg.toString())
@@ -287,23 +292,13 @@ internal class ClashApiServer(context: Context) :
             uri == "/connections" -> jsonResponse(Response.Status.OK, runBlocking { connectionSnapshot() }.toString())
 
             uri == "/rules" -> {
-                val routing = JSONObject(GlobalConfigStore(appContext).readText()).optJSONObject("routing")
-                if (routing?.optString("script")?.isNotBlank() == true) {
-                    jsonResponse(Response.Status.NOT_IMPLEMENTED, """{"message":"Lua routing is edited in application settings"}""")
-                } else {
-                    val rules = routing?.optJSONArray("rules") ?: JSONArray()
-                    val mapped = JSONArray()
-                    val workspace = workspaceStore.load()
-                    val mapper = ClashTagMapper(workspace)
-                    for (index in 0 until rules.length()) {
-                        val rule = rules.getJSONObject(index)
-                        val target = rule.optString("outboundTag")
-                        val group = workspace.effectiveRoutingBindings()[target]
-                        mapped.put(JSONObject().put("type", "Xray").put("payload", rule.toString())
-                            .put("proxy", mapper.toApiName(group != null, group ?: target)).put("size", 1))
-                    }
-                    jsonResponse(Response.Status.OK, JSONObject().put("rules", mapped).toString())
+                val workspace = workspaceStore.load()
+                val mapper = ClashTagMapper(workspace)
+                val mapped = JSONArray()
+                ruleStore.load().forEachIndexed { index, rule ->
+                    mapped.put(ClashPresentation.rule(rule, index, workspace, mapper))
                 }
+                jsonResponse(Response.Status.OK, JSONObject().put("rules", mapped).toString())
             }
 
             uri == "/providers/proxies" -> {
@@ -362,13 +357,20 @@ internal class ClashApiServer(context: Context) :
         return when {
             uri == "/configs" -> {
                 val bodyJson = runCatching { JSONObject(bodyText) }.getOrNull()
-                val mode = bodyJson?.optString("mode")
-                if (mode != null && mode in setOf("rule", "global", "direct")) {
+                    ?: return jsonResponse(Response.Status.BAD_REQUEST, """{"message":"JSON settings required"}""")
+                if (bodyJson.has("mode")) {
+                    val mode = bodyJson.getString("mode")
+                    if (mode !in setOf("rule", "global", "direct")) {
+                        return jsonResponse(Response.Status.BAD_REQUEST, """{"message":"Invalid routing mode"}""")
+                    }
                     workspaceStore.update { it.copy(routingMode = mode) }
-                    emptyResponse(Response.Status.NO_CONTENT)
-                } else {
-                    jsonResponse(Response.Status.BAD_REQUEST, """{"message":"Invalid routing mode"}""")
                 }
+                if (bodyJson.has("log-level")) {
+                    val level = bodyJson.getString("log-level")
+                    corePrefs.logLevel = LogLevel.fromString(if (level == "silent") "none" else level)
+                    GlobalConfigStore.notifyModified()
+                }
+                emptyResponse(Response.Status.NO_CONTENT)
             }
 
             uri.startsWith("/proxies/") && !uri.endsWith("/delay") -> {
@@ -411,9 +413,23 @@ internal class ClashApiServer(context: Context) :
                 val group = ws.groups.firstOrNull { it.tag == providerName && it.sourceType == GroupSourceType.SUBSCRIPTION }
                     ?: return jsonResponse(Response.Status.NOT_FOUND, """{"message":"Provider not found"}""")
 
-                val result = runCatching { runBlocking { refreshSubscriptionGroup(group.tag, group.subscriptionUrl) } }
-                if (result.isSuccess) emptyResponse(Response.Status.NO_CONTENT)
-                else jsonResponse(GatewayStatus.BAD_GATEWAY, JSONObject().put("message", result.exceptionOrNull()?.message).toString())
+                val result = runCatching { runBlocking { subscriptions.refresh(group.tag) } }
+                result.fold(
+                    onSuccess = { refreshed ->
+                        if (refreshed.skippedCount > 0) {
+                            VpnStateHub.emitLog("[Warning] Subscription '${group.tag}': ${refreshed.nodeCount} nodes; " +
+                                "${refreshed.skippedCount} skipped. ${refreshed.skippedReasons.distinct().joinToString("; ")}")
+                        } else {
+                            VpnStateHub.emitLog("[Info] Subscription '${group.tag}': ${refreshed.nodeCount} nodes updated.")
+                        }
+                        emptyResponse(Response.Status.NO_CONTENT)
+                    },
+                    onFailure = { error ->
+                        val status = (error as? SubscriptionException)?.let { SubscriptionStatus(it.code) }
+                            ?: Response.Status.INTERNAL_ERROR
+                        jsonResponse(status, JSONObject().put("message", error.message).toString())
+                    },
+                )
             }
 
             else -> jsonResponse(Response.Status.NOT_FOUND, """{"message":"Endpoint not found"}""")
@@ -421,10 +437,19 @@ internal class ClashApiServer(context: Context) :
     }
 
     private fun handlePatch(uri: String, session: IHTTPSession): Response {
-        return if (uri == "/configs") {
-            handlePut(uri, session)
-        } else {
-            jsonResponse(Response.Status.METHOD_NOT_ALLOWED, """{"message":"Method Not Allowed"}""")
+        return when (uri) {
+            "/configs" -> handlePut(uri, session)
+            "/rules/disable" -> {
+                val changes = JSONObject(readRequestBody(session))
+                ruleStore.update { rules ->
+                    rules.mapIndexed { index, rule ->
+                        if (changes.has(index.toString())) rule.copy(enabled = changes.getBoolean(index.toString()) == false)
+                        else rule
+                    }
+                }
+                emptyResponse(Response.Status.NO_CONTENT)
+            }
+            else -> jsonResponse(Response.Status.METHOD_NOT_ALLOWED, """{"message":"Method Not Allowed"}""")
         }
     }
 
@@ -526,7 +551,7 @@ internal class ClashApiServer(context: Context) :
                     .put("name", apiName)
                     .put("type", mapProtocolType(node.protocol))
                     .put("history", measurementHistory(node.tag))
-                    .put("alive", GroupRuntimeStatus.nodeMeasurements.value[node.tag]?.delayMs != null)
+                    .put("alive", GroupRuntimeStatus.nodeMeasurements.value[node.tag]?.let { it.delayMs != null } ?: true)
                     .put("udp", node.protocol != "http")
             )
         }
@@ -592,67 +617,14 @@ internal class ClashApiServer(context: Context) :
         }
     }
 
-    private suspend fun refreshSubscriptionGroup(groupTag: String, url: String) {
-        if (url.isBlank()) throw IOException("Subscription URL required")
-        val client = if (VpnStateHub.state.value == VpnRunningState.Connected) {
-            httpClient.newBuilder()
-                .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress(corePrefs.socksAddress, corePrefs.socksPort)))
-                .build()
-        } else httpClient
-
-        val req = Request.Builder()
-            .url(url)
-            .header("User-Agent", "clash-verge/v1.7.7 mihomo/1.19.34 SimpleXray")
-            .build()
-
-        val body =
-            client.newCall(req).execute().use { resp ->
-                if (resp.isSuccessful == false) throw IOException("Subscription HTTP ${resp.code}")
-                resp.body?.string().orEmpty()
-            }
-        val parsed = NodeImportConverter.parse(body)
-        if (parsed.nodes.isEmpty()) throw IOException(
-            parsed.skippedReasons.distinct().take(5).joinToString("; ").ifBlank { "Subscription has zero native Xray nodes" },
-        )
-
-        workspaceStore.update { current ->
-            val otherTags = current.groups
-                .filter { it.tag != groupTag }
-                .flatMap { it.nodes }
-                .map { it.tag }
-                .toMutableSet()
-            val uniqueNodes = parsed.nodes.map { node ->
-                val unique = GroupWorkspace.uniqueTag(node.tag, otherTags)
-                otherTags.add(unique)
-                if (unique == node.tag) node else {
-                    val json = runCatching {
-                        JSONObject(node.outboundJson).put("tag", unique).toString()
-                    }.getOrDefault(node.outboundJson)
-                    node.copy(tag = unique, outboundJson = json)
-                }
-            }
-            val updatedGroups = current.groups.map { g ->
-                if (g.tag == groupTag) {
-                    val members = uniqueNodes.map { GroupMemberRef(it.tag, isGroup = false) } +
-                        g.members.filter { it.isGroup }
-                    g.copy(
-                        nodes = uniqueNodes,
-                        members = members,
-                        selectedMember = g.selectedMember?.takeIf { it in members } ?: members.firstOrNull(),
-                        subscriptionUpdatedAtMs = System.currentTimeMillis()
-                    )
-                } else g
-            }
-            current.copy(groups = updatedGroups)
-        }
-    }
-
     private suspend fun connectionSnapshot(): JSONObject {
         val totals = obtainStatsClient()?.getTraffic()
         val ws = workspaceStore.load()
         val mapper = ClashTagMapper(ws)
+        val rules = ruleStore.load().associateBy { it.id }
         val connections = JSONArray()
         RelayConnectionRegistry.all().forEach { connection ->
+            val rule = rules[connection.ruleId]
             connections.put(
                 JSONObject().put("id", connection.id)
                     .put("metadata", JSONObject()
@@ -660,18 +632,23 @@ internal class ClashApiServer(context: Context) :
                         .put("sourceIP", connection.sourceIp).put("sourcePort", connection.sourcePort.toString())
                         .put("destinationIP", connection.destinationIp).put("destinationPort", connection.destinationPort.toString())
                         .put("host", connection.destinationHost).put("dnsMode", "normal")
-                        .put("process", "").put("processPath", ""))
+                        .put("process", "").put("processPath", "").put("uid", 0)
+                        .put("inboundName", "Xray").put("inboundIP", "127.0.0.1")
+                        .put("inboundPort", "").put("inboundUser", "")
+                        .put("sourceGeoIP", "").put("sourceIPASN", "")
+                        .put("destinationGeoIP", "").put("destinationIPASN", "")
+                        .put("remoteDestination", "").put("sniffHost", "")
+                        .put("specialProxy", "").put("specialRules", "").put("dscp", 0))
                     .put("upload", connection.uploadBytes).put("download", connection.downloadBytes)
                     .put("start", Instant.ofEpochMilli(connection.startTimestampMs).toString())
-                    .put("chains", JSONArray().put(mapper.toApiName(false, connection.leafTag))
-                        .put(mapper.toApiName(true, connection.groupTag)))
-                    .put("rule", "Group").put("rulePayload", connection.groupTag),
+                    .put("chains", ClashPresentation.chains(connection, ws, mapper))
+                    .put("rule", rule?.type ?: TrafficRule.TYPE_MATCH).put("rulePayload", rule?.payload.orEmpty()),
             )
         }
         return JSONObject().put("downloadTotal", totals?.downlink ?: 0L)
             .put("uploadTotal", totals?.uplink ?: 0L).put("connections", connections)
             .put("memory", obtainStatsClient()?.getSystemStats()?.alloc ?: 0L)
-            .put("scope", "group-relays")
+            .put("scope", "business-connections")
     }
 
     override fun openWebSocket(handshake: IHTTPSession): WebSocket {
@@ -761,11 +738,10 @@ internal class ClashApiServer(context: Context) :
         }
 
         private suspend fun loopLogs() {
+            val minimum = handshakeRequest.parms["level"] ?: "info"
             VpnStateHub.logFlow.collect { line ->
                 if (!isOpen) return@collect
-                val json = JSONObject()
-                    .put("type", "info")
-                    .put("payload", line)
+                val json = ClashPresentation.log(line, minimum) ?: return@collect
                 runCatching { send(json.toString()) }
             }
         }

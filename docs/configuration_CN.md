@@ -1,101 +1,53 @@
-# 配置覆写与删除
+# 配置与运行流程
 
 **[English](./configuration.md)** | **中文**
 
-SimpleXray 接受完整的 Xray-core 配置，但不会原样执行。
+应用将全局配置、节点组和规则分别管理。运行时先组合工作区与全局配置，再执行一次偏好适配，最后注入统计、规则 API 和业务转发入口。最终 JSON 通过 stdin 传给 Xray。
 
-配置适配为单向处理，JSON 配置在导入或保存时执行一次，在传入 Xray 前再执行一次；YAML 配置会先解析并转换为 JSON，再进入同一处理流程。
+## 存储与编辑
 
-运行时最终配置始终通过 stdin 传入 Xray（`-config stdin:`），因此工作目录下同名 `config.json` 不会覆盖它。
+- `global_config.json` 保存 DNS、入站、日志与全局参数。
+- 节点组工作区保存 Xray 原生节点、逐节点 `targetStrategy`、成员顺序、主备参数和订阅来源。
+- `rules_workspace.json` 保存规则顺序、类型、匹配内容、目标和启用状态。
+- 旧 Lua 在首次加载规则时迁移为结构化规则。运行配置采用 Xray JSON。
+- 用户编辑过的订阅节点保留编辑结果；其余节点随订阅刷新。
 
-Xray 实际接收到的是处理后的结果。如需完整保留原始字段，请自行保留外部备份。
+## TUN
 
-## 顶层字段
+| 模式 | 行为 |
+| --- | --- |
+| Xray TUN | 保留或注入 `tun` inbound，传入 Android VPN 描述符。 |
+| Hev TUN | 使用原版 Hev 引擎，经本地 SOCKS 入站接入 Xray。 |
+| Simple TUN | 使用原版 SimpleTUN 引擎，采用 IPv4 与 `noauth` SOCKS 入站。 |
+
+Xray TUN 的 MTU、接口名称和嗅探参数根据应用设置补齐。Hev 与 Simple TUN 模式移除配置中的桌面 TUN 入站。
+
+## 全局适配
 
 | 字段 | 处理 |
 | --- | --- |
-| `geodata` | 整块删除；Geo 数据更新由应用管理。 |
-| `log` | 缺失时创建。 |
-| `api` | 运行时替换为本地 `StatsService` API 对象。 |
-| `stats` | 运行时替换为空对象。 |
-| `policy` | 运行时替换为启用出站上/下行统计的策略。 |
-| `inbounds` | 缺失时创建；具体规则见下文。 |
+| `geodata` | 资源更新交由应用管理。 |
+| `log.error` | 核心日志输出到应用读取的进程流。 |
+| `log.access` | 关闭访问日志时设为 `none`。 |
+| `log.dnsLog` | 跟随应用 DNS 日志设置。 |
+| `log.loglevel` | 跟随应用日志等级；Auto 使用全局配置。 |
+| 主 SOCKS 入站 | 同步应用地址、端口和认证设置。 |
+| 其他通配监听地址 | 改为 `127.0.0.1`。 |
+| `dns.hosts` | 按现有逻辑补齐阿里 DoH 域名的静态地址。 |
+| TCP 出站 socket 参数 | 沿用原有保活和超时注入逻辑，保留用户显式配置。 |
 
-## 日志块
+## 分流与主备
 
-| 字段 | 处理 |
-| --- | --- |
-| `log.error` | 删除。 |
-| `log.access` | 应用关闭访问日志时写为 `"none"`；开启时删除该字段。 |
-| `log.dnsLog` | 覆盖为应用中的 DNS 日志偏好。 |
-| `log.loglevel` | 覆盖为应用日志级别；选择 `Auto` 且字段缺失或为空时写为 `"warning"`。 |
+所有业务目标均进入共享本地转发入口，覆盖节点组、物理节点、直连和拒绝目标。内部健康检查走独立入口，直接选择物理节点。每个物理节点的 `targetStrategy` 独立生效。
 
-## Geodata 块
+主节点健康期间保持业务连接，周期任务跳过主节点。首响应超时或真实业务连接失败后尝试备用；备用交付首个响应后开始恢复计时，到期单独检查主节点。恢复成功后新连接使用主节点。备用 URL-test 组按自身检查间隔和结果信任时长运行。
 
-| 字段 | 处理 |
-| --- | --- |
-| `geodata` | 整块删除；规则文件生命周期由应用统一管理。 |
+规则编辑、规则启停和模式切换通过 Xray API 应用。节点内容与组拓扑变化触发核心重启。
 
-Xray-core 原生提供的 `geodata` 字段用于内核层面的规则自动下载与更新。在 Android 平台上，该字段会被 `ConfigSanitizer` 强制剥离，原因如下：
-- **系统生命周期与省电机制**：内核内置的后台定时任务无法适应 Android Doze 模式及厂商后台冻结策略，后台定时更新无法稳定执行。
-- **代理路由协同**：在网络受限环境下，规则更新往往需要经由已建立的代理通道下载，SimpleXray 通过前台 VPN 服务与 Android `WorkManager`（`GeoUpdateWorker`）协同调度以确保连通性。
-- **资源统一管理**：SimpleXray 在应用内部沙盒统一管理规则资源，支持流式 Gzip（`.dat.gz`）解压、原子替换、自定义 `.dat` 导入与内置回退保障。
+## API 与统计
 
-请直接在应用界面的 **设置 > 规则文件** 中配置规则更新链接与周期。
+运行时启用 `StatsService`、`RoutingService` 和 `HandlerService`。核心统计排除内部 `sx-` 出站计数。Clash API 将业务连接、命中规则、日志、流量与内存转换为 zashboard 格式。
 
-## Inbounds
-
-| 字段 | 处理 |
-| --- | --- |
-| 非 Xray 原生 TUN 模式下的 `tun` inbound | 删除。 |
-| Xray 原生 TUN 模式下的 `tun` inbound | 保留；`settings.mtu` 缺失时写为应用 TUN MTU；`settings.name` 缺失时写为 `tun-inbound`；删除 `settings.autoSystemRoutingTable` 与 `settings.autoOutboundsInterface`；创建或更新 `sniffing`，并向 `destOverride` 追加 `fakedns`。 |
-| 主 SOCKS inbound（tag 为 `socks-in`，否则取第一个 SOCKS inbound） | `port` 覆盖为应用 SOCKS 端口，`listen` 覆盖为应用 SOCKS 地址（仅限回环）；用户名和密码都配置时替换 `settings.auth` 与 `settings.accounts`。SimpleTUN 模式下会剥离认证（其后端仅支持无认证 SOCKS5）。 |
-| 其他 `listen` 缺失、为空、`::` 或 `0.0.0.0` 的 inbound | `listen` 改为 `127.0.0.1`。 |
-| 缺少 SOCKS inbound | 注入默认 `socks-in`，使用应用 SOCKS 地址与端口，并启用 UDP；SimpleTUN 模式下即使应用配置了凭据也始终为 noauth。 |
-| Xray 原生 TUN 模式缺少 `tun` inbound | 注入默认 `tun-inbound`，网络为 `tcp,udp`，MTU 使用应用设置，并使用默认 sniffing。 |
-
-## 应用 SOCKS 设置
-
-| 设置 | 行为 |
-| --- | --- |
-| SOCKS 入站地址 | 仅接受回环地址（`127.0.0.0/8`、`::1`）。内部健康探针与规则/更新下载都连接 `127.0.0.1`；若旧版本持久化了非回环值，启动会失败并显示提示。 |
-| SOCKS 用户名/密码 | 必须同时填写或同时留空；包含换行符的凭据会被拒绝。 |
-| 从配置同步凭据 | 当前配置的主 SOCKS inbound 需要密码认证且应用凭据为空时，每个配置会同步一次首个账号到设置页。 |
-| 运行中修改 | 修改会保存，但运行中的内核/后端在重启服务前仍使用旧端点，界面会提示需要重启生效。 |
-
-## 路由规则
-
-| 字段 | 处理 |
-| --- | --- |
-| `routing.domainMatcher` | `mph` 改为 `hybrid`。 |
-| 规则 `geosite` | 条目迁移到 `domain` 并添加 `geosite:` 前缀，删除原 `geosite` 键。 |
-| 规则 `geoip` | 条目迁移到 `ip` 并添加 `geoip:` 前缀，删除原 `geoip` 键。 |
-| 规则 `process` | 删除以 `.exe` 结尾的条目；若全部删除，则移除 `process`。 |
-| 空或无效规则 | 不含有效匹配字段的规则会被删除。 |
-| 开启 LAN 绕过时的 `geoip:private` | 缺失时注入最高优先级的 `geoip:private` -> `direct` 规则。 |
-| 关闭 LAN 绕过时的 `geoip:private` | 从直连规则中删除 `geoip:private` 条目；`ip` 数组为空时移除该字段，若规则已无任何有效匹配字段则整条删除。 |
-
-## DNS 与 Outbounds
-
-| 字段 | 处理 |
-| --- | --- |
-| `dns.hosts` | 缺失时创建。 |
-| `https://...alidns.com` DoH 服务器 | 缺失时注入静态 hosts：`223.5.5.5`、`223.6.6.6`。 |
-| 以 `http://` 或 `https://` 开头的 outbound `tlsSettings.echConfigList` | 删除。 |
-| TCP 流式代理 outbound（`vless`、`vmess`、`trojan`、`shadowsocks`、`socks`、`http`） | 缺失时注入 `tcpKeepAliveIdle=15`、`tcpKeepAliveInterval=3`、`tcpUserTimeout=15000`，以及 custom sockopt `TCP_KEEPCNT=3`；已有用户值不覆盖。 |
-| `observatory.probeTimeout` | 缺失时写为 `"2s"`。 |
-
-## 运行时统计注入
-
-| 字段 | 处理 |
-| --- | --- |
-| `api` | 替换为 `tag=api`、应用 API 监听地址和 `services=["StatsService"]`。 |
-| `stats` | 替换为空对象。 |
-| `policy` | 替换为启用 `system.statsOutboundUplink` 与 `system.statsOutboundDownlink` 的策略。 |
-| HTTP inbound | 开启应用 HTTP 代理时，已有 HTTP inbound 保留自身端点，系统代理跟随其实际地址与端口；仅当不存在 HTTP inbound 时，才在 `127.0.0.1:<httpPort>` 注入 `http-inbound`。 |
-
-未列出的字段保持不变。
-
----
+连接源地址反映本地转发入口，进程字段保留为空。原生页面聚焦概览、代理、订阅、规则与设置；实时连接与日志在 zashboard 查看。
 
 [返回项目 README](./README_CN.md)

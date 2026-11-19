@@ -18,6 +18,7 @@ internal data class RelayConnectionSnapshot(
     val startTimestampMs: Long,
     val uploadBytes: Long,
     val downloadBytes: Long,
+    val ruleId: String = "default",
 )
 
 internal class RelayConnectionEntry(
@@ -36,6 +37,7 @@ internal class RelayConnectionEntry(
     @Volatile var destinationHost = ""
     @Volatile var destinationIp = ""
     @Volatile var destinationPort = 0
+    @Volatile var ruleId = "default"
 
     fun close() {
         if (closed.compareAndSet(false, true)) closeTransport()
@@ -43,7 +45,7 @@ internal class RelayConnectionEntry(
 
     fun snapshot() = RelayConnectionSnapshot(
         id, network, sourceIp, sourcePort, destinationHost, destinationIp, destinationPort,
-        groupTag, leafTag, startedAt, uploadBytes.get(), downloadBytes.get(),
+        groupTag, leafTag, startedAt, uploadBytes.get(), downloadBytes.get(), ruleId,
     )
 }
 

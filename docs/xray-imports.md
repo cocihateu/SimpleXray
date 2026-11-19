@@ -33,3 +33,9 @@
 ## 界面展示
 
 工作区导入控制器直接读取 `NodeImportResult.skippedReasons`，在节点导入完毕后向用户展示跳过统计与前五条具体原因，确保导入状态透明。
+
+订阅页面与 Clash API 共用 `SubscriptionService`。有效节点正常保存；正文已下载且全部条目被跳过时返回 422，并显示转换原因。HTTP 下载错误保留对应状态码。
+
+Mihomo 的 `select`、`fallback`、`url-test` 分组在首次导入时转换为工作区节点组，保留成员顺序与嵌套关系。组名使用订阅名称作为前缀。fallback 的 interval 对应主节点恢复间隔，url-test 的 interval 对应周期检查间隔。
+
+转换后的每个节点均可编辑 Xray JSON 与 `targetStrategy`。用户保存的编辑通过 `userEdited` 标记保留；其余节点随订阅更新。`subscriptionName` 用于将订阅原始名称与工作区节点对应。

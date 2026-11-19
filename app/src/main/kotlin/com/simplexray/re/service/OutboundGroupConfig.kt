@@ -1,14 +1,14 @@
 package com.simplexray.re.service
 
 import com.simplexray.re.common.config.BUILTIN_GROUP_TARGET_TAGS
-import com.simplexray.re.common.config.GroupStrategy
 import com.simplexray.re.common.config.GroupWorkspace
+import com.simplexray.re.common.config.TrafficRule
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 
-/** Tags shared by config generation, health checks and the routing RPC for one core process. */
+/** Business routes enter the shared connection model; internal measurements select physical nodes. */
 internal class OutboundGroupConfig(
     val workspace: GroupWorkspace,
     val nodeEntryPort: Int,
@@ -17,292 +17,120 @@ internal class OutboundGroupConfig(
 ) {
     private val prefix = "sx-${UUID.randomUUID()}-"
     val password = UUID.randomUUID().toString()
-    val physicalNodes: List<String> = workspace.allNodes().map { it.tag }
-    val allLeafTargets: List<String> = (physicalNodes + BUILTIN_GROUP_TARGET_TAGS).distinct()
-    val routingBindings: Map<String, String> = workspace.effectiveRoutingBindings()
-    val users: Map<String, String> = allLeafTargets.mapIndexed { index, tag -> tag to "node-$index" }.toMap()
-
-    val fallbackRelaySpecs: List<FallbackRelaySpec> = workspace.groups.mapIndexedNotNull { index, group ->
-        if (group.strategy == GroupStrategy.URL_TEST ||
-            (group.strategy == GroupStrategy.FALLBACK && group.effectiveMembers().size >= 2)
-        ) {
-            FallbackRelaySpec(
-                groupTag = group.tag,
-                port = allocatePort(),
-                username = "fb-$index",
-                password = UUID.randomUUID().toString(),
-            )
-        } else {
-            null
-        }
+    val physicalNodes = workspace.allNodes().map { it.tag }
+    val allLeafTargets = (physicalNodes + BUILTIN_GROUP_TARGET_TAGS).distinct()
+    val routingBindings = workspace.effectiveRoutingBindings()
+    val users = allLeafTargets.mapIndexed { index, tag -> tag to "node-$index" }.toMap()
+    private val targets = workspace.groups.map { it.tag } + allLeafTargets.map(::physicalTarget)
+    val businessRelayPort = allocatePort()
+    val fallbackRelaySpecs = targets.mapIndexed { index, target ->
+        FallbackRelaySpec(target, businessRelayPort, "business-$index", UUID.randomUUID().toString())
     }
-    val fallbackRelayOutbounds: Map<String, String> = fallbackRelaySpecs.mapIndexed { index, spec ->
-        spec.groupTag to "${prefix}fb-$index"
+    val fallbackRelayOutbounds = fallbackRelaySpecs.mapIndexed { index, spec ->
+        spec.groupTag to "${prefix}business-$index"
     }.toMap()
-
-    val balancers: Map<String, String> = workspace.groups
-        .filter { it.tag !in fallbackRelayOutbounds }
-        .mapIndexed { index, group -> group.tag to "${prefix}group-$index" }
-        .toMap()
-
+    val balancers: Map<String, String> = emptyMap()
     private val nodeEntryInbound = "${prefix}node-entry"
     private val healthInbound = "${prefix}health"
-    private var scriptFile: File? = null
+    private var domainStrategy = "IPIfNonMatch"
+    private var routingOptions = JSONObject()
+    private val logTargetPattern = Regex("${Regex.escape(prefix)}(?:rule-.*?)?business-(\\d+)")
 
-    fun inject(root: JSONObject, filesDir: File, cacheDir: File) {
+    fun formatLogLine(line: String): String = logTargetPattern.replace(line) { match ->
+        val target = fallbackRelaySpecs.getOrNull(match.groupValues[1].toInt())?.groupTag
+            ?.removePrefix(PHYSICAL_PREFIX) ?: return@replace match.value
+        when (target) { "direct" -> "DIRECT"; "block" -> "REJECT"; else -> target }
+    }.replace(nodeEntryInbound, "node-entry").replace(healthInbound, "health-check")
+
+    fun inject(root: JSONObject, filesDir: File, cacheDir: File, rules: List<TrafficRule>) {
         val outbounds = root.array("outbounds")
-        val defaultGroupTag = workspace.effectiveDefaultGroupTag()
-            ?: outbounds.optJSONObject(0)?.optString("tag").orEmpty()
-
-        for (builtinTag in BUILTIN_GROUP_TARGET_TAGS) {
-            if ((0 until outbounds.length()).all { outbounds.getJSONObject(it).optString("tag") != builtinTag }) {
-                outbounds.put(
-                    JSONObject()
-                        .put("tag", builtinTag)
-                        .put("protocol", if (builtinTag == "direct") "freedom" else "blackhole")
-                )
+        for (builtin in BUILTIN_GROUP_TARGET_TAGS) {
+            if ((0 until outbounds.length()).none { outbounds.getJSONObject(it).optString("tag") == builtin }) {
+                outbounds.put(JSONObject().put("tag", builtin).put("protocol", if (builtin == "direct") "freedom" else "blackhole"))
             }
         }
-
-        for (spec in fallbackRelaySpecs) {
-            val outboundTag = fallbackRelayOutbounds.getValue(spec.groupTag)
-            outbounds.put(
-                JSONObject()
-                    .put("tag", outboundTag)
-                    .put("protocol", "socks")
-                    .put("targetStrategy", "AsIs")
-                    .put(
-                        "settings",
-                        JSONObject().put(
-                            "servers",
-                            JSONArray().put(
-                                JSONObject()
-                                    .put("address", "127.0.0.1")
-                                    .put("port", spec.port)
-                                    .put(
-                                        "users",
-                                        JSONArray().put(
-                                            JSONObject()
-                                                .put("user", spec.username)
-                                                .put("pass", spec.password)
-                                        )
-                                    )
-                            )
-                        )
-                    )
-            )
+        fallbackRelaySpecs.forEach { spec ->
+            outbounds.put(relayOutbound(spec, fallbackRelayOutbounds.getValue(spec.groupTag), spec.username))
         }
-
-        root.getJSONObject("api").getJSONArray("services").put("RoutingService")
-        val inbounds = root.array("inbounds")
-        val accountsArray = JSONArray(
-            users.values.map { JSONObject().put("user", it).put("pass", password) }
-        )
-        inbounds.put(
-            listener(
-                nodeEntryInbound,
-                nodeEntryPort,
-                "socks",
-                JSONObject()
-                    .put("auth", "password")
-                    .put("accounts", accountsArray)
-                    .put("udp", true)
-            )
-        )
-        inbounds.put(
-            listener(
-                healthInbound,
-                healthPort,
-                "http",
-                JSONObject().put("accounts", JSONArray(accountsArray.toString()))
-            )
-        )
-
-        val routing = root.optJSONObject("routing") ?: JSONObject().also { root.put("routing", it) }
-        val entries = routing.array("balancers")
-        for ((groupTag, balancerTag) in balancers) {
-            val initialTarget = initialTargetForGroup(groupTag)
-            entries.put(
-                JSONObject()
-                    .put("tag", balancerTag)
-                    .put("selector", JSONArray().put(initialTarget))
-            )
+        val services = root.getJSONObject("api").getJSONArray("services")
+        services.put("RoutingService").put("HandlerService")
+        val accounts = JSONArray(users.values.map { JSONObject().put("user", it).put("pass", password) })
+        root.array("inbounds").put(listener(nodeEntryInbound, nodeEntryPort, "socks",
+            JSONObject().put("auth", "password").put("accounts", accounts).put("udp", true)))
+        root.array("inbounds").put(listener(healthInbound, healthPort, "http",
+            JSONObject().put("accounts", JSONArray(accounts.toString()))))
+        domainStrategy = root.optJSONObject("routing")?.optString("domainStrategy", "IPIfNonMatch") ?: "IPIfNonMatch"
+        routingOptions = JSONObject(root.optJSONObject("routing")?.toString() ?: "{}").apply {
+            remove("script")
+            remove("rules")
+            remove("balancers")
         }
+        ruleOutbounds(workspace, rules).let { added ->
+            for (i in 0 until added.length()) outbounds.put(added.get(i))
+        }
+        root.put("routing", routingConfig(workspace, rules))
+    }
 
-        val script = routing.optString("script")
-        if (script.isNotBlank()) {
-            val source = File(script).let { if (it.isAbsolute) it else File(filesDir, script) }.readText()
-            val wrapper = File.createTempFile("group-routes-", ".lua", cacheDir)
-            scriptFile = wrapper
-            wrapper.writeText(wrapScript(source, defaultGroupTag))
-            routing.put("script", wrapper.absolutePath)
-        } else {
-            val rules = JSONArray()
-            users.forEach { (tag, user) ->
-                rules.put(
-                    JSONObject()
-                        .put("inboundTag", JSONArray().put(nodeEntryInbound).put(healthInbound))
-                        .put("user", JSONArray().put(user))
-                        .put("outboundTag", tag)
-                        .put("ruleTag", "sx-internal/$user")
-                )
-            }
-            val existing = if (workspace.routingMode == "rule") routing.array("rules") else JSONArray()
-            for (i in 0 until existing.length()) {
-                val rule = existing.getJSONObject(i)
-                val originalTarget = rule.optString("outboundTag")
-                val targetTag = routingBindings[originalTarget] ?: originalTarget
-                fallbackRelayOutbounds[targetTag]?.let { relayOutbound ->
-                    rule.put("outboundTag", relayOutbound)
-                    rule.put("ruleTag", "$targetTag/${rule.optString("ruleTag", "rule-$i")}")
-                } ?: balancers[targetTag]?.let { balancerTag ->
-                    rule.remove("outboundTag")
-                    rule.put("balancerTag", balancerTag)
-                    rule.put("ruleTag", "$balancerTag/rule-$i/${rule.optString("ruleTag")}")
+    fun ruleOutbounds(current: GroupWorkspace, rules: List<TrafficRule>): JSONArray = JSONArray().apply {
+        rules.forEach { rule ->
+            val spec = targetSpec(current, rule.target) ?: return@forEach
+            put(relayOutbound(spec, ruleOutboundTag(rule.id, spec), "${spec.username}/${rule.id}"))
+        }
+    }
+
+    fun routingConfig(current: GroupWorkspace, rules: List<TrafficRule>): JSONObject {
+        val compiled = JSONArray()
+        users.forEach { (target, user) ->
+            compiled.put(JSONObject()
+                .put("type", "field")
+                .put("inboundTag", JSONArray().put(nodeEntryInbound).put(healthInbound))
+                .put("user", JSONArray().put(user)).put("outboundTag", target)
+                .put("ruleTag", "sx-internal/$user"))
+        }
+        if (current.routingMode == "rule") {
+            rules.filter { it.enabled }.forEach { rule ->
+                targetSpec(current, rule.target)?.let { spec ->
+                    compiled.put(rule.toXrayRule(ruleOutboundTag(rule.id, spec)))
                 }
-                rules.put(rule)
-            }
-            if (workspace.routingMode == "direct") {
-                rules.put(JSONObject().put("network", "tcp,udp").put("outboundTag", "direct").put("ruleTag", "mode/direct"))
-                routing.put("rules", rules)
-                return
-            }
-            val defaultRelay = fallbackRelayOutbounds[defaultGroupTag]
-            val defaultBalancer = balancers[defaultGroupTag]
-            if (defaultRelay != null || defaultBalancer != null) {
-                appendDefaultRule(root, routing, inbounds, outbounds, rules, defaultRelay, defaultBalancer)
-                return
-            }
-            routing.put("rules", rules)
-        }
-    }
-
-    fun close() {
-        scriptFile?.delete()
-    }
-
-    private fun appendDefaultRule(
-        root: JSONObject,
-        routing: JSONObject,
-        inbounds: JSONArray,
-        outbounds: JSONArray,
-        rules: JSONArray,
-        defaultRelay: String?,
-        defaultBalancer: String?,
-    ) {
-        if (workspace.routingMode == "rule" && routing.optString("domainStrategy").equals("IPIfNonMatch", ignoreCase = true)) {
-            val id = UUID.randomUUID().toString()
-            val defaultTag = "${prefix}default"
-            val port = allocatePort()
-            inbounds.put(
-                listener(
-                    defaultTag,
-                    port,
-                    "vless",
-                    JSONObject()
-                        .put("decryption", "none")
-                        .put("clients", JSONArray().put(JSONObject().put("id", id)))
-                )
-            )
-            val entry = JSONObject()
-                .put("protocol", "vless")
-                .put("tag", defaultTag)
-                .put(
-                    "settings",
-                    JSONObject()
-                        .put("address", "127.0.0.1")
-                        .put("port", port)
-                        .put("id", id)
-                        .put("encryption", "none")
-                )
-            root.put("outbounds", JSONArray().put(entry).apply {
-                for (i in 0 until outbounds.length()) put(outbounds.get(i))
-            })
-            val catchRule = JSONObject().put("inboundTag", JSONArray().put(defaultTag))
-            if (defaultRelay != null) {
-                catchRule.put("outboundTag", defaultRelay).put("ruleTag", "$defaultRelay/default")
-            } else {
-                catchRule.put("balancerTag", defaultBalancer).put("ruleTag", "$defaultBalancer/default")
-            }
-            routing.put("rules", JSONArray().put(catchRule).apply {
-                for (i in 0 until rules.length()) put(rules.get(i))
-            })
-            return
-        }
-        val catchRule = JSONObject().put("network", "tcp,udp")
-        if (defaultRelay != null) {
-            catchRule.put("outboundTag", defaultRelay).put("ruleTag", "$defaultRelay/default")
-        } else {
-            catchRule.put("balancerTag", defaultBalancer).put("ruleTag", "$defaultBalancer/default")
-        }
-        rules.put(catchRule)
-        routing.put("rules", rules)
-    }
-
-    private fun initialTargetForGroup(groupTag: String, visited: MutableSet<String> = mutableSetOf()): String {
-        if (visited.add(groupTag) == false) return physicalNodes.firstOrNull() ?: "direct"
-        fallbackRelayOutbounds[groupTag]?.let { return it }
-        val group = workspace.groupByTag(groupTag) ?: return physicalNodes.firstOrNull() ?: "direct"
-        val members = group.effectiveMembers()
-        val preferred = if (group.strategy == GroupStrategy.SELECT) {
-            group.selectedMember?.takeIf { it in members } ?: members.firstOrNull()
-        } else {
-            members.firstOrNull()
-        } ?: return physicalNodes.firstOrNull() ?: "direct"
-        return if (preferred.isGroup) initialTargetForGroup(preferred.tag, visited) else preferred.tag
-    }
-
-    private fun wrapScript(source: String, defaultGroupTag: String): String = buildString {
-        append("do\n").append(source).append("\nend\n")
-        appendLine("local original = HandleRoute")
-        appendLine("local pick = require('xray.router').PickOutbound")
-        appendLine("local relays = ${luaTable(fallbackRelayOutbounds)}")
-        appendLine("local balancers = ${luaTable(balancers)}")
-        appendLine("local bindings = ${luaTable(routingBindings)}")
-        appendLine("local internal = ${luaTable(users.entries.associate { (node, user) -> user to node })}")
-        appendLine("function HandleRoute(ctx, inbound, sp, tp, lp, domain, net, proto, user, ...)")
-        appendLine("  if inbound == ${luaString(nodeEntryInbound)} or inbound == ${luaString(healthInbound)} then return internal[user], 'sx-internal', nil end")
-        when (workspace.routingMode) {
-            "direct" -> appendLine("  do return 'direct', 'mode/direct', nil end")
-            "global" -> appendLine("  local tag, rule, err = ${luaString(defaultGroupTag)}, 'mode/global', nil")
-            else -> appendLine("  local tag, rule, err = original(ctx, inbound, sp, tp, lp, domain, net, proto, user, ...)")
-        }
-        appendLine("  if err then return tag, rule, err end")
-        if (workspace.routingMode == "global") {
-            appendLine("  local effective = ${luaString(defaultGroupTag)}")
-        } else {
-            appendLine("  local effective = (tag and tag ~= '' and (bindings[tag] or tag)) or ${luaString(defaultGroupTag)}")
-        }
-        appendLine("  local relay = relays[effective]")
-        appendLine("  if relay then return relay, effective .. '/' .. (rule or 'default'), nil end")
-        appendLine("  local bal = balancers[effective]")
-        appendLine("  if bal then")
-        appendLine("    local leaf, perr = pick(bal)")
-        appendLine("    return leaf, effective .. '/' .. (rule or 'default'), perr")
-        appendLine("  end")
-        appendLine("  return tag, rule, nil")
-        appendLine("end")
-    }
-
-    private fun luaTable(values: Map<String, String>) = values.entries.joinToString(",", "{", "}") {
-        "[${luaString(it.key)}]=${luaString(it.value)}"
-    }
-
-    private fun luaString(value: String) = buildString {
-        append('"')
-        for (c in value) {
-            when (c) {
-                '"', '\\' -> { append('\\'); append(c) }
-                in '\u0000'..'\u001f' -> append("\\${c.code.toString().padStart(3, '0')}")
-                else -> append(c)
             }
         }
-        append('"')
+        val defaultTarget = if (current.routingMode == "direct") "direct" else "GLOBAL"
+        targetSpec(current, defaultTarget)?.let { spec ->
+            compiled.put(JSONObject().put("type", "field").put("network", "tcp,udp")
+                .put("outboundTag", fallbackRelayOutbounds.getValue(spec.groupTag)).put("ruleTag", "default"))
+        }
+        return JSONObject(routingOptions.toString()).put("domainStrategy", domainStrategy).put("rules", compiled)
     }
+
+    private fun ruleOutboundTag(id: String, spec: FallbackRelaySpec): String = "${prefix}rule-$id-${spec.username}"
+
+    private fun targetSpec(current: GroupWorkspace, requested: String): FallbackRelaySpec? {
+        val target = when (requested) {
+            "GLOBAL" -> current.effectiveDefaultGroupTag()
+            "DIRECT" -> physicalTarget("direct")
+            "REJECT" -> physicalTarget("block")
+            "direct", "block" -> physicalTarget(requested)
+            else -> current.effectiveRoutingBindings()[requested] ?: physicalTarget(requested)
+        }
+        return fallbackRelaySpecs.firstOrNull { it.groupTag == target }
+    }
+
+    private fun relayOutbound(spec: FallbackRelaySpec, tag: String, user: String) =
+        JSONObject().put("tag", tag).put("protocol", "socks").put("targetStrategy", "AsIs")
+            .put("settings", JSONObject().put("servers", JSONArray().put(
+                JSONObject().put("address", "127.0.0.1").put("port", spec.port)
+                    .put("users", JSONArray().put(JSONObject().put("user", user).put("pass", spec.password))),
+            )))
 
     private fun listener(tag: String, port: Int, protocol: String, settings: JSONObject) =
         JSONObject().put("tag", tag).put("listen", "127.0.0.1").put("port", port)
             .put("protocol", protocol).put("settings", settings)
 
+    fun close() = Unit
     private fun JSONObject.array(key: String) = optJSONArray(key) ?: JSONArray().also { put(key, it) }
+
+    companion object {
+        const val PHYSICAL_PREFIX = "@node:"
+        fun physicalTarget(tag: String) = "$PHYSICAL_PREFIX$tag"
+    }
 }

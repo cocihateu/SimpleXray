@@ -41,6 +41,7 @@ internal data class FailoverPlan(
     val primaryLeaf: String?,
     val candidates: List<String>,
     val failoverTimeoutMs: Int,
+    val watchResponse: Boolean = true,
 )
 
 /** Routes initial TCP/UDP exchanges through ordered group candidates. */
@@ -56,22 +57,23 @@ internal class FallbackRelayServer(
     private val listeners = CopyOnWriteArrayList<ServerSocket>()
     private val jobs = CopyOnWriteArrayList<Job>()
     private val resources = ConcurrentHashMap.newKeySet<Closeable>()
+    private val relayIo = Dispatchers.IO.limitedParallelism(1024)
     @Volatile private var closed = false
 
     fun start(scope: CoroutineScope) {
-        specs.forEach { spec ->
+        specs.groupBy { it.port }.forEach { (port, targets) ->
             val server = ServerSocket().apply {
                 reuseAddress = true
-                bind(InetSocketAddress("127.0.0.1", spec.port))
+                bind(InetSocketAddress("127.0.0.1", port))
             }
             listeners += server
-            jobs += scope.launch(Dispatchers.IO) {
+            jobs += scope.launch(relayIo) {
                 while (isActive && closed == false) {
                     val client = try { server.accept() } catch (_: IOException) { break }
                     track(client)
                     launch {
                         try {
-                            handleClient(spec, client)
+                            handleClient(targets, client)
                         } catch (_: IOException) {
                             // Session teardown closes both local and upstream sockets.
                         } finally {
@@ -102,25 +104,25 @@ internal class FallbackRelayServer(
         if (closed) release(resource)
     }
 
-    private suspend fun handleClient(spec: FallbackRelaySpec, client: Socket) {
+    private suspend fun handleClient(targets: List<FallbackRelaySpec>, client: Socket) {
         client.tcpNoDelay = true
         client.soTimeout = HANDSHAKE_TIMEOUT_MS
         val input = DataInputStream(client.getInputStream())
         val output = client.getOutputStream()
-        if (authenticateServer(input, output, spec) == false) return
+        val (spec, ruleId) = authenticateServer(input, output, targets) ?: return
         val version = input.readUnsignedByte()
         val command = input.readUnsignedByte()
         input.readUnsignedByte()
         val address = readAddress(input)
         if (version != 5) return
         when (command) {
-            1 -> handleTcp(spec, client, address)
-            3 -> handleUdp(spec, client)
+            1 -> handleTcp(spec, client, address, ruleId)
+            3 -> handleUdp(spec, client, ruleId)
             else -> reply(output, 7)
         }
     }
 
-    private suspend fun handleTcp(spec: FallbackRelaySpec, client: Socket, target: SocksAddress) = coroutineScope {
+    private suspend fun handleTcp(spec: FallbackRelaySpec, client: Socket, target: SocksAddress, ruleId: String) = coroutineScope {
         client.soTimeout = 0
         reply(client.getOutputStream(), 0)
         val currentUpstream = AtomicReference<Socket?>(null)
@@ -129,10 +131,11 @@ internal class FallbackRelayServer(
             runCatching { client.close() }
         }
         target.describe(entry)
+        entry.ruleId = ruleId
         RelayConnectionRegistry.register(entry)
         val flight = FirstFlight()
         val localEnded = AtomicBoolean(false)
-        val reader = launch(Dispatchers.IO) {
+        val reader = launch(relayIo) {
             val buffer = ByteArray(32 * 1024)
             try {
                 while (isActive) {
@@ -172,13 +175,14 @@ internal class FallbackRelayServer(
                     connectNode(socket, leaf, 1, target, plan.failoverTimeoutMs)
                     deadline.cancel()
                     deadline = launch(Dispatchers.Default) {
+                        if (plan.watchResponse == false) return@launch
                         val firstPayloadAt = flight.firstPayload.await()
                         val dueAt = maxOf(beganAt, firstPayloadAt) + plan.failoverTimeoutMs
                         delay((dueAt - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
                         socket.close()
                     }
                     socket.soTimeout = 0
-                    sender = launch(Dispatchers.IO) {
+                    sender = launch(relayIo) {
                         try {
                             val output = socket.getOutputStream()
                             flight.replay().forEach { output.write(it) }
@@ -214,7 +218,7 @@ internal class FallbackRelayServer(
                     entry.downloadBytes.addAndGet(count.toLong())
                     responseDelivered = true
                     onCandidateConnected(spec.groupTag, leaf)
-                    responseWatch = responseDeadline(socket, pendingResponseAt, plan.failoverTimeoutMs)
+                    if (plan.watchResponse) responseWatch = responseDeadline(socket, pendingResponseAt, plan.failoverTimeoutMs)
                     while (isActive && entry.closed.get() == false) {
                         val size = socket.getInputStream().read(buffer)
                         if (size < 0) break
@@ -249,7 +253,7 @@ internal class FallbackRelayServer(
         }
     }
 
-    private suspend fun handleUdp(spec: FallbackRelaySpec, client: Socket) = coroutineScope {
+    private suspend fun handleUdp(spec: FallbackRelaySpec, client: Socket, ruleId: String) = coroutineScope {
         val local = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
         track(local)
         val currentControl = AtomicReference<Socket?>(null)
@@ -262,6 +266,7 @@ internal class FallbackRelayServer(
             runCatching { client.close() }
         }
         RelayConnectionRegistry.register(entry)
+        entry.ruleId = ruleId
         val flight = FirstFlight()
         client.soTimeout = 0
         try {
@@ -272,12 +277,12 @@ internal class FallbackRelayServer(
             RelayConnectionRegistry.unregister(entry.id)
             throw e
         }
-        val controlReader = launch(Dispatchers.IO) {
+        val controlReader = launch(relayIo) {
             try { while (client.getInputStream().read() >= 0) { /* Association lifetime. */ } }
             catch (_: IOException) { /* Control socket ended. */ }
             finally { entry.close() }
         }
-        val reader = launch(Dispatchers.IO) {
+        val reader = launch(relayIo) {
             val buffer = ByteArray(65_535)
             val packet = DatagramPacket(buffer, buffer.size)
             try {
@@ -316,6 +321,8 @@ internal class FallbackRelayServer(
                 var deadline = deadlineJob(control, beganAt + plan.failoverTimeoutMs)
                 var remote: DatagramSocket? = null
                 var sender: Job? = null
+                var responseWatch: Job? = null
+                val pendingResponseAt = AtomicLong()
                 var responseDelivered = false
                 try {
                     val bound = connectNode(control, leaf, 3, SocksAddress(1, ByteArray(4), 0), plan.failoverTimeoutMs)
@@ -326,16 +333,18 @@ internal class FallbackRelayServer(
                     upstream.connect(InetSocketAddress("127.0.0.1", bound.port))
                     deadline.cancel()
                     deadline = launch(Dispatchers.Default) {
+                        if (plan.watchResponse == false) return@launch
                         val firstPayloadAt = flight.firstPayload.await()
                         delay((maxOf(beganAt, firstPayloadAt) + plan.failoverTimeoutMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
                         upstream.close()
                     }
-                    sender = launch(Dispatchers.IO) {
+                    sender = launch(relayIo) {
                         try {
                             flight.replay().forEach { upstream.send(DatagramPacket(it, it.size)) }
                             while (isActive) {
                                 val data = flight.pending.poll(100, TimeUnit.MILLISECONDS) ?: continue
                                 flight.retain(data)
+                                if (flight.established) pendingResponseAt.compareAndSet(0L, SystemClock.elapsedRealtime())
                                 upstream.send(DatagramPacket(data, data.size))
                             }
                         } catch (_: IOException) {
@@ -347,6 +356,7 @@ internal class FallbackRelayServer(
                     while (isActive && entry.closed.get() == false) {
                         packet.length = bytes.size
                         upstream.receive(packet)
+                        pendingResponseAt.set(0L)
                         val clientEndpoint = endpoint.get() ?: continue
                         try {
                             local.send(DatagramPacket(packet.data, packet.offset, packet.length, clientEndpoint))
@@ -360,6 +370,9 @@ internal class FallbackRelayServer(
                             flight.establish()
                             responseDelivered = true
                             onCandidateConnected(spec.groupTag, leaf)
+                            if (plan.watchResponse) {
+                                responseWatch = responseDeadline(upstream, pendingResponseAt, plan.failoverTimeoutMs)
+                            }
                         }
                     }
                     break
@@ -368,6 +381,7 @@ internal class FallbackRelayServer(
                     if (responseDelivered || entry.closed.get() || flight.replayable == false) break
                 } finally {
                     deadline.cancel()
+                    responseWatch?.cancel()
                     remote?.let(::release)
                     release(control)
                     sender?.cancelAndJoin()
@@ -430,20 +444,25 @@ internal class FallbackRelayServer(
         return bound
     }
 
-    private fun authenticateServer(input: DataInputStream, output: OutputStream, spec: FallbackRelaySpec): Boolean {
-        if (input.readUnsignedByte() != 5) return false
+    private fun authenticateServer(
+        input: DataInputStream,
+        output: OutputStream,
+        targets: List<FallbackRelaySpec>,
+    ): Pair<FallbackRelaySpec, String>? {
+        if (input.readUnsignedByte() != 5) return null
         val methods = ByteArray(input.readUnsignedByte()).also(input::readFully)
         if (methods.any { it.toInt() == 2 } == false) {
             output.write(byteArrayOf(5, 0xff.toByte()))
-            return false
+            return null
         }
         output.write(byteArrayOf(5, 2))
         val version = input.readUnsignedByte()
         val user = ByteArray(input.readUnsignedByte()).also(input::readFully).toString(Charsets.UTF_8)
         val password = ByteArray(input.readUnsignedByte()).also(input::readFully).toString(Charsets.UTF_8)
-        val accepted = version == 1 && user == spec.username && password == spec.password
+        val spec = targets.firstOrNull { it.username == user.substringBefore("/") }
+        val accepted = version == 1 && spec != null && password == spec.password
         output.write(byteArrayOf(1, if (accepted) 0 else 1))
-        return accepted
+        return if (accepted) requireNotNull(spec) to user.substringAfter("/", "default") else null
     }
 
     private fun readAddress(input: DataInputStream): SocksAddress {

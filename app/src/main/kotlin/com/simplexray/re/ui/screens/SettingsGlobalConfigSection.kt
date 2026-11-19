@@ -30,6 +30,7 @@ internal fun SettingsGlobalConfigSection(
     mainViewModel: MainViewModel,
 ) {
     val summary by mainViewModel.globalConfigSummary.collectAsStateWithLifecycle()
+    val rules by mainViewModel.trafficRules.collectAsStateWithLifecycle()
     val workspace by mainViewModel.groupWorkspace.collectAsStateWithLifecycle()
     val bindings = remember(workspace) { workspace.effectiveRoutingBindings() }
     val filePicker = rememberLauncherForActivityResult(
@@ -40,9 +41,7 @@ internal fun SettingsGlobalConfigSection(
         }
     }
 
-    val routingText = summary.routingScript?.let { script ->
-        stringResource(R.string.global_config_routing_lua, script)
-    } ?: stringResource(R.string.global_config_routing_rules, summary.routingRuleCount)
+    val routingText = stringResource(R.string.global_config_routing_rules, rules.count { it.enabled })
     val summaryText = stringResource(
         R.string.global_config_summary,
         summary.dnsServerCount,

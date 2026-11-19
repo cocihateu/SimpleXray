@@ -14,6 +14,7 @@ data class NodeImportResult(
     val extractedGlobalConfig: JSONObject? = null,
     val skippedCount: Int = 0,
     val skippedReasons: List<String> = emptyList(),
+    val extractedProxyGroups: List<JSONObject> = emptyList(),
 )
 
 /**
@@ -63,7 +64,7 @@ internal object NodeImportConverter {
             return linkResult
         }
 
-        // 3. Try Mihomo YAML (extract ONLY proxies section, ignoring proxy-groups and extra keys).
+        // 3. Convert Mihomo nodes and retain group definitions for the workspace.
         tryParseMihomoYaml(trimmed)?.let { result ->
             if (result.nodes.isNotEmpty() || result.skippedCount > 0) {
                 return result
@@ -94,6 +95,7 @@ internal object NodeImportConverter {
         // Mihomo JSON with "proxies" array
         if (root.optJSONArray("proxies") != null && root.optJSONArray("outbounds") == null) {
             return parseMihomoProxiesArray(root.getJSONArray("proxies"))
+                .copy(extractedProxyGroups = readProxyGroups(root))
         }
 
         // Single sing-box outbound object (may also contain stray log/inbounds keys)
@@ -239,13 +241,18 @@ internal object NodeImportConverter {
     }
 
     // -------------------------------------------------------------------------
-    // Mihomo YAML: extract ONLY proxies array, ignoring proxy-groups & extras
+    // Mihomo YAML nodes and group definitions
     // -------------------------------------------------------------------------
 
     private fun tryParseMihomoYaml(trimmed: String): NodeImportResult? {
         val root = ConfigCodec.parse(trimmed) ?: return null
         val proxies = root.optJSONArray("proxies") ?: return null
-        return parseMihomoProxiesArray(proxies)
+        return parseMihomoProxiesArray(proxies).copy(extractedProxyGroups = readProxyGroups(root))
+    }
+
+    private fun readProxyGroups(root: JSONObject): List<JSONObject> {
+        val groups = root.optJSONArray("proxy-groups") ?: return emptyList()
+        return (0 until groups.length()).mapNotNull { groups.optJSONObject(it) }
     }
 
     private fun parseMihomoProxiesArray(proxies: JSONArray): NodeImportResult {

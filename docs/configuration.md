@@ -6,7 +6,7 @@ SimpleXray Groups separates imported global configuration from the node/group wo
 
 At runtime the final configuration is always fed to Xray through stdin (`-config stdin:`), so a file named `config.json` in the working directory cannot shadow it.
 
-The sanitized result is what the core actually receives. Keep an external copy of the original configuration if every field must be preserved.
+The core receives the assembled workspace after preference overrides.
 
 ## Top-Level Fields
 
@@ -14,7 +14,7 @@ The sanitized result is what the core actually receives. Keep an external copy o
 | --- | --- |
 | `geodata` | Removed entirely; Geo data updates are managed by the app. |
 | `log` | Created if missing. |
-| `api` | Replaced at runtime with local `StatsService` and `RoutingService` APIs. |
+| `api` | Replaced at runtime with local `StatsService`, `RoutingService`, and `HandlerService` APIs. |
 | `stats` | Replaced at runtime with an empty object. |
 | `policy` | Replaced at runtime with a policy enabling outbound up/down statistics. |
 | `inbounds` | Created if missing; see inbound rules below. |
@@ -45,7 +45,7 @@ Configure rule files and update intervals directly in the app's **Settings > Rul
 
 | Field | Action |
 | --- | --- |
-| `tun` inbound | Removed; Hev owns the Android VPN interface. |
+| `tun` inbound | Preserved or injected for Xray TUN; Hev TUN and Simple TUN use the local SOCKS entry. |
 | Primary SOCKS inbound (tag `socks-in`, or first SOCKS inbound) | `port` is replaced with the app SOCKS port; `listen` with the app SOCKS address (loopback only); `settings.auth` and `settings.accounts` are replaced when both app SOCKS credentials are configured. |
 | Other inbounds with `listen` missing, empty, `::` or `0.0.0.0` | `listen` is replaced with `127.0.0.1`. |
 | Missing SOCKS inbound | A default `socks-in` inbound is injected using the app SOCKS address/port, UDP, and configured authentication. |
@@ -82,11 +82,15 @@ Configure rule files and update intervals directly in the app's **Settings > Rul
 
 Group health checks use the application's HTTP call deadline. Primary recovery uses the group's configured interval after a working fallback connection, while standby URL-test groups use their own interval and result trust duration.
 
+Structured rules live in `rules_workspace.json`. Legacy Lua rules are migrated during initial loading; runtime routing uses Xray JSON. Every business target enters a shared local relay, including individual nodes and direct traffic. Internal health checks select physical nodes through a dedicated entry. Rule edits use Xray `adrules`; topology changes restart the core.
+
+Simple TUN uses IPv4 and SOCKS authentication mode `noauth`. Hev and Xray TUN retain their existing IPv6 and authenticated entry options.
+
 ## Runtime Statistics Injection
 
 | Field | Action |
 | --- | --- |
-| `api` | Replaced with `tag=api`, the app API listen address, and `services=["StatsService","RoutingService"]`. |
+| `api` | Replaced with `tag=api`, the app API listen address, and `services=["StatsService","RoutingService","HandlerService"]`. |
 | `stats` | Replaced with an empty object. |
 | `policy` | Replaced with a policy whose `system` enables `statsOutboundUplink` and `statsOutboundDownlink`. |
 | HTTP inbound | When the app HTTP proxy is enabled, an existing HTTP inbound keeps its own endpoint and the system proxy follows its actual address/port; only when no HTTP inbound exists is `http-inbound` injected on `127.0.0.1:<httpPort>`. |

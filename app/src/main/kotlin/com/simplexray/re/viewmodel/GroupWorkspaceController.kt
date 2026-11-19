@@ -16,12 +16,12 @@ import com.simplexray.re.common.config.GroupWorkspace
 import com.simplexray.re.common.config.GroupWorkspaceStore
 import com.simplexray.re.common.config.ProxyGroup
 import com.simplexray.re.common.config.ProxyNode
+import com.simplexray.re.common.config.RuleWorkspaceStore
 import com.simplexray.re.common.subscription.NodeImportConverter
+import com.simplexray.re.common.subscription.SubscriptionService
+import com.simplexray.re.common.subscription.SubscriptionGroups
 import com.simplexray.re.service.FallbackRuntimeInfo
 import com.simplexray.re.service.GroupRuntimeStatus
-import com.simplexray.re.service.VpnRunningState
-import com.simplexray.re.service.VpnStateHub
-import com.simplexray.re.prefs.Preferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,13 +32,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
-import java.net.InetSocketAddress
-import java.net.Proxy
-import java.util.concurrent.TimeUnit
 
 private const val TAG = "GroupWorkspaceController"
 
@@ -51,11 +46,7 @@ internal class GroupWorkspaceController(
 ) {
     private val globalStore = GlobalConfigStore(application)
     private val workspaceStore = GroupWorkspaceStore(application)
-    private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .build()
+    private val subscriptions = SubscriptionService(application)
 
     val workspace: StateFlow<GroupWorkspace> = workspaceStore.observe()
         .stateIn(scope, SharingStarted.Eagerly, GroupWorkspace())
@@ -216,68 +207,11 @@ internal class GroupWorkspaceController(
         _refreshingGroups.value = _refreshingGroups.value + groupTag
         scope.launch(Dispatchers.IO) {
             try {
-                val req = Request.Builder()
-                    .url(url)
-                    .header("User-Agent", "clash-verge/v1.7.7 mihomo/1.19.34 SimpleXray")
-                    .build()
-                val client = if (VpnStateHub.state.value == VpnRunningState.Connected) {
-                    val prefs = Preferences(application)
-                    httpClient.newBuilder()
-                        .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress(prefs.socksAddress, prefs.socksPort)))
-                        .build()
-                } else httpClient
-                val body = client.newCall(req).execute().use { resp ->
-                    if (resp.isSuccessful == false) {
-                        showMessage("订阅拉取失败：HTTP ${resp.code}")
-                        return@launch
-                    }
-                    resp.body?.string().orEmpty()
-                }
-                val parsed = NodeImportConverter.parse(body)
-                if (parsed.nodes.isEmpty()) {
-                    showMessage("订阅中可转换节点为 0。\n${parsed.skippedReasons.distinct().take(5).joinToString("\n")}")
-                    return@launch
-                }
-                var importedCount = 0
-                workspaceStore.update { current ->
-                    val existingOtherTags = current.groups
-                        .filter { it.tag != groupTag }
-                        .flatMap { it.nodes }
-                        .map { it.tag }
-                        .toMutableSet()
-                    val newNodes = parsed.nodes.map { node ->
-                        val unique = GroupWorkspace.uniqueTag(node.tag, existingOtherTags)
-                        if (unique == node.tag) {
-                            node
-                        } else {
-                            val json = JSONObject(node.outboundJson).put("tag", unique).toString()
-                            node.copy(tag = unique, outboundJson = json)
-                        }
-                    }
-                    importedCount = newNodes.size
-                    val newNodeRefs = newNodes.map { GroupMemberRef(it.tag, isGroup = false) }
-                    current.copy(
-                        groups = current.groups.map { g ->
-                            if (g.tag != groupTag) {
-                                g
-                            } else {
-                                val preservedGroups = g.members.filter { it.isGroup }
-                                val mergedMembers = (newNodeRefs + preservedGroups).distinct()
-                                g.copy(
-                                    nodes = newNodes,
-                                    members = mergedMembers,
-                                    selectedMember = g.selectedMember?.takeIf { it in mergedMembers }
-                                        ?: mergedMembers.firstOrNull(),
-                                    subscriptionUpdatedAtMs = System.currentTimeMillis(),
-                                )
-                            }
-                        }
-                    )
-                }
-                val skipHint = if (parsed.skippedCount > 0) {
-                    "（跳过 ${parsed.skippedCount} 条）\n${parsed.skippedReasons.distinct().take(5).joinToString("\n")}"
+                val result = subscriptions.refresh(groupTag)
+                val skipHint = if (result.skippedCount > 0) {
+                    "（跳过 ${result.skippedCount} 条）\n${result.skippedReasons.distinct().take(5).joinToString("\n")}"
                 } else ""
-                showMessage("订阅「$groupTag」已更新：$importedCount 个节点$skipHint")
+                showMessage("订阅「$groupTag」已更新：${result.nodeCount} 个节点$skipHint")
             } catch (e: Exception) {
                 Log.e(TAG, "Subscription refresh failed for $groupTag", e)
                 showMessage("订阅更新失败：${e.message ?: e.javaClass.simpleName}")
@@ -303,6 +237,7 @@ internal class GroupWorkspaceController(
                 return@launch
             }
             onGlobalConfigUpdated(globalStore.file().absolutePath)
+            RuleWorkspaceStore(application).importFromXrayRouting(globalObj)
             var importedNodes = 0
             if (parsed.nodes.isNotEmpty()) {
                 importedNodes = mergeNodesAsGroupsOrLocal(parsed.nodes)
@@ -431,7 +366,7 @@ internal class GroupWorkspaceController(
                                             else put("targetStrategy", strategy)
                                         }.toString()
                                     }.getOrDefault(n.outboundJson)
-                                    n.copy(targetStrategy = strategy, outboundJson = updatedJson)
+                                    n.copy(targetStrategy = strategy, outboundJson = updatedJson, userEdited = true)
                                 }
                             }
                         )
@@ -458,6 +393,7 @@ internal class GroupWorkspaceController(
                                     protocol = protocol,
                                     outboundJson = parsed.toString(),
                                     targetStrategy = strategy,
+                                    userEdited = true,
                                 )
                             } else {
                                 n
@@ -475,6 +411,7 @@ internal class GroupWorkspaceController(
         var updatedGlobal = false
         parsed.extractedGlobalConfig?.let { globalObj ->
             if (globalStore.importFromFullConfig(globalObj)) {
+                RuleWorkspaceStore(application).importFromXrayRouting(globalObj)
                 updatedGlobal = true
                 onGlobalConfigUpdated(globalStore.file().absolutePath)
             }
@@ -502,7 +439,7 @@ internal class GroupWorkspaceController(
             }
             addedCount = dedupedNodes.size
             val newRefs = dedupedNodes.map { GroupMemberRef(it.tag, isGroup = false) }
-            current.copy(
+            val updated = current.copy(
                 groups = current.groups.map { g ->
                     if (g.tag != groupTag) {
                         g
@@ -516,6 +453,8 @@ internal class GroupWorkspaceController(
                     }
                 }
             )
+            SubscriptionGroups.merge(updated, groupTag, parsed.extractedProxyGroups,
+                parsed.nodes.zip(dedupedNodes).associate { (source, node) -> source.tag to node.tag })
         }
         withContext(Dispatchers.Main) {
             val globalNote = if (updatedGlobal) "，已同步更新全局配置" else ""

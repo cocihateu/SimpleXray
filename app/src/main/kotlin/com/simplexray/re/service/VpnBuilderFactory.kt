@@ -7,6 +7,7 @@ import android.net.VpnService
 import android.util.Log
 import com.simplexray.re.BuildConfig
 import com.simplexray.re.prefs.Preferences
+import com.simplexray.re.prefs.TunnelMode
 import java.net.InetAddress
 
 /**
@@ -42,7 +43,7 @@ internal object VpnBuilderFactory {
                     excludeRoute(IpPrefix(InetAddress.getByName("169.254.0.0"), 16))
                     excludeRoute(IpPrefix(InetAddress.getByName("172.16.0.0"), 12))
                     excludeRoute(IpPrefix(InetAddress.getByName("192.168.0.0"), 16))
-                    if (prefs.ipv6) {
+                    if (prefs.ipv6 && prefs.tunnelMode != TunnelMode.SimpleTun) {
                         excludeRoute(IpPrefix(InetAddress.getByName("fc00::"), 7))
                         excludeRoute(IpPrefix(InetAddress.getByName("fe80::"), 10))
                     }
@@ -58,7 +59,7 @@ internal object VpnBuilderFactory {
                 addRoute("0.0.0.0", 0)
                 prefs.dnsIpv4.takeIf { it.isNotEmpty() }?.also { addDnsServer(it) }
             }
-            if (prefs.ipv6) {
+            if (prefs.ipv6 && prefs.tunnelMode != TunnelMode.SimpleTun) {
                 addAddress(prefs.tunnelIpv6Address, prefs.tunnelIpv6Prefix)
                 addRoute("::", 0)
                 prefs.dnsIpv6.takeIf { it.isNotEmpty() }?.also { addDnsServer(it) }

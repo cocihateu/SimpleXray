@@ -39,7 +39,7 @@ implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
 - `GET /configs`
   - 返回当前的端口分配、路由模式（`rule` / `global` / `direct`）与基础参数。
 - `PUT /configs` 或 `PATCH /configs`
-  - 接收 JSON 如 `{"mode": "global"}`，持久化保存后重载核心配置。
+  - 接收 JSON 如 `{"mode": "global"}`，持久化保存后通过 Xray RoutingService 更新规则。
 
 ### 5.2 代理与节点
 
@@ -62,7 +62,20 @@ implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
 - `GET /providers/proxies/{name}`
   - 获取具体订阅提供者的节点明细。
 - `PUT /providers/proxies/{name}`
-  - 触发对应订阅远程拉取与节点更新。
+  - 与原生订阅页共用 SubscriptionService，触发订阅拉取与节点转换。
+  - 有效节点成功保存后返回 204；跳过条目原因写入日志。
+  - 下载错误返回对应 HTTP 状态；转换后有效节点为零返回 422。
+
+### 5.4 规则与连接
+
+- `GET /rules`
+  - 从结构化规则工作区读取类型、内容、目标、索引、UUID 和启用状态。
+- `PATCH /rules/disable`
+  - 按索引设置停用状态，并实时更新 Xray 路由规则。
+- `GET /connections`
+  - 返回业务入口中的活动 TCP / UDP 连接，包含目标域名或地址、实际叶节点、节点组链、命中规则及字节计数。
+- `DELETE /connections/{id}` 与 `DELETE /connections`
+  - 关闭指定连接或全部业务连接。
 
 ## 6. WebSocket 实时数据流
 
@@ -71,13 +84,16 @@ implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
 - `GET /memory`
   - 每秒推送 Xray 内存统计：`{"inuse": bytes, "oslimit": 0}`。
 - `GET /logs`
-  - 持续推送系统与核心运行日志：`{"type": "info", "payload": line}`。
+  - 持续推送日志：`{"type": "info", "payload": line}`。按原始等级映射 debug、info、warning、error，并按 level 参数筛选。
+  - 去除重复时间戳和内部连接编号，过滤 SOCKS 健康检查立即关闭提示。
 - `GET /connections`
-  - 推送转发器拥有的活动连接及全核心流量总计。物理直连路径仅参与总计。HTTP GET 同样提供当前列表，DELETE 支持关闭指定连接或全部转发器连接。
+  - 推送业务入口中的活动连接及核心流量总计，覆盖节点组、物理节点和直连目标。健康检查使用独立内部入口。
+  - 源地址是 Xray 到转发器的本地连接地址；应用进程字段保留为空。
 
 ## 7. 差异与暂缓开放端点
 
-- `/rules` 展示 Xray JSON 规则；Lua 动态规则返回 501 并指向应用内脚本编辑。DNS 查询与规则提供者管理保留在应用设置。
-- 配置热重载聚焦路由模式切换与节点实时选择。
+- Lua 规则在首次载入时迁移成结构化规则。运行时采用 Xray JSON；复合条件保留为 Xray 类型。
+- 运行中规则编辑和模式切换调用 Xray API，节点拓扑变更重启核心。
 - 分组延迟查询支持 `/group/{name}/delay`。界面显式测速可能触发主节点检查；自动恢复检查仍服从分组计时。
 - 设置页复制 `http://127.0.0.1:9090`（或自定义端口）与密钥到同机 zashboard 控制器设置。浏览器的本地网络访问授权按浏览器提示处理。
+- 原生菜单保留概览、代理、订阅、规则和设置；实时连接与日志由 zashboard 展示。

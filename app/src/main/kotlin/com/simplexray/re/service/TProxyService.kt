@@ -387,11 +387,21 @@ class TProxyService : VpnService() {
         if (stopRequestedByUser) return false
         val prefs = Preferences(this)
 
-        val tunMtu = prefs.tunnelMtu
-        val rawConfigContent = if (prefs.httpProxyEnabled) {
+        var tunMtu = prefs.tunnelMtu
+        val needsRawConfig = prefs.httpProxyEnabled ||
+            (prefs.tunnelMode == TunnelMode.XrayTun && !prefs.disableVpn)
+        val rawConfigContent = if (needsRawConfig) {
             runCatching { GlobalConfigStore(this).readText() }.getOrNull()
         } else {
             null
+        }
+
+        if (prefs.tunnelMode == TunnelMode.SimpleTun) {
+            tunMtu = 1500
+        } else if (prefs.tunnelMode == TunnelMode.XrayTun && !prefs.disableVpn) {
+            rawConfigContent?.let { content ->
+                ConfigUtils.extractTunMtu(content)?.let { tunMtu = it }
+            }
         }
 
         val httpProxyEndpoint = if (prefs.httpProxyEnabled) {
@@ -424,7 +434,43 @@ class TProxyService : VpnService() {
         }
         networkMonitor.start()
 
-        run {
+        if (prefs.tunnelMode == TunnelMode.XrayTun && !prefs.disableVpn) {
+            Log.d(TAG, "Using Xray Native TUN mode, skipping external tunnel.")
+        } else if (prefs.tunnelMode == TunnelMode.SimpleTun && !prefs.disableVpn) {
+            val fd = tunFd?.fd
+            if (fd == null) {
+                Log.e(TAG, "tunFd is null after establish()")
+                pendingStartFailure = getString(R.string.vpn_establish_failed)
+                stopXray()
+                return false
+            }
+            Log.d(TAG, "Starting SimpleTUN backend on fd=$fd")
+            val host = prefs.socksAddress.ifEmpty { "127.0.0.1" }
+            if (prefs.socksUsername.isNotEmpty() || prefs.socksPassword.isNotEmpty()) {
+                // ConfigSanitizer forces the primary SOCKS inbound to no-auth in
+                // SimpleTUN mode; the backend has no auth path, so stored
+                // credentials are simply ignored instead of failing startup.
+                Log.w(TAG, "SimpleTUN ignores configured SOCKS credentials (no-auth mode).")
+            }
+            val isIpv4 = host.split('.').let { parts ->
+                parts.size == 4 && parts.all { part ->
+                    part.isNotEmpty() && part.length <= 3 && part.toIntOrNull() in 0..255
+                }
+            }
+            if (!isIpv4) {
+                Log.e(TAG, "SimpleTUN currently supports IPv4 dotted-decimal SOCKS5 inbounds only: $host")
+                pendingStartFailure = getString(R.string.backend_start_failed, TunnelMode.SimpleTun.displayName)
+                stopXray()
+                return false
+            }
+            val result = tunnelBackendController.startSimpleTun(fd, host, prefs.socksPort)
+            if (result != 0) {
+                Log.e(TAG, "SimpleTUN nativeStart failed: $result")
+                pendingStartFailure = getString(R.string.backend_start_failed, TunnelMode.SimpleTun.displayName)
+                stopXray()
+                return false
+            }
+        } else {
             val tproxyFile = File(cacheDir, "tproxy.conf")
             try {
                 tproxyFile.createNewFile()

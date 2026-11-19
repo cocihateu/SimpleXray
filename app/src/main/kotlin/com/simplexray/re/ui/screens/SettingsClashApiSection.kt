@@ -3,6 +3,8 @@ package com.simplexray.re.ui.screens
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
@@ -41,6 +43,11 @@ internal fun SettingsClashApiSection(
 
     SmallTitle(text = stringResource(R.string.clash_api_title))
     Card(modifier = Modifier.fillMaxWidth()) {
+        ArrowPreference(
+            title = "打开 zashboard",
+            summary = "实时连接、日志、节点与规则",
+            onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("http://board.zash.run.place"))) },
+        )
         SwitchPreference(
             title = stringResource(R.string.clash_api_enable),
             summary = stringResource(R.string.clash_api_enable_summary),

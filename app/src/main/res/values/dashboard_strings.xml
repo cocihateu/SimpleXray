@@ -1,0 +1,10 @@
+<resources>
+    <string name="clash_api_restart_notice">Reconnect the service to apply controller changes.</string>
+    <string name="clash_api_controller_url">Copy controller address</string>
+    <string name="clash_api_url_copied">Controller address copied</string>
+    <string name="clash_api_copy_secret">Copy controller secret</string>
+    <string name="workspace_routing_mode_title">Routing mode</string>
+    <string name="routing_mode_rule">Rules</string>
+    <string name="routing_mode_global">Global</string>
+    <string name="routing_mode_direct">Direct</string>
+</resources>

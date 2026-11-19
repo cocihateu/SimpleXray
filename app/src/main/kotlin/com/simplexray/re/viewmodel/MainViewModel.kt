@@ -179,6 +179,13 @@ class MainViewModel(application: Application) :
     val groupWorkspace: StateFlow<GroupWorkspace>
         get() = workspaceController.workspace
 
+    private val trafficRulesController = TrafficRulesController(application, viewModelScope)
+    val trafficRules get() = trafficRulesController.rules
+    val ruleApplyMessage get() = com.simplexray.re.service.RuleRuntimeStatus.message
+    fun saveTrafficRule(rule: com.simplexray.re.common.config.TrafficRule) { trafficRulesController.save(rule) }
+    fun deleteTrafficRule(id: String) { trafficRulesController.delete(id) }
+    fun moveTrafficRule(id: String, delta: Int) { trafficRulesController.move(id, delta) }
+
     val globalConfigSummary: StateFlow<GlobalConfigSummary>
         get() = workspaceController.globalSummary
 

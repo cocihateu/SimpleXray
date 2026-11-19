@@ -23,6 +23,10 @@ jobs:
             21
             25
 
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 9.9.1
@@ -53,6 +57,10 @@ jobs:
           chmod +x third_party/xray-prebuilt/arm64-v8a/libxray.so
           curl -fsSL https://github.com/XTLS/Xray-rules-dat/releases/latest/download/geoip-lite.dat -o app/src/main/assets/geoip.dat
           curl -fsSL https://github.com/XTLS/Xray-rules-dat/releases/latest/download/geosite.dat -o app/src/main/assets/geosite.dat
+
+      - name: Build SimpleTUN for Android
+        working-directory: third_party/simpletun
+        run: zig build android
 
       - name: Assemble signed debug APK
         run: gradle :app:assembleDebug -x :app:ensureXrayCore

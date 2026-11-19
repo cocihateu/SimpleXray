@@ -1,104 +1,27 @@
 package com.simplexray.re.ui.navigation
 
-import android.util.Log
 import androidx.activity.result.ActivityResultLauncher
-import androidx.compose.animation.AnimatedContentTransitionScope
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.calculateEndPadding
-import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
-import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
-import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
-import com.simplexray.re.common.ROUTE_CONFIG
-import com.simplexray.re.common.ROUTE_LOG
+import com.simplexray.re.common.ROUTE_OVERVIEW
+import com.simplexray.re.common.ROUTE_PROXIES
+import com.simplexray.re.common.ROUTE_PROFILES
+import com.simplexray.re.common.ROUTE_RULES
 import com.simplexray.re.common.ROUTE_SETTINGS
-import com.simplexray.re.common.ROUTE_STATS
-import com.simplexray.re.service.TProxyService
-import com.simplexray.re.ui.screens.ConfigScreen
 import com.simplexray.re.ui.screens.DashboardScreen
-import com.simplexray.re.ui.screens.LogScreen
+import com.simplexray.re.ui.screens.ProxiesScreen
+import com.simplexray.re.ui.screens.ProfilesScreen
+import com.simplexray.re.ui.screens.RulesScreen
 import com.simplexray.re.ui.screens.SettingsScreen
 import com.simplexray.re.viewmodel.LogViewModel
 import com.simplexray.re.viewmodel.MainViewModel
 import java.io.File
-
-private const val TAG = "AppNavGraph"
-
-private val BOTTOM_NAV_ROUTE_INDEX = mapOf(
-    ROUTE_STATS to 0,
-    ROUTE_CONFIG to 1,
-    ROUTE_LOG to 2,
-    ROUTE_SETTINGS to 3
-)
-
-private fun NavBackStackEntry.routeIndex(): Int =
-    destination.route?.let { BOTTOM_NAV_ROUTE_INDEX[it] } ?: 0
-
-private fun AnimatedContentTransitionScope<NavBackStackEntry>.horizontalSlideEnter(): EnterTransition {
-    val targetIndex = targetState.routeIndex()
-    val initialIndex = initialState.routeIndex()
-    val direction = if (targetIndex > initialIndex) {
-        AnimatedContentTransitionScope.SlideDirection.Start
-    } else {
-        AnimatedContentTransitionScope.SlideDirection.End
-    }
-    return slideIntoContainer(
-        towards = direction,
-        animationSpec = tween(200, easing = FastOutSlowInEasing)
-    ) + fadeIn(animationSpec = tween(200))
-}
-
-private fun AnimatedContentTransitionScope<NavBackStackEntry>.horizontalSlideExit(): ExitTransition {
-    val targetIndex = targetState.routeIndex()
-    val initialIndex = initialState.routeIndex()
-    val direction = if (targetIndex > initialIndex) {
-        AnimatedContentTransitionScope.SlideDirection.Start
-    } else {
-        AnimatedContentTransitionScope.SlideDirection.End
-    }
-    return slideOutOfContainer(
-        towards = direction,
-        animationSpec = tween(200, easing = FastOutSlowInEasing)
-    ) + fadeOut(animationSpec = tween(150))
-}
-
-private fun AnimatedContentTransitionScope<NavBackStackEntry>.enterTransition() =
-    horizontalSlideEnter()
-
-private fun AnimatedContentTransitionScope<NavBackStackEntry>.exitTransition() =
-    horizontalSlideExit()
-
-private fun AnimatedContentTransitionScope<NavBackStackEntry>.popEnterTransition() =
-    horizontalSlideEnter()
-
-private fun AnimatedContentTransitionScope<NavBackStackEntry>.popExitTransition() =
-    horizontalSlideExit()
-
-private fun createReloadConfigCallback(mainViewModel: MainViewModel): () -> Unit = {
-    Log.d(TAG, "Reload config requested from UI.")
-    mainViewModel.startTProxyService(TProxyService.ACTION_RELOAD_CONFIG)
-}
-
-private fun createEditConfigCallback(mainViewModel: MainViewModel): (File) -> Unit = { file ->
-    Log.d(TAG, "ConfigFragment request: Edit file: ${file.name}")
-    mainViewModel.editConfig(file.absolutePath)
-}
 
 @Composable
 fun BottomNavHost(
@@ -114,87 +37,15 @@ fun BottomNavHost(
     logListState: LazyListState,
     configListState: LazyListState,
     settingsScrollState: LazyListState,
-    onSwitchVpnService: () -> Unit = {}
+    onSwitchVpnService: () -> Unit = {},
 ) {
-    val onReloadConfig = remember(mainViewModel) { createReloadConfigCallback(mainViewModel) }
-    val onEditConfigClick = remember(mainViewModel) { createEditConfigCallback(mainViewModel) }
-    val layoutDirection = LocalLayoutDirection.current
-
-    NavHost(
-        navController = navController,
-        startDestination = ROUTE_STATS,
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(
-                start = paddingValues.calculateStartPadding(layoutDirection),
-                end = paddingValues.calculateEndPadding(layoutDirection)
-            )
-    ) {
-        composable(
-            route = ROUTE_STATS,
-            enterTransition = { enterTransition() },
-            exitTransition = { exitTransition() },
-            popEnterTransition = { popEnterTransition() },
-            popExitTransition = { popExitTransition() }
-        ) {
-            DashboardScreen(
-                mainViewModel = mainViewModel,
-                onSwitchVpnService = onSwitchVpnService,
-                paddingValues = paddingValues
-            )
-        }
-
-        composable(
-            route = ROUTE_CONFIG,
-            enterTransition = { enterTransition() },
-            exitTransition = { exitTransition() },
-            popEnterTransition = { popEnterTransition() },
-            popExitTransition = { popExitTransition() }
-        ) {
-            ConfigScreen(
-                onReloadConfig = onReloadConfig,
-                onEditConfigClick = onEditConfigClick,
-                onDeleteConfigClick = onDeleteConfigClick,
-                onCreateNewConfigFileAndEdit = onCreateNewConfigFileAndEdit,
-                onImportConfigFromClipboard = onImportConfigFromClipboard,
-                mainViewModel = mainViewModel,
-                listState = configListState,
-                paddingValues = paddingValues
-            )
-        }
-
-        composable(
-            route = ROUTE_LOG,
-            enterTransition = { enterTransition() },
-            exitTransition = { exitTransition() },
-            popEnterTransition = { popEnterTransition() },
-            popExitTransition = { popExitTransition() }
-        ) {
-            val settingsState by mainViewModel.settingsState.collectAsStateWithLifecycle()
-            LogScreen(
-                logViewModel = logViewModel,
-                listState = logListState,
-                paddingValues = paddingValues,
-                logLevel = settingsState.switches.logLevel,
-                accessLog = settingsState.switches.accessLog,
-                dnsLog = settingsState.switches.dnsLog
-            )
-        }
-
-        composable(
-            route = ROUTE_SETTINGS,
-            enterTransition = { enterTransition() },
-            exitTransition = { exitTransition() },
-            popEnterTransition = { popEnterTransition() },
-            popExitTransition = { popExitTransition() }
-        ) {
-            SettingsScreen(
-                mainViewModel = mainViewModel,
-                geoipFilePickerLauncher = geoipFilePickerLauncher,
-                geositeFilePickerLauncher = geositeFilePickerLauncher,
-                scrollState = settingsScrollState,
-                paddingValues = paddingValues
-            )
+    NavHost(navController, startDestination = ROUTE_OVERVIEW, modifier = Modifier.fillMaxSize()) {
+        composable(ROUTE_OVERVIEW) { DashboardScreen(mainViewModel, onSwitchVpnService, paddingValues) }
+        composable(ROUTE_PROXIES) { ProxiesScreen(mainViewModel, paddingValues) }
+        composable(ROUTE_PROFILES) { ProfilesScreen(mainViewModel, paddingValues) }
+        composable(ROUTE_RULES) { RulesScreen(mainViewModel, paddingValues = paddingValues) }
+        composable(ROUTE_SETTINGS) {
+            SettingsScreen(mainViewModel, geoipFilePickerLauncher, geositeFilePickerLauncher, settingsScrollState, paddingValues)
         }
     }
 }

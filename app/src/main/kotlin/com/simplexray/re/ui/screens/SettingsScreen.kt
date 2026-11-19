@@ -62,6 +62,7 @@ import top.yukonga.miuix.kmp.icon.extended.Help
 import top.yukonga.miuix.kmp.icon.extended.Ok
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
+import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import com.simplexray.re.ui.components.ConfirmOverlayDialog
 import com.simplexray.re.ui.components.InfoOverlayDialog
@@ -84,7 +85,6 @@ fun SettingsScreen(
     LaunchedEffect(Unit) {
         mainViewModel.updateSettingsState()
         mainViewModel.refreshCustomDatFiles()
-        mainViewModel.refreshLuaScriptFiles()
     }
 
     var showGeoipDeleteDialog by remember { mutableStateOf(false) }
@@ -100,6 +100,8 @@ fun SettingsScreen(
     val geoipUrlDefault = stringResource(R.string.geoip_url)
     val geositeUrlDefault = stringResource(R.string.geosite_url)
     val backdrop = LocalLayerBackdrop.current
+    var category by remember { mutableStateOf(0) }
+    val categories = listOf("通用", "TUN", "入站", "规则资源", "全局 DNS 与配置", "zashboard", "网络", "关于")
 
     if (editingRuleFile != null) {
         GlassBottomSheet(
@@ -283,24 +285,30 @@ fun SettingsScreen(
             contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = topPadding, bottom = bottomPadding)
         ) {
         item {
+            Card {
+                OverlayDropdownPreference(title = "设置分类", items = categories, selectedIndex = category,
+                    onSelectedIndexChange = { category = it })
+            }
+        }
+        if (category == 0) item {
             SettingsGeneralSection(
                 mainViewModel = mainViewModel,
                 onShowHelp = { title, summary -> activeHelpDialog = title to summary },
             )
         }
 
-        item {
+        if (category == 1) item {
             SettingsTunnelSection(mainViewModel = mainViewModel)
         }
 
-        item {
+        if (category == 2) item {
             SettingsInboundSection(
                 mainViewModel = mainViewModel,
                 onShowHelp = { title, summary -> activeHelpDialog = title to summary },
             )
         }
 
-        item {
+        if (category == 3) item {
             SettingsRuleFilesSection(
                 mainViewModel = mainViewModel,
                 geoipProgress = geoipProgress,
@@ -318,29 +326,22 @@ fun SettingsScreen(
             )
         }
 
-        item {
+        if (category == 4) item {
             SettingsGlobalConfigSection(mainViewModel = mainViewModel)
         }
 
-        item {
-            SettingsLuaScriptsSection(
-                mainViewModel = mainViewModel,
-                onDeleteLuaScript = { fileName -> deletingLuaFileName = fileName },
-            )
-        }
-
-        item {
+        if (category == 5) item {
             SettingsClashApiSection(mainViewModel = mainViewModel)
         }
 
-        item {
+        if (category == 6) item {
             SettingsNetworkSection(
                 mainViewModel = mainViewModel,
                 onShowHelp = { title, summary -> activeHelpDialog = title to summary },
             )
         }
 
-        item {
+        if (category == 7) item {
             SettingsAboutSection(
                 mainViewModel = mainViewModel,
                 isCheckingForUpdates = isCheckingForUpdates,

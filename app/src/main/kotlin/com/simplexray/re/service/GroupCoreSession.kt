@@ -5,6 +5,8 @@ import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.common.config.GroupMemberRef
 import com.simplexray.re.common.config.GroupStrategy
 import com.simplexray.re.common.config.GroupWorkspaceStore
+import com.simplexray.re.common.config.RuleWorkspaceStore
+import com.simplexray.re.common.config.GroupWorkspace
 import com.xray.app.router.command.OverrideBalancerTargetRequest
 import com.xray.app.router.command.RoutingServiceGrpc
 import io.grpc.ManagedChannelBuilder
@@ -14,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
@@ -94,6 +97,9 @@ internal class GroupCoreSession(
     private val store: GroupWorkspaceStore,
     private val config: OutboundGroupConfig,
     private val apiPort: Int,
+    private val ruleStore: RuleWorkspaceStore,
+    private val initialRules: List<com.simplexray.re.common.config.TrafficRule>,
+    private val routingEditor: XrayRoutingEditor,
     private val logEvent: (String) -> Unit = VpnStateHub::emitLog,
 ) {
     private var job: Job? = null
@@ -113,6 +119,8 @@ internal class GroupCoreSession(
         logEvent = logEvent,
     )
     private val initialGlobalVersion: Long = GlobalConfigStore.version.value
+
+    fun formatLogLine(line: String): String = config.formatLogLine(line)
 
     fun switchGroupMemberLive(groupTag: String, member: GroupMemberRef) {
         controller?.forceSwitchMember(groupTag, member)
@@ -231,19 +239,14 @@ internal class GroupCoreSession(
                 val initialNodes = config.workspace.allNodes()
                 val initialRelayGroups = config.fallbackRelayOutbounds.keys
                 val initialBalancerGroups = config.balancers.keys
-                store.observe().collect { updated ->
-                    val newRelayGroups = updated.groups
-                        .filter {
-                            it.strategy == GroupStrategy.URL_TEST ||
-                                (it.strategy == GroupStrategy.FALLBACK && it.effectiveMembers().size >= 2)
-                        }
-                        .map { it.tag }
-                        .toSet()
-                    val newBalancerGroups = updated.groups.map { it.tag }.toSet() - newRelayGroups
+                var previousWorkspace = config.workspace
+                var previousRules = initialRules
+                combine(store.observe(), ruleStore.observe()) { workspace, rules -> workspace to rules }.collect { (updated, rules) ->
+                    val newRelayGroups = (updated.groups.map { it.tag } +
+                        (updated.allNodes().map { it.tag } + com.simplexray.re.common.config.BUILTIN_GROUP_TARGET_TAGS)
+                            .map(OutboundGroupConfig::physicalTarget)).toSet()
+                    val newBalancerGroups = emptySet<String>()
                     if (updated.allNodes() != initialNodes ||
-                        updated.effectiveRoutingBindings() != config.routingBindings ||
-                        updated.effectiveDefaultGroupTag() != config.workspace.effectiveDefaultGroupTag() ||
-                        updated.routingMode != config.workspace.routingMode ||
                         newRelayGroups != initialRelayGroups ||
                         newBalancerGroups != initialBalancerGroups
                     ) {
@@ -251,6 +254,23 @@ internal class GroupCoreSession(
                         throw CancellationException("Applying updated group topology")
                     }
                     runtimeController.updateWorkspace(updated)
+                    if (rules != previousRules ||
+                        updated.effectiveRoutingBindings() != previousWorkspace.effectiveRoutingBindings() ||
+                        updated.effectiveDefaultGroupTag() != previousWorkspace.effectiveDefaultGroupTag() ||
+                        updated.routingMode != previousWorkspace.routingMode
+                    ) {
+                        runCatching { routingEditor.apply(updated, rules) }
+                            .onSuccess {
+                                previousRules = rules
+                                previousWorkspace = updated
+                                RuleRuntimeStatus.applied()
+                                logEvent("[Info] Applied ${rules.count { it.enabled }} traffic rules.")
+                            }
+                            .onFailure {
+                                RuleRuntimeStatus.failed(it.message.orEmpty())
+                                logEvent("[Error] Applying traffic rules failed: ${it.message}")
+                            }
+                    }
                 }
             } finally {
                 runtimeController.stop()
@@ -273,4 +293,11 @@ internal class GroupCoreSession(
         GroupRuntimeStatus.stop(this)
         config.close()
     }
+}
+
+internal object RuleRuntimeStatus {
+    private val result = MutableStateFlow("")
+    val message = result.asStateFlow()
+    fun applied() { result.value = "规则已应用" }
+    fun failed(reason: String) { result.value = "规则应用失败：$reason" }
 }

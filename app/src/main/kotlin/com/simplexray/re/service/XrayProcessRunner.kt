@@ -156,6 +156,8 @@ internal class XrayProcessRunner(
             val globalStore = GlobalConfigStore(application)
             val workspaceStore = GroupWorkspaceStore(application)
             val workspace = workspaceStore.load()
+            val ruleStore = com.simplexray.re.common.config.RuleWorkspaceStore(application)
+            val trafficRules = ruleStore.load()
             val unsupported = com.simplexray.re.common.subscription.NodeImportConverter.findUnsupportedNodeReasons(workspace.allNodes())
             if (unsupported.isNotEmpty()) {
                 failCurrentRun(runJob, unsupported.joinToString("\n"))
@@ -166,6 +168,10 @@ internal class XrayProcessRunner(
                 return
             }
             val assembled = workspace.assembleRuntimeConfig(globalStore.loadJson())
+            if (assembled.optJSONObject("routing")?.optString("script")?.isNotBlank() == true) {
+                assembled.getJSONObject("routing").put("domainStrategy", "IPOnDemand")
+            }
+            assembled.optJSONObject("routing")?.remove("script")
             val rawConfigContent = assembled.toString()
             Log.d(tag, "Assembled global + workspace config: ${workspace.groups.size} groups, ${workspace.allNodes().size} nodes")
 
@@ -190,10 +196,14 @@ internal class XrayProcessRunner(
             val runtimeConfig = JSONObject(configWithApi)
             if (workspace.groups.isNotEmpty()) {
                 val groups = OutboundGroupConfig(workspace, allocatePort(), allocatePort(), ::allocatePort)
+                groups.inject(runtimeConfig, application.filesDir, application.cacheDir, trafficRules)
                 session = GroupCoreSession(
                     store = workspaceStore,
                     config = groups,
                     apiPort = apiPort,
+                    ruleStore = ruleStore,
+                    initialRules = trafficRules,
+                    routingEditor = XrayRoutingEditor(xrayPath, application.filesDir, apiPort, groups, trafficRules),
                     logEvent = { message ->
                         val line = formatAppLogLine(message)
                         logFileManager.appendLog(line)
@@ -204,7 +214,6 @@ internal class XrayProcessRunner(
                     requireCurrentRun(runJob)
                     groupSession = session
                 }
-                groups.inject(runtimeConfig, application.filesDir, application.cacheDir)
                 session.startRelayBeforeCore(runScope)
             }
             val finalConfigContent = runtimeConfig.toString()
@@ -330,17 +339,18 @@ internal class XrayProcessRunner(
             var line = activeReader.readLine()
             while (line != null) {
                 val batch = mutableListOf<String>()
-                val stampedLine = stampLogLine(line)
-                Log.d(tag, "XrayLog: $stampedLine")
-                batch.add(stampedLine)
-                callbacks.emitLog(stampedLine)
+                fun acceptLog(raw: String) {
+                    if (raw.contains("proxy/socks: Connection closed immediately, likely health check connection")) return
+                    val stamped = stampLogLine(session?.formatLogLine(raw) ?: raw)
+                    Log.d(tag, "XrayLog: $stamped")
+                    batch.add(stamped)
+                    callbacks.emitLog(stamped)
+                }
+                acceptLog(line)
 
                 while (activeReader.ready() && batch.size < 50) {
                     val nextLine = activeReader.readLine() ?: break
-                    val stampedNext = stampLogLine(nextLine)
-                    Log.d(tag, "XrayLog: $stampedNext")
-                    batch.add(stampedNext)
-                    callbacks.emitLog(stampedNext)
+                    acceptLog(nextLine)
                 }
 
                 logFileManager.appendLogs(batch)

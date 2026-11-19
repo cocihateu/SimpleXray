@@ -1,6 +1,11 @@
 package com.simplexray.re.common
 
 const val ROUTE_STATS = "stats"
+const val ROUTE_OVERVIEW = "overview"
+const val ROUTE_PROXIES = "proxies"
+const val ROUTE_CONNECTIONS = "connections"
+const val ROUTE_PROFILES = "profiles"
+const val ROUTE_RULES = "rules"
 const val ROUTE_CONFIG = "config"
 const val ROUTE_LOG = "log"
 const val ROUTE_SETTINGS = "settings"

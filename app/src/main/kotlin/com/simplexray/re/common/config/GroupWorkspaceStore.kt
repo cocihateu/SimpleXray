@@ -187,6 +187,8 @@ class GroupWorkspaceStore(context: Context) {
                         .put("protocol", node.protocol)
                         .put("outboundJson", node.outboundJson)
                         .put("targetStrategy", node.targetStrategy)
+                        .put("subscriptionName", node.subscriptionName)
+                        .put("userEdited", node.userEdited)
                 )
             }
             val membersArray = JSONArray()
@@ -257,6 +259,8 @@ class GroupWorkspaceStore(context: Context) {
                                 protocol = nodeObj.optString("protocol", "unknown"),
                                 outboundJson = outboundJson,
                                 targetStrategy = nodeObj.optString("targetStrategy"),
+                                subscriptionName = nodeObj.optString("subscriptionName"),
+                                userEdited = nodeObj.optBoolean("userEdited"),
                             )
                         )
                     }

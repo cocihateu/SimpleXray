@@ -1,0 +1,10 @@
+<resources>
+    <string name="clash_api_restart_notice">重新连接服务后应用控制器设置。</string>
+    <string name="clash_api_controller_url">复制控制器地址</string>
+    <string name="clash_api_url_copied">已复制控制器地址</string>
+    <string name="clash_api_copy_secret">复制控制器密钥</string>
+    <string name="workspace_routing_mode_title">分流模式</string>
+    <string name="routing_mode_rule">规则</string>
+    <string name="routing_mode_global">全局代理</string>
+    <string name="routing_mode_direct">直连</string>
+</resources>

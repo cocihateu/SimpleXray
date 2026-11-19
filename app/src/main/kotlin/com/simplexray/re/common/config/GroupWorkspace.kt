@@ -26,6 +26,8 @@ data class ProxyNode(
     val protocol: String,
     val outboundJson: String,
     val targetStrategy: String = "",
+    val subscriptionName: String = "",
+    val userEdited: Boolean = false,
 )
 
 data class ProxyGroup(
