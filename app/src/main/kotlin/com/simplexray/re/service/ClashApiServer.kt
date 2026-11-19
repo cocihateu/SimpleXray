@@ -67,8 +67,8 @@ internal class ClashApiServer(context: Context) :
     private var coreStatsClient: CoreStatsClient? = null
     private var statsPort = 0
 
-    fun startServer() {
-        start(SOCKET_READ_TIMEOUT, false)
+    override fun start() {
+        start(0, false)
     }
 
     override fun close() {
