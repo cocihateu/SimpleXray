@@ -28,6 +28,7 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicLong
 
 internal data class FallbackRelaySpec(
     val groupTag: String,
@@ -163,12 +164,14 @@ internal class FallbackRelayServer(
                 val beganAt = SystemClock.elapsedRealtime()
                 var deadline = deadlineJob(socket, beganAt + plan.failoverTimeoutMs)
                 var sender: Job? = null
+                var responseWatch: Job? = null
+                val pendingResponseAt = AtomicLong()
                 val upstreamFailed = AtomicBoolean(false)
                 var responseDelivered = false
                 try {
                     connectNode(socket, leaf, 1, target, plan.failoverTimeoutMs)
                     deadline.cancel()
-                    deadline = launch(Dispatchers.IO) {
+                    deadline = launch(Dispatchers.Default) {
                         val firstPayloadAt = flight.firstPayload.await()
                         val dueAt = maxOf(beganAt, firstPayloadAt) + plan.failoverTimeoutMs
                         delay((dueAt - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
@@ -189,6 +192,7 @@ internal class FallbackRelayServer(
                                     continue
                                 }
                                 flight.retain(chunk)
+                                if (flight.established) pendingResponseAt.compareAndSet(0L, SystemClock.elapsedRealtime())
                                 output.write(chunk)
                             }
                         } catch (_: IOException) {
@@ -210,9 +214,11 @@ internal class FallbackRelayServer(
                     entry.downloadBytes.addAndGet(count.toLong())
                     responseDelivered = true
                     onCandidateConnected(spec.groupTag, leaf)
+                    responseWatch = responseDeadline(socket, pendingResponseAt, plan.failoverTimeoutMs)
                     while (isActive && entry.closed.get() == false) {
                         val size = socket.getInputStream().read(buffer)
                         if (size < 0) break
+                        pendingResponseAt.set(0L)
                         try {
                             client.getOutputStream().write(buffer, 0, size)
                         } catch (e: IOException) {
@@ -230,6 +236,7 @@ internal class FallbackRelayServer(
                     if (responseDelivered || localEnded.get() || entry.closed.get() || flight.replayable == false) break
                 } finally {
                     deadline.cancel()
+                    responseWatch?.cancel()
                     release(socket)
                     sender?.cancelAndJoin()
                     currentUpstream.compareAndSet(socket, null)
@@ -318,7 +325,7 @@ internal class FallbackRelayServer(
                     currentUdp.set(upstream)
                     upstream.connect(InetSocketAddress("127.0.0.1", bound.port))
                     deadline.cancel()
-                    deadline = launch(Dispatchers.IO) {
+                    deadline = launch(Dispatchers.Default) {
                         val firstPayloadAt = flight.firstPayload.await()
                         delay((maxOf(beganAt, firstPayloadAt) + plan.failoverTimeoutMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
                         upstream.close()
@@ -379,9 +386,25 @@ internal class FallbackRelayServer(
         }
     }
 
-    private fun CoroutineScope.deadlineJob(socket: Socket, deadlineAt: Long) = launch(Dispatchers.IO) {
+    private fun CoroutineScope.deadlineJob(socket: Socket, deadlineAt: Long) = launch(Dispatchers.Default) {
         delay((deadlineAt - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
         socket.close()
+    }
+
+    /** Starts a response deadline from new upload activity and leaves idle sessions open. */
+    private fun CoroutineScope.responseDeadline(
+        transport: Closeable,
+        pendingSince: AtomicLong,
+        timeoutMs: Int,
+    ) = launch(Dispatchers.Default) {
+        while (isActive) {
+            delay(100L)
+            val sentAt = pendingSince.get()
+            if (sentAt > 0 && SystemClock.elapsedRealtime() - sentAt >= timeoutMs) {
+                transport.close()
+                break
+            }
+        }
     }
 
     private fun connectNode(socket: Socket, leaf: String, command: Int, target: SocksAddress, timeout: Int): SocksAddress {
@@ -455,7 +478,8 @@ internal class FallbackRelayServer(
         val firstPayload = CompletableDeferred<Long>()
         private val initial = mutableListOf<ByteArray>()
         private var retainedBytes = 0
-        private var established = false
+        @Volatile var established = false
+            private set
         @Volatile var replayable = true
             private set
 

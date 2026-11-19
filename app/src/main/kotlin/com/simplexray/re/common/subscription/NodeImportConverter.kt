@@ -956,6 +956,7 @@ internal object NodeImportConverter {
         val path = json.optString("path")
         val reqHost = json.optString("host")
         when (net) {
+            "http", "h2", "h3", "quic" -> stream.put("network", net)
             "ws" -> {
                 val ws = JSONObject().put("path", path.ifBlank { "/" })
                 if (reqHost.isNotBlank()) ws.put("host", reqHost)

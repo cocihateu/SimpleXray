@@ -82,6 +82,8 @@ The relay applies the group's timeout to each initial connection attempt, includ
 
 The first-response deadline starts when client payload is available, so idle browser preconnections remain idle. Initial payload replay retains up to 256 KiB; larger transfers stay on their current transport. Retrying application payload before a response can repeat an operation at the destination, while TLS handshake replay occurs before application requests. Connection telemetry covers sessions owned by the fallback relay.
 
+After the first TCP response, a new upload starts the configured response deadline. Incoming data clears it. Expiry closes the current transport and marks its candidate failed so application reconnects use the backup. Idle sessions stay open. Applications with long intentional response delays or one-way traffic need a suitably longer group timeout. Established UDP sessions rely on actual transport errors or application reconnects; their encrypted acknowledgements make a generic response timer ambiguous.
+
 ### Rule Files & Scripts
 
 - Import and replace the standard `geoip.dat` and `geosite.dat` files.
