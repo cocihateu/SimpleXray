@@ -29,6 +29,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -81,14 +82,24 @@ internal class ClashApiServer(context: Context) :
     }
 
     override fun close() {
+        serverScope.cancel()
         for (socket in activeSockets) {
             runCatching { socket.close(NanoWSD.WebSocketFrame.CloseCode.NormalClosure, "Shutdown", false) }
         }
         activeSockets.clear()
-        serverScope.cancel()
+        updateLogStreamLevel()
         coreStatsClient?.close()
         coreStatsClient = null
         stop()
+    }
+
+    @Synchronized private fun updateLogStreamLevel() {
+        val previousCoreLevel = logSettings.coreLevel()
+        RuntimeLogSettings.dashboardStreamLevel = activeSockets.mapNotNull { it.logMinimum }
+            .minOrNull() ?: LogLevel.None
+        if (serverScope.isActive && logSettings.coreLevel() != previousCoreLevel) {
+            GlobalConfigStore.notifyModified()
+        }
     }
 
     private fun obtainStatsClient(): CoreStatsClient? {
@@ -668,6 +679,8 @@ internal class ClashApiServer(context: Context) :
     internal inner class ClashWebSocket(handshake: IHTTPSession) : WebSocket(handshake) {
         private var streamJob: Job? = null
         private val uri = handshake.uri.trimEnd('/').ifEmpty { "/" }
+        @Volatile var logMinimum: LogLevel? = null
+            private set
 
         override fun onOpen() {
             if (!checkAuthorized(handshakeRequest)) {
@@ -748,11 +761,18 @@ internal class ClashApiServer(context: Context) :
         private suspend fun loopLogs() {
             val requested = handshakeRequest.parms["level"] ?: "info"
             val minimum = LogLevel.fromString(if (requested == "silent") "none" else requested)
-            VpnStateHub.logFlow.collect { line ->
-                if (!isOpen) return@collect
-                val effective = maxOf(minimum, apiPrefs.logLevel)
-                val json = ClashPresentation.log(line, effective.value) ?: return@collect
-                runCatching { send(json.toString()) }
+            try {
+                VpnStateHub.logFlow.onSubscription {
+                    logMinimum = minimum
+                    updateLogStreamLevel()
+                }.collect { line ->
+                    if (!isOpen) return@collect
+                    val json = ClashPresentation.log(line, minimum.value) ?: return@collect
+                    runCatching { send(json.toString()) }
+                }
+            } finally {
+                logMinimum = null
+                updateLogStreamLevel()
             }
         }
 

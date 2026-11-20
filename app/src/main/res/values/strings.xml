@@ -57,7 +57,7 @@
     <string name="error_log_title">Error Log</string>
     <string name="app_log_level_title">App log saving level</string>
     <string name="dns_log_title">DNS Log</string>
-    <string name="loglevel_summary">App level controls local log saving. Auto follows the global configuration; Warning saves warning/error entries, and None pauses saving. Saved logs remain available after core restarts and shutdown.\nThe dashboard has its own level, initially Error. Use Debug there while troubleshooting. The core emits the more detailed of the two levels; changing that effective level reloads the core.\nAccess and DNS switches control the corresponding core log channels. Local saving also applies the App level. Restart the core after changing these channel switches.</string>
+    <string name="loglevel_summary">App level controls local log saving. Auto follows the global configuration; Warning saves warning/error entries, and None pauses saving. Saved logs remain available after core restarts and shutdown.\nDashboard settings and live log subscriptions have independent levels. A Debug subscription requests Debug output while App Warning continues saving warning/error entries. Closing that subscription releases its request. Changes to the effective output level reload the core while the dashboard connection stays active.\nAccess and DNS switches control the corresponding core log channels. Local saving also applies the App level. Restart the core after changing these channel switches.</string>
     <string name="theme_title">Theme</string>
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>

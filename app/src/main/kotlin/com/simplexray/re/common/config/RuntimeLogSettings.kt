@@ -21,12 +21,19 @@ internal class RuntimeLogSettings(context: Context) {
 
     fun coreLevel(): LogLevel {
         val app = appLevel()
-        val dashboard = if (dashboardPrefs.enabled) dashboardPrefs.logLevel else LogLevel.None
+        val dashboard = if (dashboardPrefs.enabled) {
+            minOf(dashboardPrefs.logLevel, dashboardStreamLevel)
+        } else LogLevel.None
         return minOf(app, dashboard)
     }
 
     fun applyTo(root: JSONObject) {
         val log = root.optJSONObject("log") ?: JSONObject().also { root.put("log", it) }
         log.put("loglevel", coreLevel().value)
+    }
+
+    companion object {
+        @Volatile
+        var dashboardStreamLevel: LogLevel = LogLevel.None
     }
 }

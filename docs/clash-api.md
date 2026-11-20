@@ -41,7 +41,7 @@ implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
   - 返回当前的端口分配、路由模式（`rule` / `global` / `direct`）与基础参数。
 - `PUT /configs` 或 `PATCH /configs`
   - 接收 JSON 如 `{"mode": "global"}`，持久化保存后通过 Xray RoutingService 更新规则。
-  - `log-level` 更新面板级别。核心按 App 与面板较详细的一档输出，实际输出级别变化时自动重载核心；App 保存级别独立保留。
+  - `log-level` 更新面板保存级别。核心综合 App 保存级别、面板保存级别和当前日志订阅级别，按最详细的一档输出；实际输出级别变化时自动重载核心，App 保存级别独立保留。
 
 ### 5.2 代理与节点
 
@@ -88,7 +88,8 @@ implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
 - `GET /memory`
   - 每秒推送 Xray 内存统计：`{"inuse": bytes, "oslimit": 0}`。
 - `GET /logs`
-  - 持续推送日志：`{"type": "info", "payload": line}`。按原始等级映射 debug、info、warning、error，同时遵循面板级别和 level 参数。
+  - 持续推送日志：`{"type": "info", "payload": line}`。按原始等级映射 debug、info、warning、error，实时推送按该连接的 `level` 参数筛选，缺省为 `info`。
+  - `level=debug` 会申请核心输出 Debug，App Warning 仍只保存警告和错误。订阅建立后应用输出需求，断开时释放；多个订阅取最详细级别。核心重载期间 API 服务和订阅继续存在。
   - 去除重复时间戳和内部连接编号，过滤 SOCKS 健康检查立即关闭提示。
   - 采集阶段过滤 Shadowsocks 的固定弃用提示，其余警告和错误沿用原有级别处理。
 - `GET /connections`
