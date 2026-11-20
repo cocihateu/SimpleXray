@@ -41,7 +41,7 @@ implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
   - 返回当前的端口分配、路由模式（`rule` / `global` / `direct`）与基础参数。
 - `PUT /configs` 或 `PATCH /configs`
   - 接收 JSON 如 `{"mode": "global"}`，持久化保存后通过 Xray RoutingService 更新规则。
-  - `log-level` 更新面板保存级别。核心综合 App 保存级别、面板保存级别和当前日志订阅级别，按最详细的一档输出；实际输出级别变化时自动重载核心，App 保存级别独立保留。
+  - `log-level` 仅更新 `ClashApiPreferences.logLevel`，初始 `error`；省略 `level` 的现有 `/logs` 连接动态采用新值，显式查询参数优先生效。App 保存级别独立保留。日志级别更新产生零 `GlobalConfigStore.notifyModified` 调用和零核心重载；模式、路由与 DNS 配置沿用原有应用流程。
 
 ### 5.2 代理与节点
 
@@ -88,8 +88,9 @@ implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
 - `GET /memory`
   - 每秒推送 Xray 内存统计：`{"inuse": bytes, "oslimit": 0}`。
 - `GET /logs`
-  - 持续推送日志：`{"type": "info", "payload": line}`。按原始等级映射 debug、info、warning、error，实时推送按该连接的 `level` 参数筛选，缺省为 `info`。
-  - `level=debug` 会申请核心输出 Debug，App Warning 仍只保存警告和错误。订阅建立后应用输出需求，断开时释放；多个订阅取最详细级别。核心重载期间 API 服务和订阅继续存在。
+  - 持续推送日志：`{"type": "info", "payload": line}`。按原始等级映射 debug、info、warning、error。显式 `level` 参数独立筛选该连接并优先生效；省略时逐条读取面板保存的 `ClashApiPreferences.logLevel`，初始 `error`，随 `PATCH /configs` 的 `log-level` 更新动态生效。
+  - 主核心启动时固定输出 Debug，整个会话保持该级别；同一原始流供各消费者独立筛选。`level=debug` 接收 Debug 流，App Warning 继续仅保存警告和错误。App 级别调整仅写入 SharedPreferences 并更新界面状态，控制后续文件写入和保存日志界面新增条目。
+  - 所有日志级别调整与订阅打开、关闭、重连均产生零 `GlobalConfigStore.notifyModified` 调用和零核心重载。App Warning 下详细生成仍消耗 CPU 与管道传输资源；逐行 `XrayLog` Logcat 回显已移除。Access、DNS 类别开关在下次核心启动时生效，原有路由与 DNS 配置重载行为继续保留。
   - 去除重复时间戳和内部连接编号，过滤 SOCKS 健康检查立即关闭提示。
   - 采集阶段过滤 Shadowsocks 的固定弃用提示，其余警告和错误沿用原有级别处理。
 - `GET /connections`

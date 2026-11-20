@@ -52,7 +52,7 @@
     <string name="error_log_title">Error 日志</string>
     <string name="app_log_level_title">App 日志保存级别</string>
     <string name="dns_log_title">DNS 日志</string>
-    <string name="loglevel_summary">App 级别控制本地日志保存。Auto 跟随全局配置，Warning 保存警告和错误，None 暂停保存。核心重启、关闭后仍可查看和导出已保存日志。\nzashboard 面板设置与实时日志订阅各自选择级别。Debug 订阅会申请核心 Debug 输出，App Warning 继续保存警告和错误；订阅断开后释放需求。核心实际输出级别变化时自动重载，面板连接继续保留。\nAccess 和 DNS 开关控制对应核心日志类别，本地保存同时遵循 App 级别；调整这两个开关后重启核心生效。</string>
+    <string name="loglevel_summary">App 级别控制新日志的保存。Auto 跟随全局配置，缺省 Warning；Warning 保存警告和错误，None 暂停保存。核心关闭后仍可查看和导出已保存日志。\nzashboard 独立选择显示级别。调整两端级别、开关日志页和浏览器重连时，核心与业务连接持续运行。\n核心持续生成详细日志，确保 Debug 可即时查看。Warning 主要减少文件写入量，详细日志生成仍会消耗处理资源。\nAccess 和 DNS 开关在下次核心启动时生效，本地保存同时遵循 App 级别。</string>
     <string name="theme_title">主题</string>
     <string name="theme_light">浅色</string>
     <string name="theme_dark">深色</string>
