@@ -6,17 +6,21 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.simplexray.re.common.ROUTE_OVERVIEW
 import com.simplexray.re.common.ROUTE_PROXIES
 import com.simplexray.re.common.ROUTE_GROUPS
 import com.simplexray.re.common.ROUTE_GROUP_SETTINGS
+import com.simplexray.re.common.ROUTE_LOG
 import com.simplexray.re.common.ROUTE_RULES
 import com.simplexray.re.common.ROUTE_SETTINGS
 import com.simplexray.re.ui.screens.DashboardScreen
+import com.simplexray.re.ui.screens.LogScreen
 import com.simplexray.re.ui.screens.ProxiesScreen
 import com.simplexray.re.ui.screens.RulesScreen
 import com.simplexray.re.ui.screens.SettingsScreen
@@ -58,6 +62,15 @@ fun BottomNavHost(
                 onDeleted = { navController.popBackStack() })
         }
         composable(ROUTE_RULES) { RulesScreen(mainViewModel, paddingValues = paddingValues) }
+        composable(ROUTE_LOG) {
+            val settings by mainViewModel.settingsState.collectAsStateWithLifecycle()
+            LogScreen(
+                logViewModel = logViewModel,
+                listState = logListState,
+                paddingValues = paddingValues,
+                logLevel = settings.switches.logLevel
+            )
+        }
         composable(ROUTE_SETTINGS) {
             SettingsScreen(mainViewModel, geoipFilePickerLauncher, geositeFilePickerLauncher, settingsScrollState, paddingValues)
         }

@@ -2,6 +2,9 @@ package com.simplexray.re.data.source
 
 import android.content.Context
 import android.util.Log
+import com.simplexray.re.common.LogLine
+import com.simplexray.re.common.config.RuntimeLogSettings
+import com.simplexray.re.service.VpnStateHub
 import java.io.File
 import java.io.FileOutputStream
 import java.io.FileWriter
@@ -10,6 +13,7 @@ import java.io.RandomAccessFile
 
 class LogFileManager(context: Context) {
     val logFile: File
+    private val logSettings = RuntimeLogSettings(context)
 
     init {
         val filesDir = context.filesDir
@@ -19,31 +23,23 @@ class LogFileManager(context: Context) {
 
     private var linesWrittenSinceCheck = 0
 
-    fun appendLog(logEntry: String?) = synchronized(FILE_LOCK) {
-        if (logEntry == null) return@synchronized
-        try {
-            FileWriter(logFile, true).use { fileWriter ->
-                fileWriter.append(logEntry).append('\n')
-            }
-            linesWrittenSinceCheck++
-            if (linesWrittenSinceCheck >= TRUNCATE_CHECK_INTERVAL_LINES) {
-                linesWrittenSinceCheck = 0
-                checkAndTruncateLogFile()
-            }
-        } catch (e: IOException) {
-            Log.e(TAG, "Error appending log to file", e)
-        }
+    fun appendLog(logEntry: String?) {
+        if (logEntry != null) appendLogs(listOf(logEntry))
     }
 
     fun appendLogs(logEntries: Collection<String>) = synchronized(FILE_LOCK) {
         if (logEntries.isEmpty()) return@synchronized
+        val minimum = logSettings.appLevel()
+        val saved = logEntries.filter { LogLine.parse(it).meets(minimum) }
+        if (saved.isEmpty()) return@synchronized
         try {
             FileWriter(logFile, true).use { fileWriter ->
-                for (entry in logEntries) {
+                for (entry in saved) {
                     fileWriter.append(entry).append('\n')
                 }
             }
-            linesWrittenSinceCheck += logEntries.size
+            saved.forEach(VpnStateHub::emitSavedLog)
+            linesWrittenSinceCheck += saved.size
             if (linesWrittenSinceCheck >= TRUNCATE_CHECK_INTERVAL_LINES) {
                 linesWrittenSinceCheck = 0
                 checkAndTruncateLogFile()

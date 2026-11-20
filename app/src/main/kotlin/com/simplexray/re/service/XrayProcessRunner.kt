@@ -12,6 +12,7 @@ import com.simplexray.re.common.ConfigUtils.extractPortsFromJson
 import com.simplexray.re.common.CoreStatsClient
 import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.common.config.GroupWorkspaceStore
+import com.simplexray.re.common.config.RuntimeLogSettings
 import com.simplexray.re.data.source.LogFileManager
 import com.simplexray.re.prefs.Preferences
 import com.simplexray.re.prefs.TunnelMode
@@ -167,7 +168,7 @@ internal class XrayProcessRunner(
                 failCurrentRun(runJob, "Add a proxy group with at least one node before starting Xray.")
                 return
             }
-            val assembled = workspace.assembleRuntimeConfig(globalStore.loadJson())
+            val assembled = workspace.assembleRuntimeConfig(globalStore.loadJson(), prefs.dohBootstrapDns)
             if (assembled.optJSONObject("routing")?.optString("script")?.isNotBlank() == true) {
                 assembled.getJSONObject("routing").put("domainStrategy", "IPOnDemand")
             }
@@ -194,6 +195,7 @@ internal class XrayProcessRunner(
                 "Local port allocation failed for runtime proxy listeners."
             }.also { usedPorts.add(it) }
             val runtimeConfig = JSONObject(configWithApi)
+            RuntimeLogSettings(application).applyTo(runtimeConfig)
             if (workspace.groups.isNotEmpty()) {
                 val groups = OutboundGroupConfig(workspace, allocatePort(), allocatePort(), ::allocatePort)
                 groups.inject(runtimeConfig, application.filesDir, application.cacheDir, trafficRules)
@@ -354,14 +356,15 @@ internal class XrayProcessRunner(
                     batch.add(stamped)
                     callbacks.emitLog(stamped)
                 }
-                acceptLog(line)
-
-                while (activeReader.ready() && batch.size < 50) {
-                    val nextLine = activeReader.readLine() ?: break
-                    acceptLog(nextLine)
+                try {
+                    acceptLog(line)
+                    while (activeReader.ready() && batch.size < 50) {
+                        val nextLine = activeReader.readLine() ?: break
+                        acceptLog(nextLine)
+                    }
+                } finally {
+                    logFileManager.appendLogs(batch)
                 }
-
-                logFileManager.appendLogs(batch)
                 line = activeReader.readLine()
             }
             Log.d(tag, "Native Xray process log stream finished.")
@@ -436,6 +439,9 @@ internal class XrayProcessRunner(
         }
         if (isStarted) {
             Log.e(tag, "Xray process exited unexpectedly, stopping service.")
+            val line = formatAppLogLine("[Error] Xray core exited unexpectedly.")
+            logFileManager.appendLog(line)
+            callbacks.emitLog(line)
             callbacks.onUnexpectedExit()
             return
         }

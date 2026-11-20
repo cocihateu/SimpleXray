@@ -18,6 +18,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.simplexray.re.common.config.GlobalConfigStore
+import com.simplexray.re.prefs.Preferences
 import com.simplexray.re.ui.scaffold.LocalLayerBackdrop
 import com.simplexray.re.viewmodel.MainViewModel
 import org.json.JSONArray
@@ -39,10 +40,13 @@ private val dnsStrategies = listOf("UseIP", "UseIPv4", "UseIPv6")
 internal fun SettingsGlobalConfigSection(mainViewModel: MainViewModel) {
     val context = LocalContext.current
     val store = remember(context) { GlobalConfigStore(context) }
+    val prefs = remember(context) { Preferences(context) }
     val version by GlobalConfigStore.version.collectAsStateWithLifecycle()
     val dns = remember(version) { store.loadJson().optJSONObject("dns") ?: JSONObject() }
     val servers = dns.optJSONArray("servers") ?: JSONArray()
     val hosts = dns.optJSONObject("hosts") ?: JSONObject()
+    val bootstrapDns = remember(version) { prefs.dohBootstrapDns }
+    var editBootstrapDns by remember { mutableStateOf(false) }
     var serverIndex by remember { mutableStateOf<Int?>(null) }
     var hostName by remember { mutableStateOf<String?>(null) }
     SmallTitle("DNS")
@@ -50,6 +54,8 @@ internal fun SettingsGlobalConfigSection(mainViewModel: MainViewModel) {
         OverlayDropdownPreference(title = "解析策略 · queryStrategy", items = dnsStrategies,
             selectedIndex = dnsStrategies.indexOf(dns.optString("queryStrategy", "UseIP")).coerceAtLeast(0),
             onSelectedIndexChange = { index -> store.updateDns { it.put("queryStrategy", dnsStrategies[index]) } })
+        ArrowPreference(title = "DoH 引导 DNS", summary = bootstrapDns,
+            onClick = { editBootstrapDns = true })
     }
     SmallTitle("服务器 · servers")
     Card(Modifier.fillMaxWidth()) {
@@ -92,6 +98,31 @@ internal fun SettingsGlobalConfigSection(mainViewModel: MainViewModel) {
         }, onDelete = if (original.isNotEmpty()) {
             { store.updateDns { it.optJSONObject("hosts")?.remove(original) } }
         } else null, onDismiss = { hostName = null })
+    }
+    if (editBootstrapDns) {
+        DnsBootstrapSheet(bootstrapDns, onSave = { address ->
+            prefs.dohBootstrapDns = address
+            GlobalConfigStore.notifyModified()
+        }, onDismiss = { editBootstrapDns = false })
+    }
+}
+
+@Composable
+private fun DnsBootstrapSheet(
+    original: String,
+    onSave: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var address by remember { mutableStateOf(original) }
+    var visible by remember { mutableStateOf(true) }
+    GlassBottomSheet(show = visible, backdrop = LocalLayerBackdrop.current, title = "DoH 引导 DNS",
+        onDismissRequest = { visible = false }, onDismissFinished = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("用于解析 DoH 服务器域名，默认 223.5.5.5。保存后应用到运行中的核心。")
+            TextField(address, { address = it }, label = "DNS IP 地址", modifier = Modifier.fillMaxWidth())
+            Button(onClick = { onSave(address.trim()); visible = false }, enabled = address.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColorsPrimary()) { Text("保存") }
+        }
     }
 }
 

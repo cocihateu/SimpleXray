@@ -272,7 +272,7 @@ internal class DashboardController(
     suspend fun testOutboundLatency() {
         val content = withContext(Dispatchers.IO) {
             val workspace = workspaceStore.load()
-            workspace.assembleRuntimeConfig(globalConfigStore.loadJson()).toString()
+            workspace.assembleRuntimeConfig(globalConfigStore.loadJson(), prefs.dohBootstrapDns).toString()
         }
         val endpoints = ConfigUtils.extractOutboundEndpoints(content)
         if (endpoints.isEmpty()) {

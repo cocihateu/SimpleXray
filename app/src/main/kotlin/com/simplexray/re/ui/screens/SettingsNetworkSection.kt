@@ -145,7 +145,7 @@ internal fun SettingsNetworkSection(
     val currentLogLevelIndex = logLevelOptions.indexOf(settingsState.switches.logLevel).coerceAtLeast(0)
     SmallTitle(text = "日志")
     Card(modifier = Modifier.fillMaxWidth()) {
-            val errorLogTitle = "日志级别"
+            val errorLogTitle = "App 日志保存级别"
             val loglevelSummary = stringResource(R.string.loglevel_summary)
             GlassDropdownPreference(
                 title = "",

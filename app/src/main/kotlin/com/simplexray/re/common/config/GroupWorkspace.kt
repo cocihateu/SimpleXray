@@ -4,6 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 const val DEFAULT_URL_TEST = "https://www.gstatic.com/generate_204"
+const val DEFAULT_DOH_BOOTSTRAP_DNS = "223.5.5.5"
 
 enum class GroupSourceType {
     LOCAL,
@@ -132,7 +133,10 @@ data class GroupWorkspace(
      * Produces a unified Xray JSON combining global settings with all physical proxy outbounds
      * across all groups plus builtin direct/block outbounds.
      */
-    fun assembleRuntimeConfig(globalRoot: JSONObject): JSONObject {
+    fun assembleRuntimeConfig(
+        globalRoot: JSONObject,
+        dohBootstrapDns: String = DEFAULT_DOH_BOOTSTRAP_DNS,
+    ): JSONObject {
         val runtime = JSONObject(globalRoot.toString())
         val outbounds = JSONArray()
         val addedTags = mutableSetOf<String>()
@@ -168,7 +172,7 @@ data class GroupWorkspace(
         }
 
         runtime.put("outbounds", outbounds)
-        DnsBootstrap.inject(runtime)
+        DnsBootstrap.inject(runtime, dohBootstrapDns)
         return runtime
     }
 

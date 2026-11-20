@@ -56,7 +56,7 @@
     <string name="access_log_title">Access Log</string>
     <string name="error_log_title">Error Log</string>
     <string name="dns_log_title">DNS Log</string>
-    <string name="loglevel_summary">Auto follows configuration. xray-core manages three distinct log channels:\nI. Access Log: Controls inbound traffic auditing, set to None to disable;\nII. Error Log: Controls core diagnostics and error print (Debug / Info / Warning / Error / None);\nIII. DNS Log: Controls DNS resolution details and RTT metrics.\n(Restart core to apply changes)</string>
+    <string name="loglevel_summary">App level controls local log saving. Auto follows the global configuration; Warning saves warning/error entries, and None pauses saving. Saved logs remain available after core restarts and shutdown.\nThe dashboard has its own level, initially Error. Use Debug there while troubleshooting. The core emits the more detailed of the two levels; changing that effective level reloads the core.\nAccess and DNS switches control the corresponding core log channels. Local saving also applies the App level. Restart the core after changing these channel switches.</string>
     <string name="theme_title">Theme</string>
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>
@@ -202,7 +202,7 @@
     <string name="import_success">Import successful</string>
     <string name="import_invalid_format">Invalid import format</string>
     <string name="no_log_entries">No log entries</string>
-    <string name="log_disabled_none">Logging is disabled (none)</string>
+    <string name="log_disabled_none">Saving new logs is paused (None)</string>
     <string name="vpn_interface">VPN Interface</string>
     <string name="create_config_failed">Configuration creation failed</string>
     <string name="no_app_for_export">No app available for export</string>

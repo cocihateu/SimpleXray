@@ -271,8 +271,6 @@ class TProxyService : VpnService() {
         }
         VpnStateHub.updateState(VpnRunningState.Connecting)
         vpnWakeLock.acquireIfEnabled()
-        logFileManager.clearLogs()
-        VpnStateHub.notifyLogsCleared()
 
         if (coreOnly) {
             xrayProcessRunner.launch(serviceScope)

@@ -25,6 +25,12 @@ object VpnStateHub {
     )
     val logFlow: SharedFlow<String> = _logFlow.asSharedFlow()
 
+    private val _savedLogFlow = MutableSharedFlow<String>(
+        extraBufferCapacity = 500,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val savedLogFlow: SharedFlow<String> = _savedLogFlow.asSharedFlow()
+
     private val _clearLogsFlow = MutableSharedFlow<Unit>(
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
@@ -37,6 +43,10 @@ object VpnStateHub {
 
     fun emitLog(line: String) {
         _logFlow.tryEmit(line)
+    }
+
+    fun emitSavedLog(line: String) {
+        _savedLogFlow.tryEmit(line)
     }
 
     fun notifyLogsCleared() {

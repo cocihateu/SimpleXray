@@ -65,7 +65,7 @@ The full structural comparison is in [Differences from Upstream](./upstream-diff
 
 - Complete JSON and YAML configurations, imported through SAF or the clipboard (`.json`, `.yaml`, `.yml`).
 - A one-way sanitizer removes desktop/root-oriented fields and adapts inbounds, routing rules, DNS bootstrap hosts, logging, and outbound transport settings for Android. See [Configuration Overrides and Removals](./configuration.md).
-- Error, access, and DNS logs are controlled separately. The `Auto` log level maps to `warning` when no explicit level is configured.
+- The App log level controls local persistence; `Auto` follows the global level and defaults to `warning`. Dashboard logging has its own level, initially `error`. The core emits the more detailed of the two levels, and an effective level change reloads the core. Access and DNS channels retain their own switches. The Logs tab sits between Rules and Settings and supports search, export, and clear; saved entries remain across core restarts and shutdown.
 - The built-in [scripta](https://github.com/YuKongA/scripta) editor supports syntax highlighting, search and replace, undo/redo, and a quick-symbol bar.
 
 ### TUN Backend
@@ -80,13 +80,13 @@ Existing workspaces assign a unique physical primary's rule name to its fallback
 
 The relay applies the group's timeout to each initial connection attempt, including its final candidate. A working backup response starts the primary recovery interval. A successful scheduled primary check returns new connections to primary. Established streams retain their current transport; application retries create connections using the current group selection.
 
-HTTP latency measures the request from dispatcher execution through response headers, including DNS and connection setup. Dispatcher queue time is excluded, so bulk node checks retain comparable timings. Native UI and zashboard use the same measurement path.
+HTTP latency uses two HEAD requests through the selected node. The first prepares the connection; the second measures request writes through response headers. Each measurement has an isolated connection pool, and each node has its own dispatcher. The supplied timeout covers setup and both requests. Native UI and zashboard use the same measured request RTT.
 
 The first-response deadline starts when client payload is available, so idle browser preconnections remain idle. Initial payload replay retains up to 256 KiB; larger transfers stay on their current transport. Retrying application payload before a response can repeat an operation at the destination, while TLS handshake replay occurs before application requests. Connection telemetry covers sessions owned by the fallback relay.
 
 After the first TCP response, a new upload starts the configured response deadline. Incoming data clears it. Expiry closes the current transport and marks its candidate failed so application reconnects use the backup. Idle sessions stay open. Applications with long intentional response delays or one-way traffic need a suitably longer group timeout. Established UDP sessions rely on actual transport errors or application reconnects; their encrypted acknowledgements make a generic response timer ambiguous.
 
-Domain-based DoH endpoints receive an exact-name bootstrap resolver in the assembled runtime configuration. Bootstrap uses direct TCP to an existing numeric DNS server, or the system resolver when the configured upstreams all use names. Explicit hosts mappings and terminal exact-name DNS rules pointing to independent resolvers retain priority. The DoH URL and ordinary DNS policies remain intact.
+Domain-based DoH endpoints receive an exact-name bootstrap resolver in the assembled runtime configuration. Settings → DNS exposes the bootstrap DNS IP, initially `223.5.5.5`; runtime queries use direct TCP to this IP on port 53. Saving applies it to the running core, and standalone measurements use the same preference. Explicit hosts mappings and terminal exact-name DNS rules pointing to independent resolvers retain priority. The DoH URL and ordinary DNS policies remain intact.
 
 ### Rule Files & Scripts
 

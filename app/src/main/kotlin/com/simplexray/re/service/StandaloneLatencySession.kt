@@ -6,24 +6,20 @@ import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.common.config.GroupMemberRef
 import com.simplexray.re.common.config.GroupStrategy
 import com.simplexray.re.common.config.GroupWorkspace
+import com.simplexray.re.prefs.Preferences
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import okhttp3.Call
-import okhttp3.Callback
-import okhttp3.ConnectionPool
 import okhttp3.Credentials
+import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -31,7 +27,6 @@ import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.ServerSocket
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
 
 internal object StandaloneLatencySession {
     suspend fun measure(
@@ -45,7 +40,9 @@ internal object StandaloneLatencySession {
             val ports = mutableListOf<ServerSocket>()
             fun allocatePort(): Int = ServerSocket(0).also { ports.add(it) }.localPort
             val config = OutboundGroupConfig(workspace, allocatePort(), allocatePort(), ::allocatePort)
-            val root = workspace.assembleRuntimeConfig(GlobalConfigStore(context).loadJson()).apply {
+            val root = workspace.assembleRuntimeConfig(
+                GlobalConfigStore(context).loadJson(), Preferences(context).dohBootstrapDns,
+            ).apply {
                 put("inbounds", JSONArray())
                 put("api", JSONObject().put("services", JSONArray().put("StatsService")))
                 put("log", JSONObject().put("loglevel", "warning").put("access", "none"))
@@ -59,19 +56,18 @@ internal object StandaloneLatencySession {
             }
             val client = OkHttpClient.Builder()
                 .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", config.healthPort)))
-                .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
                 .callTimeout(5, TimeUnit.SECONDS)
                 .followRedirects(false)
                 .build()
             val clients = config.users.mapValues { (_, user) ->
-                client.newBuilder().proxyAuthenticator { _, response ->
+                client.newBuilder().dispatcher(Dispatcher()).proxyAuthenticator { _, response ->
                     response.request.newBuilder().header("Proxy-Authorization",
                         Credentials.basic(user, config.password)).build()
                 }.build()
             }
             val controller = GroupRuntimeController(
                 initialWorkspace = workspace,
-                probeNode = { node, targetUrl -> clients[node]?.let { measureHttp(it, targetUrl) } },
+                probeNode = { node, targetUrl -> clients[node]?.let { HttpLatencyMeasurement.measure(it, targetUrl) } },
                 applyBalancerTarget = { _, _ -> },
                 fallbackRelayOutbounds = config.fallbackRelayOutbounds,
                 balancerTags = emptySet(),
@@ -125,8 +121,9 @@ internal object StandaloneLatencySession {
                         group.effectiveMembers().forEach { prepare(it) }
                         if (group.strategy == GroupStrategy.URL_TEST) {
                             leaves(member).distinct().forEach { leaf ->
-                                controller.recordMeasurement(leaf, group.testUrl,
-                                    clients[leaf]?.let { measureHttp(it, group.testUrl) })
+                                val startedAt = SystemClock.elapsedRealtime()
+                                val delay = clients[leaf]?.let { HttpLatencyMeasurement.measure(it, group.testUrl) }
+                                controller.recordMeasurement(leaf, group.testUrl, delay, startedAt)
                             }
                         }
                     } else {
@@ -140,8 +137,9 @@ internal object StandaloneLatencySession {
                     async {
                         concurrency.withPermit {
                             val leaf = controller.activeLeaf(member) ?: member.tag
-                            val delay = clients[leaf]?.let { measureHttp(it, url) }
-                            controller.recordMeasurement(leaf, url, delay)
+                            val startedAt = SystemClock.elapsedRealtime()
+                            val delay = clients[leaf]?.let { HttpLatencyMeasurement.measure(it, url) }
+                            controller.recordMeasurement(leaf, url, delay, startedAt)
                             onResult(member, delay)
                         }
                     }
@@ -150,37 +148,11 @@ internal object StandaloneLatencySession {
                 relay.close()
                 obfs.close()
                 controller.stop()
-                client.dispatcher.cancelAll()
-                client.connectionPool.evictAll()
+                clients.values.forEach { it.dispatcher.cancelAll() }
                 process?.destroy()
                 readerJob?.cancel()
                 config.close()
             }
-        }
-    }
-
-    private suspend fun measureHttp(client: OkHttpClient, url: String): Long? {
-        val request = Request.Builder().url(url).build()
-        var startedAt = 0L
-        val timedClient = client.newBuilder().addInterceptor { chain ->
-            startedAt = SystemClock.elapsedRealtime()
-            chain.proceed(chain.request())
-        }.build()
-        return suspendCancellableCoroutine { continuation ->
-            val call = timedClient.newCall(request)
-            continuation.invokeOnCancellation { call.cancel() }
-            call.enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) {
-                    continuation.resume(null)
-                }
-
-                override fun onResponse(call: Call, response: Response) {
-                    response.use {
-                        continuation.resume(if (it.code in 200..399)
-                            (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(1L) else null)
-                    }
-                }
-            })
         }
     }
 }

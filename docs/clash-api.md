@@ -19,6 +19,7 @@ implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
   - `enabled`: 开关状态，默认关闭。
   - `port`: 监听端口，默认 9090。
   - `secret`: API 安全令牌，初次启动自动生成 UUID，支持重置。
+  - `logLevel`: 面板独立日志级别，初始 `error`，与 App 保存级别分别持久化。
 - **ClashTagMapper**: 解决代理组与物理节点同名标签冲突问题。若两者重名，物理节点对外名称追加 ` (Node)` 后缀，确保名称全局唯一并双向解析。
 - **ClashApiServer**: 继承自 `NanoWSD`，实现 `Closeable` 接口。
 
@@ -40,6 +41,7 @@ implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
   - 返回当前的端口分配、路由模式（`rule` / `global` / `direct`）与基础参数。
 - `PUT /configs` 或 `PATCH /configs`
   - 接收 JSON 如 `{"mode": "global"}`，持久化保存后通过 Xray RoutingService 更新规则。
+  - `log-level` 更新面板级别。核心按 App 与面板较详细的一档输出，实际输出级别变化时自动重载核心；App 保存级别独立保留。
 
 ### 5.2 代理与节点
 
@@ -52,6 +54,7 @@ implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
   - 切换代理组的出站目标。请求体如 `{"name": "TargetNode"}`。实时调用核心切换并更新工作区。
 - `GET /proxies/{name}/delay`
   - 测试目标延迟。参数包含 `url` 与 `timeout`。成功返回 `{"delay": ms}`，超时返回 504。
+  - 首次 HEAD 准备连接，第二次测量请求发送到响应头返回的往返。超时覆盖准备和两次请求，节点使用独立调度器，测量使用独立连接池。
 - `GET /group`
   - 获取代理组摘要列表。
 
@@ -84,7 +87,7 @@ implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
 - `GET /memory`
   - 每秒推送 Xray 内存统计：`{"inuse": bytes, "oslimit": 0}`。
 - `GET /logs`
-  - 持续推送日志：`{"type": "info", "payload": line}`。按原始等级映射 debug、info、warning、error，并按 level 参数筛选。
+  - 持续推送日志：`{"type": "info", "payload": line}`。按原始等级映射 debug、info、warning、error，同时遵循面板级别和 level 参数。
   - 去除重复时间戳和内部连接编号，过滤 SOCKS 健康检查立即关闭提示。
 - `GET /connections`
   - 推送业务入口中的活动连接及核心流量总计，覆盖节点组、物理节点和直连目标。健康检查使用独立内部入口。
@@ -96,4 +99,4 @@ implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
 - 运行中规则编辑和模式切换调用 Xray API，节点拓扑变更重启核心。
 - 分组延迟查询支持 `/group/{name}/delay`。界面显式测速可能触发主节点检查；自动恢复检查仍服从分组计时。
 - 设置页复制 `http://127.0.0.1:9090`（或自定义端口）与密钥到同机 zashboard 控制器设置。浏览器的本地网络访问授权按浏览器提示处理。
-- 原生菜单保留概览、代理、规则和设置；代理页右上角加号创建基本或订阅分组，更多菜单进入分组管理，实时连接与日志由 zashboard 展示。
+- 原生菜单依次为概览、代理、规则、日志和设置。日志页显示 App 按保存级别落盘的记录，支持搜索、导出和清空；核心启停后继续保留。代理页右上角加号创建基本或订阅分组，更多菜单进入分组管理，zashboard 提供实时连接和独立级别的实时日志。

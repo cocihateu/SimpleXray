@@ -21,9 +21,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.Collections
 
 private const val TAG = "LogViewModel"
 private const val MAX_LOG_ENTRIES = 300
@@ -82,15 +80,15 @@ class LogViewModel(application: Application) :
         Log.d(TAG, "LogViewModel initialized.")
         viewModelScope.launch {
             VpnStateHub.clearLogsFlow.collect {
-                pendingBatchJob?.cancel()
                 logMutex.withLock {
+                    pendingBatchJob?.cancel()
                     logBuffer.clear()
                     _logEntries.value = emptyList()
                 }
             }
         }
         viewModelScope.launch {
-            VpnStateHub.logFlow.collect { line ->
+            VpnStateHub.savedLogFlow.collect { line ->
                 processNewLogs(listOf(line))
             }
         }
@@ -104,25 +102,20 @@ class LogViewModel(application: Application) :
     fun loadLogs() {
         viewModelScope.launch(Dispatchers.IO) {
             Log.d(TAG, "Loading logs.")
-            val savedLogData = logFileManager.readLogs()
-            val initialLogs = if (!savedLogData.isNullOrEmpty()) {
-                groupMultilineLogEntries(savedLogData.split("\n"))
-            } else {
-                emptyList()
+            logMutex.withLock {
+                replaceLogs(logFileManager.readLogs())
             }
-            processInitialLogs(initialLogs)
         }
     }
 
-    private suspend fun processInitialLogs(initialLogs: List<String>) {
-        logMutex.withLock {
-            logBuffer.clear()
-            // Keep at most MAX_LOG_ENTRIES in reverse order (newest first)
-            for (line in initialLogs.takeLast(MAX_LOG_ENTRIES).reversed()) {
-                logBuffer.addLast(line)
-            }
-            _logEntries.value = logBuffer.toList()
+    private fun replaceLogs(saved: String?) {
+        val initialLogs = if (saved.isNullOrEmpty()) emptyList()
+            else groupMultilineLogEntries(saved.split("\n"))
+        logBuffer.clear()
+        for (line in initialLogs.takeLast(MAX_LOG_ENTRIES).reversed()) {
+            logBuffer.addLast(line)
         }
+        _logEntries.value = logBuffer.toList()
         Log.d(TAG, "Processed initial logs: ${_logEntries.value.size} entries.")
     }
 
@@ -150,8 +143,9 @@ class LogViewModel(application: Application) :
 
     fun clearLogs() {
         viewModelScope.launch(Dispatchers.IO) {
-            logFileManager.clearLogs()
             logMutex.withLock {
+                logFileManager.clearLogs()
+                pendingBatchJob?.cancel()
                 logBuffer.clear()
                 _logEntries.value = emptyList()
             }

@@ -2,6 +2,7 @@ package com.simplexray.re.service
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.simplexray.re.prefs.LogLevel
 import java.util.UUID
 
 class ClashApiPreferences(context: Context) {
@@ -15,6 +16,10 @@ class ClashApiPreferences(context: Context) {
     var port: Int
         get() = prefs.getInt(KEY_PORT, DEFAULT_PORT)
         set(value) = prefs.edit().putInt(KEY_PORT, value).apply()
+
+    var logLevel: LogLevel
+        get() = LogLevel.fromString(prefs.getString(KEY_LOG_LEVEL, "error") ?: "error")
+        set(value) = prefs.edit().putString(KEY_LOG_LEVEL, value.value).apply()
 
     var secret: String
         get() {
@@ -39,6 +44,7 @@ class ClashApiPreferences(context: Context) {
         private const val KEY_ENABLED = "clash_api_enabled"
         private const val KEY_PORT = "clash_api_port"
         private const val KEY_SECRET = "clash_api_secret"
+        private const val KEY_LOG_LEVEL = "clash_api_log_level"
 
         const val DEFAULT_ENABLED = false
         const val DEFAULT_PORT = 9090

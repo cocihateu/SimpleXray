@@ -28,7 +28,9 @@ The core receives the assembled workspace after preference overrides.
 | `log.error` | Removed. |
 | `log.access` | Set to `"none"` when the app access log is disabled; removed when it is enabled. |
 | `log.dnsLog` | Overwritten with the app DNS log preference. |
-| `log.loglevel` | Overwritten with the app log level; when set to `Auto` and missing/empty, set to `"warning"`. |
+| `log.loglevel` | The App persistence level follows its preference, with `Auto` reading the global level and defaulting to `"warning"`. Runtime output uses the more detailed of this level and the enabled dashboard level. |
+
+Dashboard logging has a separate preference, initially `error`. App `warning` saves warning/error entries even while the dashboard displays `debug`. Changing the effective core output level reloads the core. Saved logs remain across core restarts and shutdown, with the existing bounded file rotation. The Logs tab between Rules and Settings reads this file and supports search, export, and explicit clearing. Access/DNS channels use their existing switches, while local persistence also applies the App severity threshold.
 
 ## Geodata Block
 
@@ -80,7 +82,7 @@ Configure rule files and update intervals directly in the app's **Settings > Rul
 | --- | --- |
 | `dns.hosts` | Created if missing. |
 | `https://...alidns.com` DoH servers | Static hosts `223.5.5.5` and `223.6.6.6` are injected if absent. |
-| Domain-based DoH endpoints | Runtime assembly adds exact-name bootstrap through an existing numeric DNS server using direct TCP, or through the system resolver when the upstreams all use names. Explicit hosts and terminal exact-name rules pointing to independent resolvers retain priority. |
+| Domain-based DoH endpoints | Runtime assembly adds exact-name bootstrap using direct TCP to the IP in Settings → DNS → DoH bootstrap DNS, initially `223.5.5.5`, on port 53. The preference is saved separately from the global Xray JSON and applies to the running core and standalone measurements. Explicit hosts and terminal exact-name rules pointing to independent resolvers retain priority. |
 | Outbound `tlsSettings.echConfigList` starting with `http://` or `https://` | Removed. |
 | TCP-based proxy outbounds (`vless`, `vmess`, `trojan`, `shadowsocks`, `socks`, `http`) | Missing `streamSettings.sockopt` values are injected: `tcpKeepAliveIdle=15`, `tcpKeepAliveInterval=3`, `tcpUserTimeout=15000`, plus custom sockopt `TCP_KEEPCNT=3` unless already present. Existing user values are not overwritten. |
 
@@ -88,7 +90,7 @@ Group health checks use the application's HTTP call deadline. Primary recovery u
 
 Manual group latency measurements use HTTP round trips through Xray. With the VPN stopped, a temporary Xray process and group relay retain per-node DNS and chain settings; both close when measurement ends. The UI reports pending, measuring, successful latency, or failure.
 
-Latency starts when the HTTP dispatcher executes the request and ends at response headers. It includes DNS and connection setup while excluding dispatcher queue time. Native UI and zashboard share these measurements.
+Latency uses two HEAD requests through the selected node with an isolated connection pool. The first prepares the connection; the second measures request writes through response headers. Each node has its own dispatcher, and the supplied timeout covers setup and both requests. Native UI, scheduled group checks, standalone measurement, and zashboard share this request RTT method.
 
 Fallback callbacks follow the selected ancestry of the responding node. An established backup retains priority until its failure clears the selection. Recovery decisions and connection callbacks share the group-state lock, and measurements respect failures observed after their start time. Established UDP sessions remain open through response silence; initial-response deadlines and actual transport errors retain their existing failover behavior.
 

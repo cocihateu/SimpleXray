@@ -7,6 +7,7 @@ import androidx.core.content.edit
 import com.simplexray.re.R
 import com.simplexray.re.common.ColorMode
 import com.simplexray.re.common.ThemeMode
+import com.simplexray.re.common.config.DEFAULT_DOH_BOOTSTRAP_DNS
 import kotlin.properties.ReadWriteProperty
 import kotlin.reflect.KProperty
 import kotlinx.serialization.encodeToString
@@ -250,6 +251,8 @@ class Preferences(context: Context) {
             sp.edit { putBoolean(ACCESS_LOG, value) }
         }
 
+    var dohBootstrapDns by stringPref(DOH_BOOTSTRAP_DNS) { DEFAULT_DOH_BOOTSTRAP_DNS }
+
     var dnsLog: Boolean
         get() = safeGetBoolean(DNS_LOG, false)
         set(value) {
@@ -260,6 +263,7 @@ class Preferences(context: Context) {
         const val LOG_LEVEL: String = "LogLevel"
         const val ACCESS_LOG: String = "AccessLog"
         const val DNS_LOG: String = "DnsLog"
+        const val DOH_BOOTSTRAP_DNS: String = "DohBootstrapDns"
         const val SOCKS_ADDR: String = "SocksAddr"
         const val SOCKS_PORT: String = "SocksPort"
         const val HTTP_PORT: String = "HttpPort"

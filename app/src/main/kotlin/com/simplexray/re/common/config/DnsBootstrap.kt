@@ -6,7 +6,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 internal object DnsBootstrap {
-    fun inject(root: JSONObject) {
+    fun inject(root: JSONObject, bootstrapDns: String = DEFAULT_DOH_BOOTSTRAP_DNS) {
         val dns = root.optJSONObject("dns") ?: return
         if (dns.optString("script").isNotBlank()) return
         val configured = dns.optJSONArray("servers") ?: return
@@ -28,17 +28,10 @@ internal object DnsBootstrap {
         }
         if (domains.isEmpty()) return
 
-        val numericServer = servers.firstOrNull { InetAddresses.isNumericAddress(address(it)) }
-        val bootstrapAddress = if (numericServer == null) {
-            "localhost"
-        } else {
-            val ip = address(numericServer)
-            val host = if (ip.contains(':')) "[$ip]" else ip
-            val port = (numericServer as? JSONObject)?.optInt("port", 53) ?: 53
-            "tcp+local://$host:$port"
-        }
+        val ip = bootstrapDns.removeSurrounding("[", "]")
+        val host = if (ip.contains(':')) "[$ip]" else ip
         val bootstrap = JSONObject()
-            .put("address", bootstrapAddress)
+            .put("address", "tcp+local://$host:53")
             .put("domains", JSONArray(domains.map { "full:$it" }))
             .put("skipFallback", true)
             .put("finalQuery", true)

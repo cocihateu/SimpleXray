@@ -9,6 +9,8 @@ import com.simplexray.re.prefs.LogLevel
 import com.simplexray.re.prefs.Preferences
 import com.simplexray.re.common.ColorMode
 import com.simplexray.re.common.ConfigUtils
+import com.simplexray.re.common.config.GlobalConfigStore
+import com.simplexray.re.common.config.RuntimeLogSettings
 import com.simplexray.re.common.ThemeMode
 import com.simplexray.re.common.isLoopbackAddress
 import com.simplexray.re.service.TProxyService
@@ -481,10 +483,13 @@ internal class SettingsController(
     }
 
     fun setLogLevel(logLevel: LogLevel) {
+        val logs = RuntimeLogSettings(application)
+        val previousCoreLevel = logs.coreLevel()
         prefs.logLevel = logLevel
         _settingsState.value = _settingsState.value.copy(
             switches = _settingsState.value.switches.copy(logLevel = logLevel)
         )
+        if (logs.coreLevel() != previousCoreLevel) GlobalConfigStore.notifyModified()
     }
 
     fun setAccessLog(enabled: Boolean) {

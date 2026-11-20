@@ -19,19 +19,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
-import okhttp3.Call
-import okhttp3.Callback
-import okhttp3.ConnectionPool
 import okhttp3.Credentials
+import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
-import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
 
 internal data class GroupNodeMeasurement(val delayMs: Long?, val completedAtMs: Long)
 internal data class ExitInfoProxy(val port: Int, val username: String, val password: String)
@@ -180,12 +173,11 @@ internal class GroupCoreSession(
             val stub = RoutingServiceGrpc.newBlockingStub(channel)
             val base = OkHttpClient.Builder()
                 .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", config.healthPort)))
-                .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
                 .callTimeout(5, TimeUnit.SECONDS)
                 .followRedirects(false)
                 .build()
             val clients = config.users.mapValues { (_, user) ->
-                base.newBuilder().proxyAuthenticator { _, response ->
+                base.newBuilder().dispatcher(Dispatcher()).proxyAuthenticator { _, response ->
                     response.request.newBuilder().header(
                         "Proxy-Authorization",
                         Credentials.basic(user, config.password),
@@ -195,36 +187,11 @@ internal class GroupCoreSession(
 
             val measurement: suspend (String, String, Int) -> Long? = measurement@{ node, testUrl, timeoutMs ->
                     val client = clients[node] ?: return@measurement null
-                    val req = Request.Builder().url(testUrl.ifBlank { "https://www.gstatic.com/generate_204" }).build()
-                    var startedAt = 0L
-                    val timedClient = client.newBuilder().addInterceptor { chain ->
-                        startedAt = SystemClock.elapsedRealtime()
-                        chain.proceed(chain.request())
-                    }.build()
-                    suspendCancellableCoroutine { continuation ->
-                        val call = timedClient.newCall(req)
-                        call.timeout().timeout(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
-                        continuation.invokeOnCancellation { call.cancel() }
-                        call.enqueue(object : Callback {
-                            override fun onFailure(call: Call, e: IOException) {
-                                GroupRuntimeStatus.recordMeasurement(this@GroupCoreSession, node, null)
-                                continuation.resume(null)
-                            }
-
-                            override fun onResponse(call: Call, response: Response) {
-                                response.use {
-                                    if (it.code in 200..399) {
-                                        val latency = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(1L)
-                                        GroupRuntimeStatus.recordMeasurement(this@GroupCoreSession, node, latency)
-                                        continuation.resume(latency)
-                                    } else {
-                                        GroupRuntimeStatus.recordMeasurement(this@GroupCoreSession, node, null)
-                                        continuation.resume(null)
-                                    }
-                                }
-                            }
-                        })
-                    }
+                    val latency = HttpLatencyMeasurement.measure(
+                        client, testUrl.ifBlank { "https://www.gstatic.com/generate_204" }, timeoutMs,
+                    )
+                    GroupRuntimeStatus.recordMeasurement(this@GroupCoreSession, node, latency)
+                    latency
                 }
             measureNode = measurement
             applyTarget = apply@{ group, target ->
@@ -291,12 +258,12 @@ internal class GroupCoreSession(
                     }
                 }
             } finally {
+                clients.values.forEach { it.dispatcher.cancelAll() }
                 runtimeController.stop()
                 if (controller === runtimeController) controller = null
                 measureNode = null
                 applyTarget = null
                 channel.shutdownNow()
-                base.connectionPool.evictAll()
                 GroupRuntimeStatus.stop(this@GroupCoreSession)
             }
         }

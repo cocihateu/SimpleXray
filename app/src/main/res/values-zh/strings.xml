@@ -51,7 +51,7 @@
     <string name="access_log_title">Access 日志</string>
     <string name="error_log_title">Error 日志</string>
     <string name="dns_log_title">DNS 日志</string>
-    <string name="loglevel_summary">Auto 表示跟随配置。xray-core 有三类独立的日志管道，分别是：\n① Access Log：控制入站连接审计，设为 None 可关闭该类日志；\n② Error Log：控制内核诊断与错误打印（Debug / Info / Warning / Error / None）；\n③ DNS Log：控制是否打印域名解析与 RTT 耗时结果。\n（修改后需重启内核生效）</string>
+    <string name="loglevel_summary">App 级别控制本地日志保存。Auto 跟随全局配置，Warning 保存警告和错误，None 暂停保存。核心重启、关闭后仍可查看和导出已保存日志。\nzashboard 使用独立级别，初始为 Error，排障时可切到 Debug。核心按两端较详细的级别输出，实际输出级别变化时自动重载核心。\nAccess 和 DNS 开关控制对应核心日志类别，本地保存同时遵循 App 级别；调整这两个开关后重启核心生效。</string>
     <string name="theme_title">主题</string>
     <string name="theme_light">浅色</string>
     <string name="theme_dark">深色</string>
@@ -196,7 +196,7 @@
     <string name="import_success">导入成功</string>
     <string name="import_invalid_format">导入格式无效</string>
     <string name="no_log_entries">无日志</string>
-    <string name="log_disabled_none">日志已按设置关闭（none）</string>
+    <string name="log_disabled_none">新日志保存已暂停（None）</string>
     <string name="vpn_interface">VPN 接口</string>
     <string name="create_config_failed">配置创建失败</string>
     <string name="no_app_for_export">没有可用于导出的应用</string>

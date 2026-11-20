@@ -43,9 +43,7 @@ fun LogScreen(
     logViewModel: LogViewModel,
     listState: LazyListState,
     paddingValues: PaddingValues = PaddingValues(),
-    logLevel: LogLevel = LogLevel.Auto,
-    accessLog: Boolean = true,
-    dnsLog: Boolean = false
+    logLevel: LogLevel = LogLevel.Auto
 ) {
     val filteredEntries by logViewModel.filteredEntries.collectAsStateWithLifecycle()
     val searchQuery by logViewModel.searchQuery.collectAsStateWithLifecycle()
@@ -69,17 +67,13 @@ fun LogScreen(
         }
     }
 
-    val isAllLogsDisabled = !accessLog &&
-            logLevel == LogLevel.None &&
-            !dnsLog
+    val savingPaused = logLevel == LogLevel.None &&
+            filteredEntries.isEmpty() && searchQuery.isBlank()
 
     Column(
         modifier = Modifier.fillMaxSize()
     ) {
-        if (isAllLogsDisabled) {
-            // Logging is disabled by the user (loglevel: none): hide every log
-            // entry and show a centered card instead. File logging continues so
-            // switching back to another level immediately shows history.
+        if (savingPaused) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()

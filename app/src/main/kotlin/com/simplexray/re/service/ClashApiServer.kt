@@ -10,9 +10,11 @@ import com.simplexray.re.common.config.GroupWorkspace
 import com.simplexray.re.common.config.GroupWorkspaceStore
 import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.common.config.RuleWorkspaceStore
+import com.simplexray.re.common.config.RuntimeLogSettings
 import com.simplexray.re.common.config.TrafficRule
 import com.simplexray.re.common.subscription.SubscriptionException
 import com.simplexray.re.common.subscription.SubscriptionService
+import com.simplexray.re.data.source.LogFileManager
 import com.simplexray.re.prefs.Preferences
 import com.simplexray.re.prefs.LogLevel
 import fi.iki.elonen.NanoHTTPD
@@ -53,6 +55,8 @@ internal class ClashApiServer(context: Context) :
     private val ruleStore = RuleWorkspaceStore(appContext)
     private val subscriptions = SubscriptionService(appContext)
     private val corePrefs: Preferences = Preferences(appContext)
+    private val logSettings = RuntimeLogSettings(appContext)
+    private val logFileManager = LogFileManager(appContext)
     private val serverScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val activeSockets = CopyOnWriteArrayList<ClashWebSocket>()
 
@@ -188,10 +192,7 @@ internal class ClashApiServer(context: Context) :
 
             uri == "/configs" -> {
                 val ws = workspaceStore.load()
-                val global = GlobalConfigStore(appContext).loadJson()
-                val configuredLevel = corePrefs.logLevel.value.let {
-                    if (it == "auto") global.optJSONObject("log")?.optString("loglevel", "warning") ?: "warning" else it
-                }
+                val configuredLevel = apiPrefs.logLevel.value
                 val cfg = JSONObject()
                     .put("port", if (corePrefs.httpProxyEnabled) corePrefs.httpPort else 0)
                     .put("socks-port", corePrefs.socksPort)
@@ -367,8 +368,9 @@ internal class ClashApiServer(context: Context) :
                 }
                 if (bodyJson.has("log-level")) {
                     val level = bodyJson.getString("log-level")
-                    corePrefs.logLevel = LogLevel.fromString(if (level == "silent") "none" else level)
-                    GlobalConfigStore.notifyModified()
+                    val previousCoreLevel = logSettings.coreLevel()
+                    apiPrefs.logLevel = LogLevel.fromString(if (level == "silent") "none" else level)
+                    if (logSettings.coreLevel() != previousCoreLevel) GlobalConfigStore.notifyModified()
                 }
                 emptyResponse(Response.Status.NO_CONTENT)
             }
@@ -417,10 +419,10 @@ internal class ClashApiServer(context: Context) :
                 result.fold(
                     onSuccess = { refreshed ->
                         if (refreshed.skippedCount > 0) {
-                            VpnStateHub.emitLog("[Warning] Subscription '${group.tag}': ${refreshed.nodeCount} nodes; " +
+                            logEvent("[Warning] Subscription '${group.tag}': ${refreshed.nodeCount} nodes; " +
                                 "${refreshed.skippedCount} skipped. ${refreshed.skippedReasons.distinct().joinToString("; ")}")
                         } else {
-                            VpnStateHub.emitLog("[Info] Subscription '${group.tag}': ${refreshed.nodeCount} nodes updated.")
+                            logEvent("[Info] Subscription '${group.tag}': ${refreshed.nodeCount} nodes updated.")
                         }
                         emptyResponse(Response.Status.NO_CONTENT)
                     },
@@ -434,6 +436,12 @@ internal class ClashApiServer(context: Context) :
 
             else -> jsonResponse(Response.Status.NOT_FOUND, """{"message":"Endpoint not found"}""")
         }
+    }
+
+    private fun logEvent(message: String) {
+        val line = XrayProcessRunner.formatAppLogLine(message)
+        logFileManager.appendLog(line)
+        VpnStateHub.emitLog(line)
     }
 
     private fun handlePatch(uri: String, session: IHTTPSession): Response {
@@ -738,10 +746,12 @@ internal class ClashApiServer(context: Context) :
         }
 
         private suspend fun loopLogs() {
-            val minimum = handshakeRequest.parms["level"] ?: "info"
+            val requested = handshakeRequest.parms["level"] ?: "info"
+            val minimum = LogLevel.fromString(if (requested == "silent") "none" else requested)
             VpnStateHub.logFlow.collect { line ->
                 if (!isOpen) return@collect
-                val json = ClashPresentation.log(line, minimum) ?: return@collect
+                val effective = maxOf(minimum, apiPrefs.logLevel)
+                val json = ClashPresentation.log(line, effective.value) ?: return@collect
                 runCatching { send(json.toString()) }
             }
         }
