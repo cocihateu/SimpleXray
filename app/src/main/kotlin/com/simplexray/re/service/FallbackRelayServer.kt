@@ -331,8 +331,6 @@ internal class FallbackRelayServer(
                 var deadline = deadlineJob(control, beganAt + plan.failoverTimeoutMs)
                 var remote: RelayDatagramTransport? = null
                 var sender: Job? = null
-                var responseWatch: Job? = null
-                val pendingResponseAt = AtomicLong()
                 var responseDelivered = false
                 try {
                     val uotVersion = nodeUotVersions[leaf] ?: 0
@@ -363,7 +361,6 @@ internal class FallbackRelayServer(
                             while (isActive) {
                                 val data = flight.pending.poll(100, TimeUnit.MILLISECONDS) ?: continue
                                 flight.retain(data)
-                                if (flight.established) pendingResponseAt.compareAndSet(0L, SystemClock.elapsedRealtime())
                                 upstream.send(data)
                             }
                         } catch (_: IOException) {
@@ -372,7 +369,6 @@ internal class FallbackRelayServer(
                     }
                     while (isActive && entry.closed.get() == false) {
                         val data = upstream.receive()
-                        pendingResponseAt.set(0L)
                         val clientEndpoint = endpoint.get() ?: continue
                         try {
                             local.send(DatagramPacket(data, data.size, clientEndpoint))
@@ -386,9 +382,6 @@ internal class FallbackRelayServer(
                             flight.establish()
                             responseDelivered = true
                             onCandidateConnected(spec.groupTag, leaf)
-                            if (plan.watchResponse) {
-                                responseWatch = responseDeadline(upstream, pendingResponseAt, plan.failoverTimeoutMs)
-                            }
                         }
                     }
                     break
@@ -397,7 +390,6 @@ internal class FallbackRelayServer(
                     if (responseDelivered || entry.closed.get() || flight.replayable == false) break
                 } finally {
                     deadline.cancel()
-                    responseWatch?.cancel()
                     remote?.let(::release)
                     release(control)
                     sender?.cancelAndJoin()

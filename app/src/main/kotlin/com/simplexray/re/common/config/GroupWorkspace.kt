@@ -168,6 +168,7 @@ data class GroupWorkspace(
         }
 
         runtime.put("outbounds", outbounds)
+        DnsBootstrap.inject(runtime)
         return runtime
     }
 

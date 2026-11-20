@@ -80,12 +80,17 @@ Configure rule files and update intervals directly in the app's **Settings > Rul
 | --- | --- |
 | `dns.hosts` | Created if missing. |
 | `https://...alidns.com` DoH servers | Static hosts `223.5.5.5` and `223.6.6.6` are injected if absent. |
+| Domain-based DoH endpoints | Runtime assembly adds exact-name bootstrap through an existing numeric DNS server using direct TCP, or through the system resolver when the upstreams all use names. Explicit hosts and terminal exact-name rules pointing to independent resolvers retain priority. |
 | Outbound `tlsSettings.echConfigList` starting with `http://` or `https://` | Removed. |
 | TCP-based proxy outbounds (`vless`, `vmess`, `trojan`, `shadowsocks`, `socks`, `http`) | Missing `streamSettings.sockopt` values are injected: `tcpKeepAliveIdle=15`, `tcpKeepAliveInterval=3`, `tcpUserTimeout=15000`, plus custom sockopt `TCP_KEEPCNT=3` unless already present. Existing user values are not overwritten. |
 
 Group health checks use the application's HTTP call deadline. Primary recovery uses the group's configured interval after a working fallback connection, while standby URL-test groups use their own interval and result trust duration.
 
 Manual group latency measurements use HTTP round trips through Xray. With the VPN stopped, a temporary Xray process and group relay retain per-node DNS and chain settings; both close when measurement ends. The UI reports pending, measuring, successful latency, or failure.
+
+Latency starts when the HTTP dispatcher executes the request and ends at response headers. It includes DNS and connection setup while excluding dispatcher queue time. Native UI and zashboard share these measurements.
+
+Fallback callbacks follow the selected ancestry of the responding node. An established backup retains priority until its failure clears the selection. Recovery decisions and connection callbacks share the group-state lock, and measurements respect failures observed after their start time. Established UDP sessions remain open through response silence; initial-response deadlines and actual transport errors retain their existing failover behavior.
 
 Structured rules live in `rules_workspace.json`. Legacy Lua rules are migrated during initial loading; runtime routing uses Xray JSON. Every business target enters a shared local relay, including individual nodes and direct traffic. Internal health checks select physical nodes through a dedicated entry. Rule edits use Xray `adrules`; topology changes restart the core.
 

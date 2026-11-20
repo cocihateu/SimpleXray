@@ -137,8 +137,9 @@ internal class GroupCoreSession(
 
     suspend fun measureTarget(member: GroupMemberRef, url: String, timeoutMs: Int): Long? {
         val leaf = controller?.activeLeaf(member) ?: if (member.isGroup) return null else member.tag
+        val startedAt = SystemClock.elapsedRealtime()
         val result = measureNode?.invoke(leaf, url, timeoutMs)
-        controller?.recordMeasurement(leaf, url, result)
+        controller?.recordMeasurement(leaf, url, result, startedAt)
         return result
     }
 
@@ -195,9 +196,13 @@ internal class GroupCoreSession(
             val measurement: suspend (String, String, Int) -> Long? = measurement@{ node, testUrl, timeoutMs ->
                     val client = clients[node] ?: return@measurement null
                     val req = Request.Builder().url(testUrl.ifBlank { "https://www.gstatic.com/generate_204" }).build()
-                    val startedAt = SystemClock.elapsedRealtime()
+                    var startedAt = 0L
+                    val timedClient = client.newBuilder().addInterceptor { chain ->
+                        startedAt = SystemClock.elapsedRealtime()
+                        chain.proceed(chain.request())
+                    }.build()
                     suspendCancellableCoroutine { continuation ->
-                        val call = client.newCall(req)
+                        val call = timedClient.newCall(req)
                         call.timeout().timeout(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
                         continuation.invokeOnCancellation { call.cancel() }
                         call.enqueue(object : Callback {

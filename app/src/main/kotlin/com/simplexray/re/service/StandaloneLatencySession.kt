@@ -161,9 +161,13 @@ internal object StandaloneLatencySession {
 
     private suspend fun measureHttp(client: OkHttpClient, url: String): Long? {
         val request = Request.Builder().url(url).build()
-        val startedAt = SystemClock.elapsedRealtime()
+        var startedAt = 0L
+        val timedClient = client.newBuilder().addInterceptor { chain ->
+            startedAt = SystemClock.elapsedRealtime()
+            chain.proceed(chain.request())
+        }.build()
         return suspendCancellableCoroutine { continuation ->
-            val call = client.newCall(request)
+            val call = timedClient.newCall(request)
             continuation.invokeOnCancellation { call.cancel() }
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {

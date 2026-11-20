@@ -80,9 +80,13 @@ Existing workspaces assign a unique physical primary's rule name to its fallback
 
 The relay applies the group's timeout to each initial connection attempt, including its final candidate. A working backup response starts the primary recovery interval. A successful scheduled primary check returns new connections to primary. Established streams retain their current transport; application retries create connections using the current group selection.
 
+HTTP latency measures the request from dispatcher execution through response headers, including DNS and connection setup. Dispatcher queue time is excluded, so bulk node checks retain comparable timings. Native UI and zashboard use the same measurement path.
+
 The first-response deadline starts when client payload is available, so idle browser preconnections remain idle. Initial payload replay retains up to 256 KiB; larger transfers stay on their current transport. Retrying application payload before a response can repeat an operation at the destination, while TLS handshake replay occurs before application requests. Connection telemetry covers sessions owned by the fallback relay.
 
 After the first TCP response, a new upload starts the configured response deadline. Incoming data clears it. Expiry closes the current transport and marks its candidate failed so application reconnects use the backup. Idle sessions stay open. Applications with long intentional response delays or one-way traffic need a suitably longer group timeout. Established UDP sessions rely on actual transport errors or application reconnects; their encrypted acknowledgements make a generic response timer ambiguous.
+
+Domain-based DoH endpoints receive an exact-name bootstrap resolver in the assembled runtime configuration. Bootstrap uses direct TCP to an existing numeric DNS server, or the system resolver when the configured upstreams all use names. Explicit hosts mappings and terminal exact-name DNS rules pointing to independent resolvers retain priority. The DoH URL and ordinary DNS policies remain intact.
 
 ### Rule Files & Scripts
 
