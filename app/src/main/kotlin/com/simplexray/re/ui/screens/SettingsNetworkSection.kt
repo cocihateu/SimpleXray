@@ -145,30 +145,21 @@ internal fun SettingsNetworkSection(
     val currentLogLevelIndex = logLevelOptions.indexOf(settingsState.switches.logLevel).coerceAtLeast(0)
     SmallTitle(text = "日志")
     Card(modifier = Modifier.fillMaxWidth()) {
-            val errorLogTitle = "App 日志保存级别"
+            val appLogLevelTitle = stringResource(R.string.app_log_level_title)
             val loglevelSummary = stringResource(R.string.loglevel_summary)
             GlassDropdownPreference(
-                title = "",
+                title = appLogLevelTitle,
                 startAction = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = errorLogTitle,
-                            fontSize = MiuixTheme.textStyles.headline1.fontSize,
-                            fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
-                            color = MiuixTheme.colorScheme.onSurface
+                    IconButton(
+                        onClick = { onShowHelp(appLogLevelTitle, loglevelSummary) },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = MiuixIcons.Help,
+                            contentDescription = appLogLevelTitle,
+                            tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            modifier = Modifier.size(18.dp)
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        IconButton(
-                            onClick = { onShowHelp(errorLogTitle, loglevelSummary) },
-                            modifier = Modifier.size(28.dp)
-                        ) {
-                            Icon(
-                                imageVector = MiuixIcons.Help,
-                                contentDescription = errorLogTitle,
-                                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
                     }
                 },
                 items = logLevelNames,

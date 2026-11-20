@@ -28,7 +28,6 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
-import java.util.concurrent.atomic.AtomicLong
 
 internal data class FallbackRelaySpec(
     val groupTag: String,
@@ -173,8 +172,6 @@ internal class FallbackRelayServer(
                 val beganAt = SystemClock.elapsedRealtime()
                 var deadline = deadlineJob(socket, beganAt + plan.failoverTimeoutMs)
                 var sender: Job? = null
-                var responseWatch: Job? = null
-                val pendingResponseAt = AtomicLong()
                 val upstreamFailed = AtomicBoolean(false)
                 var responseDelivered = false
                 try {
@@ -202,7 +199,6 @@ internal class FallbackRelayServer(
                                     continue
                                 }
                                 flight.retain(chunk)
-                                if (flight.established) pendingResponseAt.compareAndSet(0L, SystemClock.elapsedRealtime())
                                 output.write(chunk)
                             }
                         } catch (_: IOException) {
@@ -224,11 +220,9 @@ internal class FallbackRelayServer(
                     entry.downloadBytes.addAndGet(count.toLong())
                     responseDelivered = true
                     onCandidateConnected(spec.groupTag, leaf)
-                    if (plan.watchResponse) responseWatch = responseDeadline(socket, pendingResponseAt, plan.failoverTimeoutMs)
                     while (isActive && entry.closed.get() == false) {
                         val size = socket.getInputStream().read(buffer)
                         if (size < 0) break
-                        pendingResponseAt.set(0L)
                         try {
                             client.getOutputStream().write(buffer, 0, size)
                         } catch (e: IOException) {
@@ -240,13 +234,14 @@ internal class FallbackRelayServer(
                     if (upstreamFailed.get()) throw IOException("Upstream upload failed")
                     break
                 } catch (_: IOException) {
-                    if (closed == false && entry.closed.get() == false && localEnded.get() == false) {
+                    if (responseDelivered == false && closed == false &&
+                        entry.closed.get() == false && localEnded.get() == false
+                    ) {
                         onCandidateFailed(spec.groupTag, leaf)
                     }
                     if (responseDelivered || localEnded.get() || entry.closed.get() || flight.replayable == false) break
                 } finally {
                     deadline.cancel()
-                    responseWatch?.cancel()
                     release(socket)
                     sender?.cancelAndJoin()
                     currentUpstream.compareAndSet(socket, null)
@@ -411,22 +406,6 @@ internal class FallbackRelayServer(
     private fun CoroutineScope.deadlineJob(socket: Socket, deadlineAt: Long) = launch(Dispatchers.Default) {
         delay((deadlineAt - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
         socket.close()
-    }
-
-    /** Starts a response deadline from new upload activity and leaves idle sessions open. */
-    private fun CoroutineScope.responseDeadline(
-        transport: Closeable,
-        pendingSince: AtomicLong,
-        timeoutMs: Int,
-    ) = launch(Dispatchers.Default) {
-        while (isActive) {
-            delay(100L)
-            val sentAt = pendingSince.get()
-            if (sentAt > 0 && SystemClock.elapsedRealtime() - sentAt >= timeoutMs) {
-                transport.close()
-                break
-            }
-        }
     }
 
     private fun connectNode(socket: Socket, leaf: String, command: Int, target: SocksAddress, timeout: Int): SocksAddress {

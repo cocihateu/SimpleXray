@@ -65,7 +65,7 @@ The full structural comparison is in [Differences from Upstream](./upstream-diff
 
 - Complete JSON and YAML configurations, imported through SAF or the clipboard (`.json`, `.yaml`, `.yml`).
 - A one-way sanitizer removes desktop/root-oriented fields and adapts inbounds, routing rules, DNS bootstrap hosts, logging, and outbound transport settings for Android. See [Configuration Overrides and Removals](./configuration.md).
-- The App log level controls local persistence; `Auto` follows the global level and defaults to `warning`. Dashboard logging has its own level, initially `error`. The core emits the more detailed of the two levels, and an effective level change reloads the core. Access and DNS channels retain their own switches. The Logs tab sits between Rules and Settings and supports search, export, and clear; saved entries remain across core restarts and shutdown.
+- The App log level controls local persistence; `Auto` follows the global level and defaults to `warning`. Dashboard logging has its own level, initially `error`. The core emits the more detailed of the two levels, and an effective level change reloads the core. Access and DNS channels retain their own switches. The Logs tab sits between Rules and Settings and provides a saving-level selector, search, export, and clear; saved entries remain across core restarts and shutdown. The exact Shadowsocks deprecation notice is filtered during ingestion, while connection warnings and errors retain normal handling.
 - The built-in [scripta](https://github.com/YuKongA/scripta) editor supports syntax highlighting, search and replace, undo/redo, and a quick-symbol bar.
 
 ### TUN Backend
@@ -74,7 +74,7 @@ Hev supplies the TUN-to-SOCKS data path. Historical SimpleTUN sources and benchm
 
 ### Routing and Fallback
 
-Each group has an editable list of routing targets. A structured rule `outboundTag` matching one of these names enters that group. Legacy Lua rules are migrated during initial loading. Internal measurements and relay redials use dedicated authenticated inbounds that select the physical outbound directly. Each physical outbound retains its own `targetStrategy`.
+Each group has an editable list of routing targets. A structured rule `outboundTag` matching one of these names enters that group. Legacy Lua rules are migrated during initial loading. Internal measurements use a dedicated authenticated inbound and a measurement copy of each physical outbound with `targetStrategy: AsIs`. Business relay redials retain the selected node's configured `targetStrategy`. Measurement copies preserve transport, front-proxy, and simple-obfs settings.
 
 Existing workspaces assign a unique physical primary's rule name to its fallback group during migration. Groups sharing a primary use explicit bindings in the group editor.
 
@@ -84,7 +84,7 @@ HTTP latency uses two HEAD requests through the selected node. The first prepare
 
 The first-response deadline starts when client payload is available, so idle browser preconnections remain idle. Initial payload replay retains up to 256 KiB; larger transfers stay on their current transport. Retrying application payload before a response can repeat an operation at the destination, while TLS handshake replay occurs before application requests. Connection telemetry covers sessions owned by the fallback relay.
 
-After the first TCP response, a new upload starts the configured response deadline. Incoming data clears it. Expiry closes the current transport and marks its candidate failed so application reconnects use the backup. Idle sessions stay open. Applications with long intentional response delays or one-way traffic need a suitably longer group timeout. Established UDP sessions rely on actual transport errors or application reconnects; their encrypted acknowledgements make a generic response timer ambiguous.
+After the first TCP response, the connection stays open through idle periods, uploads, and delayed application responses. A later stream error ends that connection; group failure decisions come from connection setup and the initial response. This keeps application keepalives, one-way messages, and ordinary stream teardown from changing the group selection. Established UDP sessions retain their existing transport-error behavior.
 
 Domain-based DoH endpoints receive an exact-name bootstrap resolver in the assembled runtime configuration. Settings → DNS exposes the bootstrap DNS IP, initially `223.5.5.5`; runtime queries use direct TCP to this IP on port 53. Saving applies it to the running core, and standalone measurements use the same preference. Explicit hosts mappings and terminal exact-name DNS rules pointing to independent resolvers retain priority. The DoH URL and ordinary DNS policies remain intact.
 

@@ -68,7 +68,8 @@ fun BottomNavHost(
                 logViewModel = logViewModel,
                 listState = logListState,
                 paddingValues = paddingValues,
-                logLevel = settings.switches.logLevel
+                logLevel = settings.switches.logLevel,
+                onLogLevelChange = mainViewModel::setLogLevel
             )
         }
         composable(ROUTE_SETTINGS) {

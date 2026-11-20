@@ -3,7 +3,6 @@ package com.simplexray.re.ui.screens
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -30,10 +29,13 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.simplexray.re.R
 import com.simplexray.re.prefs.LogLevel
+import com.simplexray.re.ui.scaffold.LocalLayerBackdrop
 import com.simplexray.re.viewmodel.LogViewModel
+import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.VerticalScrollBar
 import top.yukonga.miuix.kmp.basic.rememberScrollBarAdapter
+import top.yukonga.miuix.kmp.glass.GlassDropdownPreference
 import top.yukonga.miuix.kmp.interfaces.ExperimentalScrollBarApi
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -42,9 +44,13 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 fun LogScreen(
     logViewModel: LogViewModel,
     listState: LazyListState,
-    paddingValues: PaddingValues = PaddingValues(),
-    logLevel: LogLevel = LogLevel.Auto
+    logLevel: LogLevel,
+    onLogLevelChange: (LogLevel) -> Unit,
+    paddingValues: PaddingValues = PaddingValues()
 ) {
+    val backdrop = LocalLayerBackdrop.current
+    val logLevelOptions = LogLevel.entries
+    val logLevelNames = remember { LogLevel.entries.map { it.name } }
     val filteredEntries by logViewModel.filteredEntries.collectAsStateWithLifecycle()
     val searchQuery by logViewModel.searchQuery.collectAsStateWithLifecycle()
     val isInitialLoad = remember { mutableStateOf(true) }
@@ -71,13 +77,26 @@ fun LogScreen(
             filteredEntries.isEmpty() && searchQuery.isBlank()
 
     Column(
-        modifier = Modifier.fillMaxSize()
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(top = topPadding)
     ) {
+        Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+            GlassDropdownPreference(
+                title = stringResource(R.string.app_log_level_title),
+                items = logLevelNames,
+                selectedIndex = logLevelOptions.indexOf(logLevel),
+                onSelectedIndexChange = { index ->
+                    onLogLevelChange(logLevelOptions[index])
+                },
+                backdrop = backdrop
+            )
+        }
         if (savingPaused) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(top = topPadding, bottom = bottomPadding),
+                    .padding(top = 12.dp, bottom = bottomPadding),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -92,7 +111,7 @@ fun LogScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(top = topPadding, bottom = bottomPadding),
+                    .padding(top = 12.dp, bottom = bottomPadding),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -107,7 +126,7 @@ fun LogScreen(
             SelectionContainer {
                 Box(modifier = Modifier.fillMaxSize()) {
                     val adapter = rememberScrollBarAdapter(scrollState = listState)
-                    val listContentPadding = PaddingValues(top = topPadding, bottom = bottomPadding)
+                    val listContentPadding = PaddingValues(top = 12.dp, bottom = bottomPadding)
                     LazyColumn(
                         state = listState,
                         modifier = Modifier

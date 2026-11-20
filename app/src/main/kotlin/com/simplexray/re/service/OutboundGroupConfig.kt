@@ -46,13 +46,18 @@ internal class OutboundGroupConfig(
     private val nativeUdpOutbounds = obfsSpecs.associate { it.nodeTag to "${prefix}native-udp-${it.username}" }
     private val uotOutbounds = workspace.allNodes().filter { it.udpOverTcpVersion > 0 }
         .mapIndexed { index, node -> node.tag to "${prefix}uot-$index" }.toMap()
+    private val healthOutbounds = mutableMapOf<String, String>()
     private var domainStrategy = "IPIfNonMatch"
     private var routingOptions = JSONObject()
     private val logTargetPattern = Regex("${Regex.escape(prefix)}(?:rule-.*?)?business-(\\d+)")
+    private val logHealthTargetPattern = Regex("health-${Regex.escape(prefix)}(\\d+)")
 
     fun formatLogLine(line: String): String = logTargetPattern.replace(line) { match ->
         val target = fallbackRelaySpecs.getOrNull(match.groupValues[1].toInt())?.groupTag
             ?.removePrefix(PHYSICAL_PREFIX) ?: return@replace match.value
+        when (target) { "direct" -> "DIRECT"; "block" -> "REJECT"; else -> target }
+    }.replace(logHealthTargetPattern) { match ->
+        val target = allLeafTargets.getOrNull(match.groupValues[1].toInt()) ?: return@replace match.value
         when (target) { "direct" -> "DIRECT"; "block" -> "REJECT"; else -> target }
     }.replace(nodeEntryInbound, "node-entry").replace(healthInbound, "health-check")
 
@@ -92,6 +97,17 @@ internal class OutboundGroupConfig(
             if ((0 until outbounds.length()).none { outbounds.getJSONObject(it).optString("tag") == builtin }) {
                 outbounds.put(JSONObject().put("tag", builtin).put("protocol", if (builtin == "direct") "freedom" else "blackhole"))
             }
+        }
+        allLeafTargets.forEachIndexed { index, node ->
+            val original = (0 until outbounds.length()).map { outbounds.getJSONObject(it) }
+                .first { it.optString("tag") == node }
+            if (node in BUILTIN_GROUP_TARGET_TAGS &&
+                original.optString("targetStrategy", "AsIs").ifBlank { "AsIs" } == "AsIs"
+            ) return@forEachIndexed
+            // Terminal health traffic stays in CoreStatsClient's physical outbound totals.
+            val target = "health-${prefix}$index"
+            healthOutbounds[node] = target
+            outbounds.put(JSONObject(original.toString()).put("tag", target).put("targetStrategy", "AsIs"))
         }
         fallbackRelaySpecs.forEach { spec ->
             outbounds.put(relayOutbound(spec, fallbackRelayOutbounds.getValue(spec.groupTag), spec.username))
@@ -141,9 +157,14 @@ internal class OutboundGroupConfig(
         users.forEach { (target, user) ->
             compiled.put(JSONObject()
                 .put("type", "field")
-                .put("inboundTag", JSONArray().put(nodeEntryInbound).put(healthInbound))
+                .put("inboundTag", JSONArray().put(nodeEntryInbound))
                 .put("user", JSONArray().put(user)).put("outboundTag", target)
                 .put("ruleTag", "sx-internal/$user"))
+            compiled.put(JSONObject()
+                .put("type", "field")
+                .put("inboundTag", JSONArray().put(healthInbound))
+                .put("user", JSONArray().put(user)).put("outboundTag", healthOutbounds[target] ?: target)
+                .put("ruleTag", "sx-health/$user"))
         }
         targetSpec(current, if (current.routingMode == "direct") "direct" else "GLOBAL")?.let { spec ->
             compiled.put(JSONObject().put("type", "field")

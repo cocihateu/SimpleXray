@@ -351,6 +351,7 @@ internal class XrayProcessRunner(
                 val batch = mutableListOf<String>()
                 fun acceptLog(raw: String) {
                     if (raw.contains("proxy/socks: Connection closed immediately, likely health check connection")) return
+                    if (raw.endsWith("[Warning] common/errors: The feature Shadowsocks (with no Forward Secrecy, etc.) is deprecated, not recommended for using and might be removed. Please migrate to VLESS Encryption as soon as possible.")) return
                     val stamped = stampLogLine(session?.formatLogLine(raw) ?: raw)
                     Log.d(tag, "XrayLog: $stamped")
                     batch.add(stamped)

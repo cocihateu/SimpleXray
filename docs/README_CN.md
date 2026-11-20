@@ -67,7 +67,7 @@ SimpleXray 是 Xray-core 的 Android 前端与启动器。它接受完整的 JSO
 
 - 通过 SAF 或剪贴板导入完整 JSON/YAML 配置（`.json`、`.yaml`、`.yml`）。
 - 单向 sanitizer 会移除面向桌面/Root 的字段，并适配 inbounds、路由规则、DNS 引导 hosts、日志与部分出站传输参数。详见 [配置覆写与删除](./configuration_CN.md)。
-- 错误日志、访问日志与 DNS 日志分别控制；未显式设置级别时，`Auto` 映射为 `warning`。
+- 日志页顶部可直接选择 App 保存级别；`Auto` 先读取全局日志配置，缺省采用 `warning`。zashboard 使用独立级别；Access 和 DNS 类别分别控制。核心输出变化时自动重载，已保存日志跨核心启停保留。采集时过滤 Shadowsocks 的固定弃用提示，实际连接警告和错误继续保留。
 - 内置基于 [scripta](https://github.com/YuKongA/scripta) 的代码编辑器，支持语法高亮、查找与替换、撤销/重做以及快捷符号栏。
 
 ### TUN 后端
