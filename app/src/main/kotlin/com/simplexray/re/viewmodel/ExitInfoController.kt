@@ -5,24 +5,19 @@ import com.simplexray.re.service.VpnRunningState
 import com.simplexray.re.service.VpnStateHub
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
-import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.Credentials
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.Response
 import org.json.JSONObject
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 data class ExitInfoState(
     val loading: Boolean = false,
@@ -44,7 +39,7 @@ internal class ExitInfoController(private val scope: CoroutineScope) {
 
     fun refresh() {
         job?.cancel()
-        job = scope.launch {
+        job = scope.launch(Dispatchers.IO) {
             mutableState.value = ExitInfoState(loading = true)
             val connected = VpnStateHub.state.value == VpnRunningState.Connected
             val endpoint = if (connected) GroupRuntimeStatus.exitInfoProxy() else null
@@ -65,7 +60,10 @@ internal class ExitInfoController(private val scope: CoroutineScope) {
             try {
                 val request = Request.Builder()
                     .url("https://ipwho.is/?fields=success,message,ip,country,country_code,region,city,connection").build()
-                val body = awaitBody(client.newCall(request))
+                val body = client.newCall(request).await().use { response ->
+                    if (response.isSuccessful) response.body.string()
+                    else throw IOException("出口信息 HTTP ${response.code}")
+                }
                 val root = JSONObject(body)
                 if (root.optBoolean("success") == false) throw IOException(root.optString("message", "出口信息查询失败"))
                 val network = root.optJSONObject("connection") ?: JSONObject()
@@ -88,18 +86,5 @@ internal class ExitInfoController(private val scope: CoroutineScope) {
                 client.connectionPool.evictAll()
             }
         }
-    }
-
-    private suspend fun awaitBody(call: Call): String = suspendCancellableCoroutine { continuation ->
-        continuation.invokeOnCancellation { call.cancel() }
-        call.enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) { continuation.resumeWithException(e) }
-            override fun onResponse(call: Call, response: Response) {
-                response.use {
-                    if (it.isSuccessful) continuation.resume(it.body?.string().orEmpty())
-                    else continuation.resumeWithException(IOException("出口信息 HTTP ${it.code}"))
-                }
-            }
-        })
     }
 }
