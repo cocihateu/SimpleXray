@@ -125,8 +125,6 @@ class Preferences(context: Context) {
 
     // Last selected config whose SOCKS credentials were auto-adopted.
     var socksAuthSyncedConfigPath: String by stringPref(SOCKS_AUTH_SYNCED_CONFIG_PATH)
-    var dnsIpv4: String by stringPref(DNS_IPV4) { "8.8.8.8" }
-    var dnsIpv6: String by stringPref(DNS_IPV6) { "2001:4860:4860::8888" }
 
     // Retained for legacy hev-socks5-tunnel config compatibility; currently unexposed in UI
     val udpInTcp: Boolean
@@ -270,8 +268,6 @@ class Preferences(context: Context) {
         const val SOCKS_USER: String = "SocksUser"
         const val SOCKS_PASS: String = "SocksPass"
         const val SOCKS_AUTH_SYNCED_CONFIG_PATH: String = "SocksAuthSyncedConfigPath"
-        const val DNS_IPV4: String = "DnsIpv4"
-        const val DNS_IPV6: String = "DnsIpv6"
         const val IPV4: String = "Ipv4"
         const val IPV6: String = "Ipv6"
         const val GLOBAL: String = "Global"

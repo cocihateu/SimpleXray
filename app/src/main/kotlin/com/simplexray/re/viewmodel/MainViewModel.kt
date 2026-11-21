@@ -421,10 +421,6 @@ class MainViewModel(application: Application) :
 
     fun updateSocksPass(passString: String): Boolean = settingsController.updateSocksPass(passString)
 
-    fun updateDnsIpv4(ipv4Addr: String): Boolean = settingsController.updateDnsIpv4(ipv4Addr)
-
-    fun updateDnsIpv6(ipv6Addr: String): Boolean = settingsController.updateDnsIpv6(ipv6Addr)
-
     fun setIpv6Enabled(enabled: Boolean) = settingsController.setIpv6Enabled(enabled)
 
     fun setHideFromRecentsEnabled(enabled: Boolean) = settingsController.setHideFromRecentsEnabled(enabled)

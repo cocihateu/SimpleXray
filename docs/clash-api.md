@@ -76,6 +76,7 @@ implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
   - 从结构化规则工作区读取类型、内容、目标、索引、UUID 和启用状态。
 - `PATCH /rules/disable`
   - 按索引设置停用状态，并实时更新 Xray 路由规则。
+  - App 管理的 DNS 接管规则固定置于业务规则之前；规则启停、默认组与模式切换均保留该入口。
 - `GET /connections`
   - 返回业务入口中的活动 TCP / UDP 连接，包含目标域名或地址、实际叶节点、节点组链、命中规则及字节计数。
 - `DELETE /connections/{id}` 与 `DELETE /connections`

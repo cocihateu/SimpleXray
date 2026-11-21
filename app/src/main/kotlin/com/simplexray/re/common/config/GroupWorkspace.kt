@@ -172,6 +172,7 @@ data class GroupWorkspace(
         }
 
         runtime.put("outbounds", outbounds)
+        ManagedDnsConfig.configureResolver(runtime)
         DnsBootstrap.inject(runtime, dohBootstrapDns)
         return runtime
     }

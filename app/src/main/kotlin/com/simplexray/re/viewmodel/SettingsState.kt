@@ -47,8 +47,6 @@ data class SettingsState(
     val socksPort: InputFieldState,
     val socksUser: InputFieldState,
     val socksPass: InputFieldState,
-    val dnsIpv4: InputFieldState,
-    val dnsIpv6: InputFieldState,
     val switches: SwitchStates,
     val info: InfoStates,
     val files: FileStates,

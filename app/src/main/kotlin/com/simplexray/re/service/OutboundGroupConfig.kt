@@ -2,6 +2,7 @@ package com.simplexray.re.service
 
 import com.simplexray.re.common.config.BUILTIN_GROUP_TARGET_TAGS
 import com.simplexray.re.common.config.GroupWorkspace
+import com.simplexray.re.common.config.ManagedDnsConfig
 import com.simplexray.re.common.config.TrafficRule
 import org.json.JSONArray
 import org.json.JSONObject
@@ -33,6 +34,7 @@ internal class OutboundGroupConfig(
     val balancers: Map<String, String> = emptyMap()
     private val nodeEntryInbound = "${prefix}node-entry"
     private val healthInbound = "${prefix}health"
+    private val managedDns = ManagedDnsConfig(prefix)
     val obfsPort = if (workspace.allNodes().any { it.obfsMode.isNotEmpty() }) allocatePort() else 0
     val obfsSpecs = workspace.allNodes().filter { it.obfsMode.isNotEmpty() }.mapIndexed { index, node ->
         val front = workspace.groups.firstOrNull { it.nodes.any { member -> member.tag == node.tag } }?.frontProxy
@@ -60,6 +62,7 @@ internal class OutboundGroupConfig(
         val target = allLeafTargets.getOrNull(match.groupValues[1].toInt()) ?: return@replace match.value
         when (target) { "direct" -> "DIRECT"; "block" -> "REJECT"; else -> target }
     }.replace(nodeEntryInbound, "node-entry").replace(healthInbound, "health-check")
+        .replace(managedDns.outboundTag, "DNS")
 
     fun inject(root: JSONObject, filesDir: File, cacheDir: File, rules: List<TrafficRule>) {
         val outbounds = root.array("outbounds")
@@ -112,6 +115,7 @@ internal class OutboundGroupConfig(
         fallbackRelaySpecs.forEach { spec ->
             outbounds.put(relayOutbound(spec, fallbackRelayOutbounds.getValue(spec.groupTag), spec.username))
         }
+        managedDns.inject(root)
         val services = root.getJSONObject("api").getJSONArray("services")
         services.put("RoutingService").put("HandlerService")
         val accounts = JSONArray(users.values.map { JSONObject().put("user", it).put("pass", password) })
@@ -141,6 +145,7 @@ internal class OutboundGroupConfig(
 
     fun routingConfig(current: GroupWorkspace, rules: List<TrafficRule>): JSONObject {
         val compiled = JSONArray()
+        managedDns.routingRule()?.let { compiled.put(it) }
         nativeUdpOutbounds.forEach { (node, target) ->
             compiled.put(JSONObject().put("type", "field")
                 .put("inboundTag", JSONArray().put(nodeEntryInbound))

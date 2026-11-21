@@ -47,8 +47,6 @@ internal class SettingsController(
             socksPort = InputFieldState(prefs.socksPort.toString()),
             socksUser = InputFieldState(prefs.socksUsername),
             socksPass = InputFieldState(prefs.socksPassword),
-            dnsIpv4 = InputFieldState(prefs.dnsIpv4),
-            dnsIpv6 = InputFieldState(prefs.dnsIpv6),
             switches = SwitchStates(
                 ipv6Enabled = prefs.ipv6,
                 hideFromRecents = prefs.hideFromRecents,
@@ -89,8 +87,6 @@ internal class SettingsController(
             socksPort = InputFieldState(prefs.socksPort.toString()),
             socksUser = InputFieldState(prefs.socksUsername),
             socksPass = InputFieldState(prefs.socksPassword),
-            dnsIpv4 = InputFieldState(prefs.dnsIpv4),
-            dnsIpv6 = InputFieldState(prefs.dnsIpv6),
             switches = SwitchStates(
                 ipv6Enabled = prefs.ipv6,
                 hideFromRecents = prefs.hideFromRecents,
@@ -319,46 +315,6 @@ internal class SettingsController(
     private fun notifySocksSettingsChangedWhileRunning() {
         if (isVpnEnabled()) {
             showSnackbar(application.getString(R.string.socks_settings_restart_notice))
-        }
-    }
-
-    fun updateDnsIpv4(ipv4Addr: String): Boolean {
-        val matcher = IPV4_PATTERN.matcher(ipv4Addr)
-        return if (matcher.matches()) {
-            prefs.dnsIpv4 = ipv4Addr
-            _settingsState.value = _settingsState.value.copy(
-                dnsIpv4 = InputFieldState(ipv4Addr)
-            )
-            true
-        } else {
-            _settingsState.value = _settingsState.value.copy(
-                dnsIpv4 = InputFieldState(
-                    value = ipv4Addr,
-                    error = application.getString(R.string.invalid_ipv4),
-                    isValid = false
-                )
-            )
-            false
-        }
-    }
-
-    fun updateDnsIpv6(ipv6Addr: String): Boolean {
-        val matcher = IPV6_PATTERN.matcher(ipv6Addr)
-        return if (matcher.matches()) {
-            prefs.dnsIpv6 = ipv6Addr
-            _settingsState.value = _settingsState.value.copy(
-                dnsIpv6 = InputFieldState(ipv6Addr)
-            )
-            true
-        } else {
-            _settingsState.value = _settingsState.value.copy(
-                dnsIpv6 = InputFieldState(
-                    value = ipv6Addr,
-                    error = application.getString(R.string.invalid_ipv6),
-                    isValid = false
-                )
-            )
-            false
         }
     }
 

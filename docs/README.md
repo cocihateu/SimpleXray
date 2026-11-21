@@ -88,6 +88,8 @@ After the first TCP response, the connection stays open through idle periods, up
 
 Domain-based DoH endpoints receive an exact-name bootstrap resolver in the assembled runtime configuration. Settings → DNS exposes the bootstrap DNS IP, initially `223.5.5.5`; runtime queries use direct TCP to this IP on port 53. Saving applies it to the running core, and standalone measurements use the same preference. Explicit hosts mappings and terminal exact-name DNS rules pointing to independent resolvers retain priority. The DoH URL and ordinary DNS policies remain intact.
 
+System DNS entering the TUN now uses the same global DNS/DoH resolver. The App manages the internal receiving address, replacing manual TUN DNS fields. Standard server-list configurations enable native parallel queries; equivalent-policy upstreams race for the first valid result while domain policy priorities remain in effect. The native DNS outbound resolves A/AAAA and returns empty successful responses for other record types. Application-managed encrypted DNS and explicit DNS scripts retain their own behavior.
+
 ### Rule Files & Scripts
 
 - Import and replace the standard `geoip.dat` and `geosite.dat` files.

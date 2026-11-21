@@ -26,10 +26,10 @@
     <string name="socks_credentials_synced">Adopted SOCKS credentials from the selected config</string>
 
     <!-- TUN Network & DNS Settings -->
-    <string name="dns_ipv4">TUN IPv4 DNS</string>
-    <string name="dns_ipv4_summary">IPv4 DNS address advertised to Android on the VPN network. DNS requests follow current routing rules. Global DNS and DoH bootstrap DNS have separate settings. Reconnect to apply.</string>
-    <string name="dns_ipv6">TUN IPv6 DNS</string>
-    <string name="dns_ipv6_summary">DNS server reached over IPv6 on the VPN network. Applies when IPv6 is enabled with Hev or Xray TUN. DNS requests follow current routing rules. Reconnect to apply.</string>
+    <string name="tun_dns_managed_summary">DNS queries are handled by global DNS / DoH.</string>
+    <string name="global_dns_parallel_summary">Global DNS / DoH handles system queries. Native DNS queries matching upstreams with the same policy concurrently and uses the first successful, valid response.</string>
+    <string name="global_dns_help">System DNS queries on UDP/TCP port 53 follow: app → TUN → global DNS / DoH and routing → outbound. Configure all upstreams on this page.\n\nNative Xray DNS handles A / AAAA queries; other query types receive empty responses.\n\nMatching upstreams with the same domain policy query concurrently. The first successful, valid response is used, with domain matching and expected IP policies preserved.\n\nExplicit DNS scripts retain their own dispatch.\n\nEncrypted DoH / DoT queries made by an app continue to use that app\'s chosen DNS service.</string>
+    <string name="dns_skip_fallback_summary">skipFallback: On limits queries to matched domains; off also allows general queries and native parallel resolution.</string>
     <string name="ipv6">IPv6 Support</string>
     <string name="ipv6_summary">Enable IPv6 routing and the IPv6 protocol stack for the system VPN interface</string>
     <string name="disable_vpn_title">Disable VPN Interface</string>

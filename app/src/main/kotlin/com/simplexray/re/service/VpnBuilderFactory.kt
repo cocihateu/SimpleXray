@@ -6,6 +6,7 @@ import android.net.ProxyInfo
 import android.net.VpnService
 import android.util.Log
 import com.simplexray.re.BuildConfig
+import com.simplexray.re.common.config.ManagedDnsConfig
 import com.simplexray.re.prefs.Preferences
 import com.simplexray.re.prefs.TunnelMode
 import java.net.InetAddress
@@ -57,12 +58,14 @@ internal object VpnBuilderFactory {
             if (prefs.ipv4) {
                 addAddress(prefs.tunnelIpv4Address, prefs.tunnelIpv4Prefix)
                 addRoute("0.0.0.0", 0)
-                prefs.dnsIpv4.takeIf { it.isNotEmpty() }?.also { addDnsServer(it) }
+                addDnsServer(ManagedDnsConfig.IPV4_ADDRESS)
+                addRoute(ManagedDnsConfig.IPV4_ADDRESS, 32)
             }
             if (prefs.ipv6 && prefs.tunnelMode != TunnelMode.SimpleTun) {
                 addAddress(prefs.tunnelIpv6Address, prefs.tunnelIpv6Prefix)
                 addRoute("::", 0)
-                prefs.dnsIpv6.takeIf { it.isNotEmpty() }?.also { addDnsServer(it) }
+                addDnsServer(ManagedDnsConfig.IPV6_ADDRESS)
+                addRoute(ManagedDnsConfig.IPV6_ADDRESS, 128)
             }
 
             val rawApps = prefs.apps

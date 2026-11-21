@@ -146,24 +146,9 @@ internal fun SettingsTunnelSection(
                 enabled = !vpnDisabled && !isSimpleTun
             )
 
-            EditableListItemWithMiuixBottomSheet(
-                headline = stringResource(R.string.dns_ipv4),
-                currentValue = settingsState.dnsIpv4.value,
-                onValueConfirmed = { newValue -> mainViewModel.updateDnsIpv4(newValue) },
-                label = stringResource(R.string.dns_ipv4),
-                supportingText = stringResource(R.string.dns_ipv4_summary),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                enabled = !vpnDisabled
-            )
-
-            EditableListItemWithMiuixBottomSheet(
-                headline = stringResource(R.string.dns_ipv6),
-                currentValue = settingsState.dnsIpv6.value,
-                onValueConfirmed = { newValue -> mainViewModel.updateDnsIpv6(newValue) },
-                label = stringResource(R.string.dns_ipv6),
-                supportingText = stringResource(R.string.dns_ipv6_summary),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                enabled = settingsState.switches.ipv6Enabled && !vpnDisabled
+            BasicComponent(
+                title = "DNS",
+                summary = stringResource(R.string.tun_dns_managed_summary)
             )
         }
     

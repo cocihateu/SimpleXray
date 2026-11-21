@@ -21,10 +21,10 @@
     <string name="socks_credentials_synced">已从当前配置同步 SOCKS 凭据</string>
 
     <!-- TUN 网络与 DNS 设置 -->
-    <string name="dns_ipv4">TUN 接口 IPv4 DNS</string>
-    <string name="dns_ipv4_summary">提供给 Android VPN 网络的 IPv4 DNS 地址，查询按当前路由规则转发。全局 DNS 和 DoH 引导 DNS 分别配置。保存后重新连接生效。</string>
-    <string name="dns_ipv6">TUN 接口 IPv6 DNS</string>
-    <string name="dns_ipv6_summary">通过 IPv6 访问的 VPN DNS 地址，在 Hev 或 Xray TUN 启用 IPv6 时生效。查询按当前路由规则转发。保存后重新连接生效。</string>
+    <string name="tun_dns_managed_summary">DNS 查询统一由全局 DNS / DoH 处理</string>
+    <string name="global_dns_parallel_summary">系统查询使用全局 DNS / DoH；原生 DNS 的同策略匹配上游并发查询，采用首个成功且有效的响应。</string>
+    <string name="global_dns_help">UDP/TCP 53 的系统 DNS 查询按“应用 → TUN → 全局 DNS / DoH 与路由 → 出站”的路径处理。实际上游统一在本页配置。\n\nXray 原生 DNS 处理 A / AAAA 查询，其他查询类型返回空响应。\n\n匹配同一域名策略的多个上游并发查询，采用首个成功且有效的响应。各上游的域名匹配与期望 IP 策略保持生效。\n\n显式配置 DNS 脚本时使用脚本自身的调度方式。\n\n应用自有的 DoH / DoT 加密查询继续使用该应用指定的 DNS 服务。</string>
+    <string name="dns_skip_fallback_summary">skipFallback · 开启后仅处理匹配域名；关闭后可参与通用查询与原生并发解析。</string>
     <string name="ipv6">IPv6 支持</string>
     <string name="ipv6_summary">为系统 VPN 接口启用 IPv6 路由与协议栈支持</string>
     <string name="disable_vpn_title">禁用 VPN 接口</string>

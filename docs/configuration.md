@@ -85,6 +85,7 @@ Configure rule files and update intervals directly in the app's **Settings > Rul
 | Field | Action |
 | --- | --- |
 | `dns.hosts` | Created if missing. |
+| `dns.enableParallelQuery` | Enabled for standard server-list configurations at runtime. DNS scripts retain their own scheduling. |
 | `https://...alidns.com` DoH servers | Static hosts `223.5.5.5` and `223.6.6.6` are injected if absent. |
 | Domain-based DoH endpoints | Runtime assembly adds exact-name bootstrap using direct TCP to the IP in Settings → DNS → DoH bootstrap DNS, initially `223.5.5.5`, on port 53. The preference is saved separately from the global Xray JSON and applies to the running core and standalone measurements. Explicit hosts and terminal exact-name rules pointing to independent resolvers retain priority. |
 | Outbound `tlsSettings.echConfigList` starting with `http://` or `https://` | Removed. |
@@ -102,7 +103,11 @@ Structured rules live in `rules_workspace.json`. Legacy Lua rules are migrated d
 
 Simple TUN uses IPv4 and SOCKS authentication mode `noauth`. Hev and Xray TUN retain their existing IPv6 and authenticated entry options.
 
-TUN IPv4 DNS defaults to `8.8.8.8`, and IPv6 DNS defaults to `2001:4860:4860::8888`. The VPN interface advertises these addresses to Android's resolver. IPv4/IPv6 describes the server address family; either transport can carry A and AAAA queries. These requests enter the TUN and follow the active routing rules. Global DNS serves Xray's internal lookups; DoH bootstrap DNS resolves DoH endpoint names. IPv6 DNS applies to Hev or Xray TUN with IPv6 enabled. TUN DNS changes apply when reconnecting.
+TUN DNS is managed by the App; Settings exposes the global DNS/DoH upstreams. Android receives the internal DNS address `198.18.0.2` and, with IPv6 enabled on Hev/Xray TUN, `fc00::2`. Exact host routes keep these receiving addresses on the VPN, including IPv6 with LAN bypass enabled. Application UDP/TCP port 53 traffic arriving through TUN and client proxy inbounds is sent to Xray's DNS outbound before business routing. Core resolver traffic and internal node entries keep separate tags. Live rule edits and routing-mode changes retain this DNS rule.
+
+The flow is application DNS → TUN → global resolver → answer; subsequent business connections follow routing rules. Xray's DNS outbound resolves A/AAAA using the global resolver and returns successful empty answers for other record types by default. Application-managed encrypted DoH/DoT retains its own destination.
+
+The native parallel-query option starts all eligible upstream queries together. Adjacent upstreams with equivalent policies race for the first valid address result; later policy groups become eligible after preceding groups fail. Domain matching, skip/final rules, and result filters retain their meaning. Configure multiple upstreams with the same policy for concurrent availability. Explicit DNS scripts retain their own scheduling. DoH bootstrap handles endpoint hostnames separately.
 
 The overview shows readiness with a green check and provides direct rule/global/direct mode selection. Network speed has separate upload/download values and cumulative totals. Memory shows RSS for the Android app and Xray child process, their sum, and a proportion bar, sampled from `VmRSS` in `/proc/<pid>/status` during the existing visible-overview refresh loop. App memory remains visible while the core is stopped; missing samples display a placeholder. Summed RSS includes shared pages mapped by both processes. The existing Go `alloc` field retains its separate core-statistics meaning.
 

@@ -14,11 +14,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.simplexray.re.R
 import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.prefs.Preferences
+import com.simplexray.re.ui.components.InfoOverlayDialog
 import com.simplexray.re.ui.scaffold.LocalLayerBackdrop
 import com.simplexray.re.viewmodel.MainViewModel
 import org.json.JSONArray
@@ -46,11 +49,14 @@ internal fun SettingsGlobalConfigSection(mainViewModel: MainViewModel) {
     val servers = dns.optJSONArray("servers") ?: JSONArray()
     val hosts = dns.optJSONObject("hosts") ?: JSONObject()
     val bootstrapDns = remember(version) { prefs.dohBootstrapDns }
+    var showDnsHelp by remember { mutableStateOf(false) }
     var editBootstrapDns by remember { mutableStateOf(false) }
     var serverIndex by remember { mutableStateOf<Int?>(null) }
     var hostName by remember { mutableStateOf<String?>(null) }
     SmallTitle("DNS")
     Card(Modifier.fillMaxWidth()) {
+        ArrowPreference(title = "DNS / DoH", summary = stringResource(R.string.global_dns_parallel_summary),
+            onClick = { showDnsHelp = true })
         OverlayDropdownPreference(title = "解析策略 · queryStrategy", items = dnsStrategies,
             selectedIndex = dnsStrategies.indexOf(dns.optString("queryStrategy", "UseIP")).coerceAtLeast(0),
             onSelectedIndexChange = { index -> store.updateDns { it.put("queryStrategy", dnsStrategies[index]) } })
@@ -105,6 +111,10 @@ internal fun SettingsGlobalConfigSection(mainViewModel: MainViewModel) {
             GlobalConfigStore.notifyModified()
         }, onDismiss = { editBootstrapDns = false })
     }
+    if (showDnsHelp) {
+        InfoOverlayDialog(title = "DNS / DoH", summary = stringResource(R.string.global_dns_help),
+            onDismiss = { showDnsHelp = false })
+    }
 }
 
 @Composable
@@ -154,7 +164,7 @@ private fun DnsServerSheet(
                 OverlayDropdownPreference(title = "解析策略", items = strategies.map { it.ifBlank { "跟随全局" } },
                     selectedIndex = strategies.indexOf(strategy).coerceAtLeast(0),
                     onSelectedIndexChange = { strategy = strategies[it] })
-                SwitchPreference(title = "仅处理匹配域名", summary = "skipFallback",
+                SwitchPreference(title = "仅处理匹配域名", summary = stringResource(R.string.dns_skip_fallback_summary),
                     checked = skipFallback, onCheckedChange = { skipFallback = it })
             }
             TextField(domains, { domains = it }, label = "匹配域名 · 每行一条", modifier = Modifier.fillMaxWidth())
