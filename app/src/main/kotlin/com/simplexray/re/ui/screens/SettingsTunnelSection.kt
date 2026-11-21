@@ -43,7 +43,6 @@ import com.simplexray.re.prefs.TunnelMode
 import com.simplexray.re.viewmodel.MainViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.DropdownEntry
 import top.yukonga.miuix.kmp.basic.DropdownItem
@@ -146,10 +145,6 @@ internal fun SettingsTunnelSection(
                 enabled = !vpnDisabled && !isSimpleTun
             )
 
-            BasicComponent(
-                title = "DNS",
-                summary = stringResource(R.string.tun_dns_managed_summary)
-            )
         }
     
 }

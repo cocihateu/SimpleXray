@@ -16,6 +16,8 @@ import com.simplexray.re.common.ROUTE_OVERVIEW
 import com.simplexray.re.common.ROUTE_PROXIES
 import com.simplexray.re.common.ROUTE_GROUPS
 import com.simplexray.re.common.ROUTE_GROUP_SETTINGS
+import com.simplexray.re.common.ROUTE_GROUP_NODES
+import com.simplexray.re.common.ROUTE_CONFIG
 import com.simplexray.re.common.ROUTE_LOG
 import com.simplexray.re.common.ROUTE_RULES
 import com.simplexray.re.common.ROUTE_SETTINGS
@@ -26,6 +28,8 @@ import com.simplexray.re.ui.screens.RulesScreen
 import com.simplexray.re.ui.screens.SettingsScreen
 import com.simplexray.re.ui.screens.GroupManagementScreen
 import com.simplexray.re.ui.screens.GroupSettingsScreen
+import com.simplexray.re.ui.screens.NodeConfigurationScreen
+import com.simplexray.re.ui.screens.WorkspaceConfigScreen
 import com.simplexray.re.viewmodel.LogViewModel
 import com.simplexray.re.viewmodel.MainViewModel
 import java.io.File
@@ -49,9 +53,17 @@ fun BottomNavHost(
     NavHost(navController, startDestination = ROUTE_OVERVIEW, modifier = Modifier.fillMaxSize()) {
         composable(ROUTE_OVERVIEW) { DashboardScreen(mainViewModel, onSwitchVpnService, paddingValues) }
         composable(ROUTE_PROXIES) {
-            ProxiesScreen(mainViewModel, paddingValues, onManageGroups = {
-                navController.navigate(ROUTE_GROUPS)
-            }, onGroupSettings = { navController.navigate("proxy_group_settings/${Uri.encode(it)}") })
+            ProxiesScreen(mainViewModel, paddingValues)
+        }
+        composable(ROUTE_CONFIG) {
+            WorkspaceConfigScreen(mainViewModel, paddingValues,
+                onOpenNodes = { navController.navigate("proxy_group_nodes/${Uri.encode(it)}") },
+                onOpenGroup = { navController.navigate("proxy_group_settings/${Uri.encode(it)}") },
+                onOpenRules = { navController.navigate(ROUTE_RULES) })
+        }
+        composable(ROUTE_GROUP_NODES) { entry ->
+            NodeConfigurationScreen(mainViewModel, entry.arguments?.getString("tag").orEmpty(), paddingValues,
+                onGroupSettings = { navController.navigate("proxy_group_settings/${Uri.encode(it)}") })
         }
         composable(ROUTE_GROUPS) {
             GroupManagementScreen(mainViewModel, paddingValues,
@@ -59,7 +71,7 @@ fun BottomNavHost(
         }
         composable(ROUTE_GROUP_SETTINGS) { entry ->
             GroupSettingsScreen(mainViewModel, entry.arguments?.getString("tag").orEmpty(), paddingValues,
-                onDeleted = { navController.popBackStack() })
+                onDeleted = { navController.popBackStack(ROUTE_CONFIG, false) })
         }
         composable(ROUTE_RULES) { RulesScreen(mainViewModel, paddingValues = paddingValues) }
         composable(ROUTE_LOG) {

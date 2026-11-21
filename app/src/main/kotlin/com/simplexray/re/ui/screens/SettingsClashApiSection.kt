@@ -3,8 +3,6 @@ package com.simplexray.re.ui.screens
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
@@ -20,7 +18,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.simplexray.re.R
+import com.simplexray.re.common.ZashboardLauncher
 import com.simplexray.re.service.ClashApiPreferences
+import com.simplexray.re.service.TProxyService
 import com.simplexray.re.viewmodel.MainViewModel
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.SmallTitle
@@ -46,7 +46,7 @@ internal fun SettingsClashApiSection(
         ArrowPreference(
             title = "打开 zashboard",
             summary = "实时连接、日志、节点与规则",
-            onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("http://board.zash.run.place"))) },
+            onClick = { ZashboardLauncher.open(context) },
         )
         SwitchPreference(
             title = stringResource(R.string.clash_api_enable),
@@ -55,6 +55,7 @@ internal fun SettingsClashApiSection(
             onCheckedChange = { newValue ->
                 enabled = newValue
                 prefs.enabled = newValue
+                TProxyService.applyClashApiSettings(context)
                 mainViewModel.showSnackbar(context.getString(R.string.clash_api_restart_notice))
             }
         )
@@ -67,6 +68,7 @@ internal fun SettingsClashApiSection(
                 if (parsed != null && parsed in 1024..65535) {
                     port = parsed
                     prefs.port = parsed
+                    TProxyService.applyClashApiSettings(context)
                     mainViewModel.showSnackbar(context.getString(R.string.clash_api_restart_notice))
                 }
             },
@@ -83,6 +85,7 @@ internal fun SettingsClashApiSection(
                 val trimmed = newValue.trim()
                 prefs.secret = trimmed
                 secret = prefs.secret
+                TProxyService.applyClashApiSettings(context)
                 mainViewModel.showSnackbar(context.getString(R.string.clash_api_restart_notice))
             },
             label = stringResource(R.string.clash_api_secret),
@@ -119,6 +122,7 @@ internal fun SettingsClashApiSection(
             onClick = {
                 prefs.resetSecret()
                 secret = prefs.secret
+                TProxyService.applyClashApiSettings(context)
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 clipboard.setPrimaryClip(ClipData.newPlainText("Clash Secret", secret))
                 mainViewModel.showSnackbar(context.getString(R.string.clash_api_secret_copied))

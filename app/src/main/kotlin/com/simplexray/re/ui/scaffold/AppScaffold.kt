@@ -36,6 +36,8 @@ import com.simplexray.re.common.ROUTE_OVERVIEW
 import com.simplexray.re.common.ROUTE_PROXIES
 import com.simplexray.re.common.ROUTE_GROUPS
 import com.simplexray.re.common.ROUTE_GROUP_SETTINGS
+import com.simplexray.re.common.ROUTE_GROUP_NODES
+import com.simplexray.re.common.ROUTE_CONFIG
 import com.simplexray.re.common.ROUTE_LOG
 import com.simplexray.re.common.ROUTE_RULES
 import com.simplexray.re.common.ROUTE_SETTINGS
@@ -59,8 +61,8 @@ import top.yukonga.miuix.kmp.glass.GlassTopAppBar
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 val LocalLayerBackdrop = staticCompositionLocalOf<LayerBackdrop?> { null }
-private val routes = listOf(ROUTE_OVERVIEW, ROUTE_PROXIES, ROUTE_RULES, ROUTE_LOG, ROUTE_SETTINGS)
-private val titles = listOf("概览", "代理", "规则", "日志", "设置")
+private val routes = listOf(ROUTE_OVERVIEW, ROUTE_PROXIES, ROUTE_CONFIG, ROUTE_LOG, ROUTE_SETTINGS)
+private val titles = listOf("仪表盘", "代理", "配置", "日志", "设置")
 
 @Composable
 fun AppScaffold(
@@ -80,7 +82,10 @@ fun AppScaffold(
     val entry by navController.currentBackStackEntryAsState()
     val managingGroups = entry?.destination?.route == ROUTE_GROUPS
     val groupSettings = entry?.destination?.route == ROUTE_GROUP_SETTINGS
-    val selected = if (managingGroups || groupSettings) routes.indexOf(ROUTE_PROXIES)
+    val groupNodes = entry?.destination?.route == ROUTE_GROUP_NODES
+    val editingRules = entry?.destination?.route == ROUTE_RULES
+    val configChild = managingGroups || groupSettings || groupNodes || editingRules
+    val selected = if (configChild) routes.indexOf(ROUTE_CONFIG)
         else routes.indexOf(entry?.destination?.route).coerceAtLeast(0)
     var isLogSearching by remember { mutableStateOf(false) }
     val searchingLogs = routes[selected] == ROUTE_LOG && isLogSearching
@@ -95,7 +100,7 @@ fun AppScaffold(
 
     val surface = MiuixTheme.colorScheme.surface
     val backdrop = rememberLayerBackdrop { drawRect(surface); drawContent() }
-    val icons = listOf(R.drawable.dashboard, R.drawable.code, R.drawable.history, R.drawable.history, R.drawable.settings)
+    val icons = listOf(R.drawable.dashboard, R.drawable.dashboard_global, R.drawable.code, R.drawable.history, R.drawable.settings)
     val items = icons.mapIndexed { index, icon ->
         GlassNavigationItem(ImageVector.vectorResource(icon), titles[index], titles[index])
     }
@@ -103,7 +108,14 @@ fun AppScaffold(
         Scaffold(
             modifier = Modifier.fillMaxSize(),
             topBar = {
-                GlassTopAppBar(title = when { searchingLogs -> ""; managingGroups -> "分组管理"; groupSettings -> "分组设置"; else -> titles[selected] },
+                GlassTopAppBar(title = when {
+                    searchingLogs -> ""
+                    managingGroups -> "分组管理"
+                    groupSettings -> "分组设置"
+                    groupNodes -> "节点配置"
+                    editingRules -> "规则管理"
+                    else -> titles[selected]
+                },
                     expandable = false, backdrop = backdrop, navigationIcon = {
                         if (searchingLogs) {
                             IconButton(onClick = {
@@ -112,7 +124,10 @@ fun AppScaffold(
                             }) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.close_search))
                             }
-                        } else if (managingGroups || groupSettings) IconButton(onClick = { navController.popBackStack() }) {
+                        } else if (configChild) IconButton(onClick = {
+                            if (groupSettings) navController.popBackStack(ROUTE_CONFIG, false)
+                            else navController.popBackStack()
+                        }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                         }
                     }, actions = {
@@ -131,22 +146,18 @@ fun AppScaffold(
                                 Icon(Icons.Default.Clear, contentDescription = stringResource(R.string.clear_search))
                             }
                         }
-                    } else if (managingGroups) {
+                    } else if (managingGroups || (routes[selected] == ROUTE_CONFIG && configChild == false)) {
                         IconButton(onClick = { mainViewModel.createGroupRequested = true }) {
                             Icon(Icons.Default.Add, contentDescription = "新建分组")
                         }
-                    } else if (routes[selected] == ROUTE_PROXIES && groupSettings == false) {
-                        IconButton(onClick = { mainViewModel.proxyPageAction = "group" }) {
-                            Icon(Icons.Default.Add, contentDescription = "新建分组")
+                    } else if (routes[selected] == ROUTE_PROXIES) {
+                        IconButton(onClick = { mainViewModel.proxyPageAction = "search" }) {
+                            Icon(painterResource(R.drawable.search), contentDescription = "搜索代理")
                         }
                         OverlayIconDropdownMenu(entry = DropdownEntry(listOf(
-                            DropdownItem("分组管理", onClick = { navController.navigate(ROUTE_GROUPS) { launchSingleTop = true } }),
                             DropdownItem("测量当前组延迟", onClick = { mainViewModel.proxyPageAction = "measure" }),
-                            DropdownItem("更新全部订阅", onClick = {
-                                mainViewModel.groupWorkspace.value.groups
-                                    .filter { it.sourceType == com.simplexray.re.common.config.GroupSourceType.SUBSCRIPTION }
-                                    .forEach { mainViewModel.refreshSubscriptionGroup(it.tag) }
-                            }),
+                            DropdownItem("展开全部", onClick = { mainViewModel.proxyPageAction = "expand" }),
+                            DropdownItem("收起全部", onClick = { mainViewModel.proxyPageAction = "collapse" }),
                         ))) {
                             Icon(Icons.Default.MoreVert, contentDescription = "更多")
                         }

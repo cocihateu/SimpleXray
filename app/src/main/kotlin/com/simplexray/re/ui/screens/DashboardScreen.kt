@@ -1,7 +1,5 @@
 package com.simplexray.re.ui.screens
 
-import android.content.Intent
-import android.net.Uri
 import android.os.SystemClock
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Canvas
@@ -42,7 +40,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -82,7 +79,6 @@ fun DashboardScreen(
     val active by mainViewModel.activeGroupNodes.collectAsStateWithLifecycle()
     val state by VpnStateHub.state.collectAsStateWithLifecycle()
     val exitInfo by mainViewModel.exitInfo.collectAsStateWithLifecycle()
-    val context = LocalContext.current
     val defaultGroup = workspace.effectiveDefaultGroupTag()
     val exitNode = defaultGroup?.let(active::get)
     LaunchedEffect(state, defaultGroup, exitNode, workspace.routingMode) {
@@ -135,13 +131,6 @@ fun DashboardScreen(
         }
         item { TrafficStatsCard(uploadSpeedRate, downloadSpeedRate, stats.uplink, stats.downlink) }
         item { MemoryStatsCard(stats.appMemoryBytes, stats.coreMemoryBytes) }
-        item {
-            Button(
-                onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("http://board.zash.run.place"))) },
-                modifier = Modifier.fillMaxWidth(),
-                cornerRadius = 24.dp,
-            ) { Text(stringResource(R.string.dashboard_zashboard)) }
-        }
     }
 }
 

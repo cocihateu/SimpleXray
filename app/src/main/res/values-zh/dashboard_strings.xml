@@ -1,5 +1,5 @@
 <resources>
-    <string name="clash_api_restart_notice">重新连接服务后应用控制器设置。</string>
+    <string name="clash_api_restart_notice">服务运行时自动应用控制器设置，Xray 与代理连接继续运行。</string>
     <string name="clash_api_controller_url">复制控制器地址</string>
     <string name="clash_api_url_copied">已复制控制器地址</string>
     <string name="clash_api_copy_secret">复制控制器密钥</string>

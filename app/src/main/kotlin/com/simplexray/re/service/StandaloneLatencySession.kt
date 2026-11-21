@@ -67,7 +67,9 @@ internal object StandaloneLatencySession {
             }
             val controller = GroupRuntimeController(
                 initialWorkspace = workspace,
-                probeNode = { node, targetUrl -> clients[node]?.let { HttpLatencyMeasurement.measure(it, targetUrl) } },
+                probeNode = { node, targetUrl, timeoutMs ->
+                    clients[node]?.let { HttpLatencyMeasurement.measure(it, targetUrl, timeoutMs) }
+                },
                 applyBalancerTarget = { _, _ -> },
                 fallbackRelayOutbounds = config.fallbackRelayOutbounds,
                 balancerTags = emptySet(),
@@ -83,6 +85,7 @@ internal object StandaloneLatencySession {
                 resolvePlan = controller::buildFailoverPlan,
                 onCandidateFailed = controller::onCandidateFailed,
                 onCandidateConnected = controller::onCandidateConnected,
+                onStalledUpload = controller::onStalledUpload,
             )
             var process: Process? = null
             var readerJob: kotlinx.coroutines.Job? = null

@@ -1,5 +1,5 @@
 <resources>
-    <string name="clash_api_restart_notice">Reconnect the service to apply controller changes.</string>
+    <string name="clash_api_restart_notice">Controller changes apply while the service runs. Xray and proxy connections stay active.</string>
     <string name="clash_api_controller_url">Copy controller address</string>
     <string name="clash_api_url_copied">Controller address copied</string>
     <string name="clash_api_copy_secret">Copy controller secret</string>

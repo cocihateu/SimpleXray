@@ -191,6 +191,12 @@ class TProxyService : VpnService() {
     override fun onStartCommand(intent: Intent, flags: Int, startId: Int): Int {
         val action = intent.action
         when (action) {
+            ACTION_RELOAD_CLASH_API -> {
+                stopClashApi()
+                startClashApi()
+                return START_NOT_STICKY
+            }
+
             ACTION_DISCONNECT -> {
                 stopRequestedByUser = true
                 VpnStateHub.updateState(VpnRunningState.Disconnected)
@@ -271,6 +277,7 @@ class TProxyService : VpnService() {
         }
         VpnStateHub.updateState(VpnRunningState.Connecting)
         vpnWakeLock.acquireIfEnabled()
+        startClashApi()
 
         if (coreOnly) {
             xrayProcessRunner.launch(serviceScope)
@@ -549,6 +556,7 @@ class TProxyService : VpnService() {
         const val ACTION_DISCONNECT: String = "com.simplexray.re.DISCONNECT"
         const val ACTION_START: String = "com.simplexray.re.START"
         const val ACTION_RELOAD_CONFIG: String = "com.simplexray.re.RELOAD_CONFIG"
+        const val ACTION_RELOAD_CLASH_API: String = "com.simplexray.re.RELOAD_CLASH_API"
         private const val TAG = "TProxyService"
         private const val TEARDOWN_TIMEOUT_MS: Long = 3_000L
 
@@ -570,6 +578,14 @@ class TProxyService : VpnService() {
 
         @JvmStatic
         private external fun nativeReapChild(pid: Int)
+
+        fun applyClashApiSettings(context: Context) {
+            when (VpnStateHub.state.value) {
+                VpnRunningState.Connecting, VpnRunningState.Connected ->
+                    context.startService(Intent(context, TProxyService::class.java).setAction(ACTION_RELOAD_CLASH_API))
+                else -> Unit
+            }
+        }
 
         fun getNativeLibraryDir(context: Context?): String? {
             if (context == null) {

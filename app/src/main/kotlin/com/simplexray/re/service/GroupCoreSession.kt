@@ -108,7 +108,7 @@ internal class GroupCoreSession(
     @Volatile private var applyTarget: (suspend (String, String) -> Unit)? = null
     @Volatile private var controller: GroupRuntimeController? = GroupRuntimeController(
         initialWorkspace = config.workspace,
-        probeNode = { node, url -> measureNode?.invoke(node, url, 5_000) },
+        probeNode = { node, url, timeoutMs -> measureNode?.invoke(node, url, timeoutMs) },
         applyBalancerTarget = { group, target -> applyTarget?.invoke(group, target) },
         fallbackRelayOutbounds = config.fallbackRelayOutbounds,
         balancerTags = config.balancers.keys,
@@ -156,6 +156,9 @@ internal class GroupCoreSession(
             },
             onCandidateConnected = { groupTag, leaf ->
                 controller?.onCandidateConnected(groupTag, leaf)
+            },
+            onStalledUpload = { groupTag, leaf, applyIfWaiting ->
+                controller?.onStalledUpload(groupTag, leaf, applyIfWaiting)
             },
             awaitReady = { standbyReady.await() },
         )
@@ -206,9 +209,11 @@ internal class GroupCoreSession(
             val runtimeController = controller ?: return@launch
 
             try {
-                runtimeController.start(this)
-                standbyReady.complete(Unit)
                 onReady()
+                launch {
+                    runtimeController.start(this)
+                    standbyReady.complete(Unit)
+                }
                 config.routingBindings.forEach { (target, group) ->
                     logEvent("[Info] Routing target '$target' uses group '$group'.")
                 }
@@ -238,7 +243,7 @@ internal class GroupCoreSession(
                         reload()
                         throw CancellationException("Applying updated group topology")
                     }
-                    runtimeController.updateWorkspace(updated)
+                    runtimeController.updateWorkspace(updated, startHealthChecks = standbyReady.isCompleted)
                     if (rules != previousRules ||
                         updated.effectiveRoutingBindings() != previousWorkspace.effectiveRoutingBindings() ||
                         updated.effectiveDefaultGroupTag() != previousWorkspace.effectiveDefaultGroupTag() ||

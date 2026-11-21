@@ -214,7 +214,7 @@ fun GroupSettingsScreen(
             Card {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (strategy == GroupStrategy.FALLBACK) {
-                        Text("主节点由实际业务判断状态。失败后回落；备用返回数据后开始计时，到期检查主节点，恢复后切回。")
+                        Text("建连与首响应超时按顺序回落。已连接流量发送后挂起时，先做真实 HTTP 确认，失败后关闭挂起连接并切换；备用返回数据后开始恢复计时。")
                         GroupSecondsField("响应等待上限 · 秒", timeout) { timeout = it }
                         GroupSecondsField("主节点恢复检查间隔 · 秒", recovery) { recovery = it }
                     } else if (strategy == GroupStrategy.URL_TEST) {

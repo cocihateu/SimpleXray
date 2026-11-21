@@ -3,6 +3,7 @@ package com.simplexray.re.service
 import android.os.SystemClock
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -10,6 +11,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayInputStream
 import java.io.Closeable
 import java.io.DataInputStream
@@ -53,6 +55,7 @@ internal class FallbackRelayServer(
     private val resolvePlan: (String) -> FailoverPlan,
     private val onCandidateFailed: (String, String) -> Unit,
     private val onCandidateConnected: (String, String) -> Unit,
+    private val onStalledUpload: suspend (String, String, (() -> Unit) -> Boolean) -> Unit,
     private val awaitReady: suspend () -> Unit = {},
 ) : Closeable {
     private val listeners = CopyOnWriteArrayList<ServerSocket>()
@@ -160,7 +163,7 @@ internal class FallbackRelayServer(
             while (isActive && closed == false && entry.closed.get() == false && flight.replayable) {
                 var plan = resolvePlan(spec.groupTag)
                 if (plan.candidates.none { it !in attempted } && ruleId != "dialer") {
-                    awaitReady()
+                    if (withTimeoutOrNull(plan.failoverTimeoutMs.toLong()) { awaitReady(); true } != true) break
                     plan = resolvePlan(spec.groupTag)
                 }
                 val leaf = plan.candidates.firstOrNull { it !in attempted } ?: break
@@ -174,6 +177,19 @@ internal class FallbackRelayServer(
                 var sender: Job? = null
                 val upstreamFailed = AtomicBoolean(false)
                 var responseDelivered = false
+                val responseWait = UploadResponseWait(
+                    scope = this@coroutineScope,
+                    timeoutMs = plan.failoverTimeoutMs,
+                    enabled = plan.watchResponse,
+                    isOpen = { closed == false && entry.closed.get() == false && socket.isClosed == false },
+                ) { applyIfWaiting ->
+                    onStalledUpload(spec.groupTag, leaf) { failure ->
+                        applyIfWaiting {
+                            failure()
+                            entry.close()
+                        }
+                    }
+                }
                 try {
                     connectNode(socket, leaf, 1, target, plan.failoverTimeoutMs)
                     deadline.cancel()
@@ -188,7 +204,7 @@ internal class FallbackRelayServer(
                     sender = launch(relayIo) {
                         try {
                             val output = socket.getOutputStream()
-                            flight.replay().forEach { output.write(it) }
+                            flight.replay().forEach { chunk -> responseWait.write { output.write(chunk) } }
                             while (isActive) {
                                 val chunk = flight.pending.poll(100, TimeUnit.MILLISECONDS)
                                 if (chunk == null) {
@@ -199,7 +215,7 @@ internal class FallbackRelayServer(
                                     continue
                                 }
                                 flight.retain(chunk)
-                                output.write(chunk)
+                                responseWait.write { output.write(chunk) }
                             }
                         } catch (_: IOException) {
                             upstreamFailed.set(true)
@@ -210,6 +226,7 @@ internal class FallbackRelayServer(
                     val count = socket.getInputStream().read(buffer)
                     if (count < 0) throw EOFException("Upstream closed before response")
                     deadline.cancel()
+                    responseWait.responded()
                     flight.establish()
                     try {
                         client.getOutputStream().write(buffer, 0, count)
@@ -223,6 +240,7 @@ internal class FallbackRelayServer(
                     while (isActive && entry.closed.get() == false) {
                         val size = socket.getInputStream().read(buffer)
                         if (size < 0) break
+                        responseWait.responded()
                         try {
                             client.getOutputStream().write(buffer, 0, size)
                         } catch (e: IOException) {
@@ -242,6 +260,7 @@ internal class FallbackRelayServer(
                     if (responseDelivered || localEnded.get() || entry.closed.get() || flight.replayable == false) break
                 } finally {
                     deadline.cancel()
+                    responseWait.close()
                     release(socket)
                     sender?.cancelAndJoin()
                     currentUpstream.compareAndSet(socket, null)
@@ -313,7 +332,7 @@ internal class FallbackRelayServer(
             while (isActive && closed == false && entry.closed.get() == false && flight.replayable) {
                 var plan = resolvePlan(spec.groupTag)
                 if (plan.candidates.none { it !in attempted } && ruleId != "dialer") {
-                    awaitReady()
+                    if (withTimeoutOrNull(plan.failoverTimeoutMs.toLong()) { awaitReady(); true } != true) break
                     plan = resolvePlan(spec.groupTag)
                 }
                 val leaf = plan.candidates.firstOrNull { it !in attempted } ?: break
@@ -505,6 +524,74 @@ internal class FallbackRelayServer(
         @Synchronized fun establish() {
             established = true
             initial.clear()
+        }
+    }
+
+    /** Pending uploads retain confirmation coverage while socket writes are in progress. */
+    private class UploadResponseWait(
+        private val scope: CoroutineScope,
+        private val timeoutMs: Int,
+        private val enabled: Boolean,
+        private val isOpen: () -> Boolean,
+        private val confirm: suspend ((() -> Unit) -> Boolean) -> Unit,
+    ) {
+        private var waiting: Job? = null
+        private var established = false
+        private var writing = false
+
+        fun write(block: () -> Unit) {
+            synchronized(this) {
+                writing = true
+                arm()
+            }
+            try {
+                block()
+            } finally {
+                synchronized(this) {
+                    writing = false
+                    arm()
+                }
+            }
+        }
+
+        private fun arm() {
+            if (enabled == false || established == false || waiting != null || isOpen() == false) return
+            waiting = scope.launch(Dispatchers.Default, start = CoroutineStart.LAZY) {
+                val current = coroutineContext[Job]
+                try {
+                    delay(timeoutMs.toLong())
+                    if (isOpen() == false) return@launch
+                    confirm { failure ->
+                        synchronized(this@UploadResponseWait) {
+                            if (waiting !== current || isOpen() == false) false else {
+                                failure()
+                                true
+                            }
+                        }
+                    }
+                } finally {
+                    synchronized(this@UploadResponseWait) {
+                        if (waiting === current) {
+                            waiting = null
+                            if (writing && current?.isActive == true) arm()
+                        }
+                    }
+                }
+            }
+            waiting?.start()
+        }
+
+        @Synchronized fun responded() {
+            established = true
+            waiting?.cancel()
+            waiting = null
+            if (writing) arm()
+        }
+
+        @Synchronized fun close() {
+            established = false
+            waiting?.cancel()
+            waiting = null
         }
     }
 

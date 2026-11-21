@@ -17,6 +17,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
 
 data class FallbackRuntimeInfo(
@@ -34,7 +35,7 @@ internal data class ProbeResult(
 /** Owns group selection and timed primary recovery for every control surface. */
 internal class GroupRuntimeController(
     initialWorkspace: GroupWorkspace,
-    private val probeNode: suspend (nodeTag: String, testUrl: String) -> Long?,
+    private val probeNode: suspend (nodeTag: String, testUrl: String, timeoutMs: Int) -> Long?,
     private val applyBalancerTarget: suspend (groupTag: String, targetOutbound: String) -> Unit,
     private val fallbackRelayOutbounds: Map<String, String>,
     private val balancerTags: Set<String>,
@@ -73,7 +74,7 @@ internal class GroupRuntimeController(
         }
     }
 
-    fun updateWorkspace(updated: GroupWorkspace) {
+    fun updateWorkspace(updated: GroupWorkspace, startHealthChecks: Boolean = true) {
         synchronized(stateLock) {
             val previous = workspace
             workspace = updated
@@ -102,7 +103,7 @@ internal class GroupRuntimeController(
             }
         }
         runtimeScope?.let { scope ->
-            restartUrlTestLoops(scope)
+            if (startHealthChecks) restartUrlTestLoops(scope)
             scope.launch(Dispatchers.IO) { syncAllBalancersAndPublish() }
         }
     }
@@ -120,29 +121,71 @@ internal class GroupRuntimeController(
     }
 
     fun onCandidateFailed(groupTag: String, leaf: String) {
+        synchronized(stateLock) { onCandidateFailedLocked(groupTag, leaf) }
+        publishSnapshot()
+    }
+
+    private fun onCandidateFailedLocked(groupTag: String, leaf: String) {
+        val now = SystemClock.elapsedRealtime()
+        val groups = fallbackGroupsForLeaf(groupTag, leaf)
+        probeResults.entries.forEach { (key, sample) ->
+            if (key.first == leaf) probeResults[key] = sample.copy(healthy = false, completedAtElapsedMs = now)
+        }
+        groups.forEach { group ->
+            probeResults[leaf to group.testUrl] = ProbeResult(false, -1L, now)
+        }
+        for (group in groups.asReversed()) {
+            val primaryMember = group.effectiveMembers().firstOrNull() ?: continue
+            val primaryLeaves = expandMemberLeaves(primaryMember, mutableSetOf(group.tag))
+            val primaryFailed = if (primaryMember.isGroup) {
+                primaryLeaves.isEmpty() || primaryLeaves.all { it == leaf || probeResults[it to group.testUrl]?.healthy == false }
+            } else {
+                primaryMember.tag == leaf
+            }
+            val current = fallbackStates[group.tag]
+            if (primaryFailed && current?.inFallback != true) {
+                fallbackStates[group.tag] = FallbackRuntimeInfo(inFallback = true)
+                logEvent("[Warning] Group '${group.tag}': primary failed ($leaf); selecting a backup.")
+            } else if (current?.activeLeaf == leaf) {
+                fallbackStates[group.tag] = current.copy(activeLeaf = null)
+            }
+        }
+    }
+
+    /** Confirms active-traffic silence through the selected leaf's real AsIs HTTP entry. */
+    suspend fun onStalledUpload(groupTag: String, leaf: String, applyIfWaiting: (() -> Unit) -> Boolean) {
+        val check = synchronized(stateLock) {
+            val plan = buildFailoverPlanLocked(groupTag)
+            val path = groupPathForLeaf(groupTag, leaf, mutableSetOf()).orEmpty()
+            val group = path.firstOrNull {
+                it.strategy == GroupStrategy.URL_TEST ||
+                    (it.strategy == GroupStrategy.FALLBACK && it.effectiveMembers().size > 1)
+            } ?: workspace.groupByTag(groupTag) ?: return@synchronized null
+            Triple(
+                plan,
+                path.map { Triple(it, manualMembers[it.tag], fallbackStates[it.tag]) },
+                group to probeResults[leaf to group.testUrl],
+            )
+        } ?: return
+        val (plan, selectedAtStart, measurementAtStart) = check
+        val (group, sampleAtStart) = measurementAtStart
+        val startedAt = SystemClock.elapsedRealtime()
+        val latency = withTimeoutOrNull(plan.failoverTimeoutMs.toLong()) {
+            probeNode(leaf, group.testUrl, plan.failoverTimeoutMs)
+        }
         synchronized(stateLock) {
-            val now = SystemClock.elapsedRealtime()
-            val groups = fallbackGroupsForLeaf(groupTag, leaf)
-            probeResults.entries.forEach { (key, sample) ->
-                if (key.first == leaf) probeResults[key] = sample.copy(healthy = false, completedAtElapsedMs = now)
-            }
-            groups.forEach { group ->
-                probeResults[leaf to group.testUrl] = ProbeResult(false, -1L, now)
-            }
-            for (group in groups.asReversed()) {
-                val primaryMember = group.effectiveMembers().firstOrNull() ?: continue
-                val primaryLeaves = expandMemberLeaves(primaryMember, mutableSetOf(group.tag))
-                val primaryFailed = if (primaryMember.isGroup) {
-                    primaryLeaves.isEmpty() || primaryLeaves.all { it == leaf || probeResults[it to group.testUrl]?.healthy == false }
-                } else {
-                    primaryMember.tag == leaf
-                }
-                val current = fallbackStates[group.tag]
-                if (primaryFailed && current?.inFallback != true) {
-                    fallbackStates[group.tag] = FallbackRuntimeInfo(inFallback = true)
-                    logEvent("[Warning] Group '${group.tag}': primary failed ($leaf); selecting a backup.")
-                } else if (current?.activeLeaf == leaf) {
-                    fallbackStates[group.tag] = current.copy(activeLeaf = null)
+            val currentPath = groupPathForLeaf(groupTag, leaf, mutableSetOf()).orEmpty()
+                .map { Triple(it, manualMembers[it.tag], fallbackStates[it.tag]) }
+            val sample = probeResults[leaf to group.testUrl]
+            val currentSelection = currentPath == selectedAtStart && buildFailoverPlanLocked(groupTag) == plan &&
+                plan.candidates.firstOrNull() == leaf && sample === sampleAtStart
+            if (latency != null) {
+                if (currentSelection) recordMeasurementLocked(leaf, group.testUrl, latency, startedAt)
+            } else {
+                if (sample?.healthy == true && sample.completedAtElapsedMs >= startedAt) return@synchronized
+                applyIfWaiting {
+                    logEvent("[Warning] Group '$groupTag': upload response timed out; AsIs HTTP health check failed for '$leaf'; closing stalled TCP stream.")
+                    if (currentSelection) onCandidateFailedLocked(groupTag, leaf)
                 }
             }
         }
@@ -199,7 +242,7 @@ internal class GroupRuntimeController(
                         leaf in BUILTIN_GROUP_TARGET_TAGS -> 0L
                         else -> {
                             logEvent("[Info] Group '$groupTag': checking primary '$leaf'.")
-                            probeNode(leaf, group.testUrl)
+                            probeNode(leaf, group.testUrl, 5_000)
                         }
                     }
                     val recovered = synchronized(stateLock) {
@@ -371,7 +414,7 @@ internal class GroupRuntimeController(
             urlTestLeaves(group).map { leaf ->
                 async(Dispatchers.IO) {
                     val startedAtElapsedMs = SystemClock.elapsedRealtime()
-                    recordMeasurement(leaf, group.testUrl, probeNode(leaf, group.testUrl), startedAtElapsedMs)
+                    recordMeasurement(leaf, group.testUrl, probeNode(leaf, group.testUrl, 5_000), startedAtElapsedMs)
                 }
             }.awaitAll()
         }
@@ -507,8 +550,10 @@ internal class GroupRuntimeController(
                 it.healthy && now - it.completedAtElapsedMs <= group.trustSeconds * 1_000L
             }?.let { leaf to it.latencyMs }
         }.sortedBy { it.second }.map { it.first }
+        val pending = leaves.filter { it !in BUILTIN_GROUP_TARGET_TAGS && probeResults[it to group.testUrl] == null }
+        val candidates = ranked + pending
         val selected = manualMembers[group.tag]?.takeIf { it.isGroup == false }?.tag
-        return if (selected in ranked) listOf(selected!!) + ranked.filter { it != selected } else ranked
+        return if (selected in candidates) listOf(selected!!) + candidates.filter { it != selected } else candidates
     }
 
     private fun collectMemberLeaves(member: GroupMemberRef, visited: MutableSet<String>): List<String> {

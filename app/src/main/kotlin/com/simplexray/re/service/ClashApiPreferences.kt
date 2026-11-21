@@ -22,24 +22,27 @@ class ClashApiPreferences(context: Context) {
         set(value) = prefs.edit().putString(KEY_LOG_LEVEL, value.value).apply()
 
     var secret: String
-        get() {
+        get() = synchronized(SECRET_LOCK) {
             val existing = prefs.getString(KEY_SECRET, null)
             if (!existing.isNullOrBlank()) {
-                return existing
+                return@synchronized existing
             }
             val generated = UUID.randomUUID().toString()
             prefs.edit().putString(KEY_SECRET, generated).apply()
-            return generated
+            generated
         }
-        set(value) = prefs.edit().putString(KEY_SECRET, value).apply()
+        set(value) = synchronized(SECRET_LOCK) {
+            prefs.edit().putString(KEY_SECRET, value.trim()).apply()
+        }
 
-    fun resetSecret(): String {
+    fun resetSecret(): String = synchronized(SECRET_LOCK) {
         val generated = UUID.randomUUID().toString()
         prefs.edit().putString(KEY_SECRET, generated).apply()
-        return generated
+        generated
     }
 
     companion object {
+        private val SECRET_LOCK = Any()
         private const val PREFS_NAME = "simplexray_clash_api_prefs"
         private const val KEY_ENABLED = "clash_api_enabled"
         private const val KEY_PORT = "clash_api_port"

@@ -21,7 +21,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.simplexray.re.R
 import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.prefs.Preferences
-import com.simplexray.re.ui.components.InfoOverlayDialog
 import com.simplexray.re.ui.scaffold.LocalLayerBackdrop
 import com.simplexray.re.viewmodel.MainViewModel
 import org.json.JSONArray
@@ -49,14 +48,11 @@ internal fun SettingsGlobalConfigSection(mainViewModel: MainViewModel) {
     val servers = dns.optJSONArray("servers") ?: JSONArray()
     val hosts = dns.optJSONObject("hosts") ?: JSONObject()
     val bootstrapDns = remember(version) { prefs.dohBootstrapDns }
-    var showDnsHelp by remember { mutableStateOf(false) }
     var editBootstrapDns by remember { mutableStateOf(false) }
     var serverIndex by remember { mutableStateOf<Int?>(null) }
     var hostName by remember { mutableStateOf<String?>(null) }
     SmallTitle("DNS")
     Card(Modifier.fillMaxWidth()) {
-        ArrowPreference(title = "DNS / DoH", summary = stringResource(R.string.global_dns_parallel_summary),
-            onClick = { showDnsHelp = true })
         OverlayDropdownPreference(title = "解析策略 · queryStrategy", items = dnsStrategies,
             selectedIndex = dnsStrategies.indexOf(dns.optString("queryStrategy", "UseIP")).coerceAtLeast(0),
             onSelectedIndexChange = { index -> store.updateDns { it.put("queryStrategy", dnsStrategies[index]) } })
@@ -110,10 +106,6 @@ internal fun SettingsGlobalConfigSection(mainViewModel: MainViewModel) {
             prefs.dohBootstrapDns = address
             GlobalConfigStore.notifyModified()
         }, onDismiss = { editBootstrapDns = false })
-    }
-    if (showDnsHelp) {
-        InfoOverlayDialog(title = "DNS / DoH", summary = stringResource(R.string.global_dns_help),
-            onDismiss = { showDnsHelp = false })
     }
 }
 

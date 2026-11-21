@@ -10,7 +10,7 @@
 <sub>Android 14+ (API 34) | arm64-v8a | MPL-2.0</sub>
 </div>
 
-SimpleXray Groups uses one Xray proxy core with Xray TUN, Hev TUN, and Simple TUN options. The Proxies page creates basic and subscription groups, imports nodes within each group, and opens group management from its overflow menu. Settings provides structured DNS, inbound, log, and local Clash API controls; the Rules page edits live routing. Imports convert supported node formats into native Xray outbounds and report skipped protocol or plugin combinations. See [native imports](./xray-imports.md) and [Clash API](./clash-api.md).
+SimpleXray Groups uses one Xray proxy core with Xray TUN, Hev TUN, and Simple TUN options. Its five main pages are Dashboard (仪表盘), Proxies (代理), Configuration (配置), Logs (日志), and Settings (设置). Proxies handles runtime selection and HTTP latency; Configuration owns group creation, node editing, group settings, and the structured Rules subpage. Settings provides structured DNS, inbound, log, and local Clash API controls. Imports convert supported node formats into native Xray outbounds and report skipped protocol or plugin combinations, with validation specific to each import path. See [native imports](./xray-imports.md) and [Clash API](./clash-api.md).
 
 This repository is a personal fork of [SimpleXray](https://github.com/lhear/SimpleXray). The Groups branch combines a global configuration with a shared node and group workspace, rule-file management, and a Miuix-based interface.
 
@@ -21,7 +21,7 @@ This repository is a personal fork of [SimpleXray](https://github.com/lhear/Simp
 
 - **Xray core** — Xray TUN, Hev TUN, and Simple TUN backends.
 - **Unified groups** — manual selection, scheduled URL tests, nested fallback groups, editable rule bindings, and per-node destination DNS strategy.
-- **Complete configuration workflow** — JSON/YAML import, in-app editor, one-way Android sanitization, log controls, and runtime statistics injection.
+- **Configuration workflow** — JSON/YAML imports, six-protocol node forms with advanced JSON, structured rule editing, one-way Android sanitization, log controls, and runtime statistics injection.
 - **Rule-file management** — built-in `geoip.dat`/`geosite.dat`, arbitrary custom `.dat` files, `ext:` references, per-file update URLs, and background updates.
 - **Miuix interface** — Xiaomi HyperOS/MIUI-inspired Compose UI with adaptive phone and tablet layouts, NavigationRail, Light/Dark/System themes, and Android 12+ dynamic colors.
 - **Android integration** — per-app proxy controls, direct local SOCKS5 inbound, network handover handling, and 16 KB page-alignment support.
@@ -54,11 +54,25 @@ The full structural comparison is in [Differences from Upstream](./upstream-diff
 
 ## Features
 
+### Pages and Editing
+
+| Page | Purpose |
+| --- | --- |
+| Dashboard / 仪表盘 | Service readiness, exit information, rule/global/direct mode, traffic, memory, and zashboard access. |
+| Proxies / 代理 | All groups as rounded cards, initially collapsed, with member/active-leaf summaries, Selector/Fallback/URLTest labels, selection, search, expand/collapse, and group HTTP measurement. Stopped fallback groups show their primary; other groups retain saved selections. |
+| Configuration / 配置 | Create local or subscription groups, update subscriptions, open each group's node and settings pages, and open Rules. Group settings owns the default-group action. |
+| Logs / 日志 | Saved-log level, search, export, and clear. |
+| Settings / 设置 | DNS, inbounds, TUN, logging, rule assets, and the local Clash API. |
+
+The node page owns clipboard/file imports and add/edit/delete controls. Forms cover VLESS, VMess, Trojan, Shadowsocks, SOCKS, and HTTP; transport, TLS/REALITY, destination DNS strategy, and Shadowsocks UoT/simple-obfs controls are exposed where applicable. Both flat `settings` and legacy server/user arrays are supported. Form changes preserve existing extra fields and additional entries; advanced JSON exposes the complete outbound, including protocols outside the six-form list.
+
+Rules is a Configuration subpage with structured type, matching content, target, enabled state, ordering, and import/export controls. YAML remains an import format; rule management uses structured controls and JSON export. Group-node, group-settings, and Rules routes retain Configuration as the selected navigation page.
+
 ### Xray-core
 
 - Xray-core runs as an independent child process and receives its configuration through stdin. No intermediate configuration file is written to disk.
 - Hev owns the Android VPN file descriptor and forwards traffic to Xray's loopback SOCKS5 inbound.
-- URL-test groups measure their members on a configured schedule and honor the configured result trust duration. Fallback primaries receive recovery checks only after a working backup starts the countdown. Explicit dashboard measurements are user initiated.
+- Core readiness is published as soon as the group session is prepared. The first URL-test round starts asynchronously in the background, followed by scheduled measurements and the configured result trust duration. Fallback primaries receive recovery checks after a working backup starts the countdown; active-traffic stalls can also trigger confirmation. Explicit proxy-page and dashboard measurements are user initiated.
 - Core status and traffic statistics are queried over plaintext gRPC on a dynamically allocated `127.0.0.1` port. Standard output and error are streamed to the UI and may be exported.
 
 ### Configuration
@@ -82,9 +96,19 @@ The relay applies the group's timeout to each initial connection attempt, includ
 
 HTTP latency uses two HEAD requests through the selected node. The first prepares the connection; the second measures request writes through response headers. Each measurement has an isolated connection pool, and each node has its own dispatcher. The supplied timeout covers setup and both requests. Native UI and zashboard use the same measured request RTT.
 
-The first-response deadline starts when client payload is available, so idle browser preconnections remain idle. Initial payload replay retains up to 256 KiB; larger transfers stay on their current transport. Retrying application payload before a response can repeat an operation at the destination, while TLS handshake replay occurs before application requests. Connection telemetry covers sessions owned by the fallback relay.
+The first-response deadline starts when client payload is available, so idle browser preconnections remain idle. Initial payload replay retains up to 256 KiB; larger transfers stay on their current transport. Retrying application payload before a response can repeat an operation at the destination, while TLS handshake replay occurs before application requests. Relay waits for initial health-check readiness are bounded by the group's timeout. Connection telemetry covers sessions owned by the fallback relay.
 
-After the first TCP response, the connection stays open through idle periods, uploads, and delayed application responses. A later stream error ends that connection; group failure decisions come from connection setup and the initial response. This keeps application keepalives, one-way messages, and ordinary stream teardown from changing the group selection. Established UDP sessions retain their existing transport-error behavior.
+For response-watched established TCP streams, an upload arms a response wait using the group timeout. Downstream progress clears the wait, with ongoing socket writes retaining confirmation coverage. Expiry triggers a real HTTP check through that leaf's `AsIs` measurement outbound, bounded separately by the group timeout. A current negative result closes the stalled stream; group selection changes only while its path and measurement state remain current. Sibling streams on an already failed node can close after their own confirmation. A healthy confirmation keeps the stream open; a still-blocked write retains timed checks. Idle streams remain passive. Established UDP sessions retain their existing transport-error behavior.
+
+Existing encrypted streams require an application reconnect to use another node; their established transport remains tied to its original peer. A destination-specific block can coexist with a successful check to the health URL, so this mechanism confirms health-path failures rather than guaranteeing recovery for every destination or application. A working backup response starts primary recovery timing, and successful recovery changes subsequent connections.
+
+### Local Clash API Lifecycle
+
+During the first measurement round, URL-test groups place measured healthy members first and then try pending members in configured order. Setup and first-response deadlines apply to each attempt. Once measurements finish, latency and result expiry determine the candidates.
+
+When enabled, the local API starts during service startup, before the first round of group health checks. Core readiness is reported immediately after session setup; initial URL tests run in the background. Candidate waits for initial measurement readiness remain bounded by the group timeout. Enable, port, and secret changes during startup or connected operation restart only the API listener; Xray and business streams stay running. With the service stopped, settings are saved for its next start. zashboard exposes live connections and independently filtered logs through this listener.
+
+Settings opens zashboard through `ZashboardLauncher`, which reads the current API port and secret each time. Setup credentials reside in the browser URL fragment for the local controller. Local API requests retain bearer/token authentication. Secret access is serialized across initial callers. The dashboard keeps only outbound mode, status, speed, and memory cards.
 
 Domain-based DoH endpoints receive an exact-name bootstrap resolver in the assembled runtime configuration. Settings → DNS exposes the bootstrap DNS IP, initially `223.5.5.5`; runtime queries use direct TCP to this IP on port 53. Saving applies it to the running core, and standalone measurements use the same preference. Explicit hosts mappings and terminal exact-name DNS rules pointing to independent resolvers retain priority. The DoH URL and ordinary DNS policies remain intact.
 
@@ -100,7 +124,7 @@ System DNS entering the TUN now uses the same global DNS/DoH resolver. The App m
 ### Android Integration
 
 - The Android app layer (UI + `TProxyService`) runs in a single process. Service state and log streams are delivered through in-memory `StateFlow` / `SharedFlow`.
-- The overview presents a green readiness check, separate upload/download speed panels, and application/core resident-memory totals. Memory uses RSS for both processes and refreshes with the visible overview; app memory remains visible with the core stopped.
+- The dashboard presents a green readiness check, separate upload/download speed panels, and application/core resident-memory totals. Memory uses RSS for both processes and refreshes with the visible dashboard; app memory remains visible with the core stopped.
 - Per-app proxy filtering, direct SOCKS5 access at `127.0.0.1:<socksPort>`, network handover callbacks, and adaptive layout for phones and tablets.
 - **Target SDK 37 (Android 17)**: Declares `ACCESS_LOCAL_NETWORK` (categorized by the OS as "Nearby devices") solely to comply with Android 17 local routing and LAN bypass requirements.
 
