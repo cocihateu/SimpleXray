@@ -17,7 +17,9 @@ data class CoreStatsState(
     val frees: Long = 0,
     val liveObjects: Long = 0,
     val pauseTotalNs: Long = 0,
-    val uptime: Int = 0
+    val uptime: Int = 0,
+    val appMemoryBytes: Long? = null,
+    val coreMemoryBytes: Long? = 0L
 )
 
 data class OutboundLatency(

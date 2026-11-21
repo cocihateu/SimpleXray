@@ -7,4 +7,15 @@
     <string name="routing_mode_rule">Rules</string>
     <string name="routing_mode_global">Global</string>
     <string name="routing_mode_direct">Direct</string>
+    <string name="dashboard_status">Status</string>
+    <string name="dashboard_loaded">Loaded</string>
+    <string name="dashboard_failed">Service error</string>
+    <string name="dashboard_network_speed">Network speed</string>
+    <string name="dashboard_upload">↑ Upload</string>
+    <string name="dashboard_download">↓ Download</string>
+    <string name="dashboard_traffic_total">Total %1$s</string>
+    <string name="dashboard_memory">Memory</string>
+    <string name="dashboard_memory_app">App</string>
+    <string name="dashboard_memory_core">Core</string>
+    <string name="dashboard_memory_resident">RSS · App + core</string>
 </resources>

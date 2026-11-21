@@ -70,7 +70,7 @@ The full structural comparison is in [Differences from Upstream](./upstream-diff
 
 ### TUN Backend
 
-Hev supplies the TUN-to-SOCKS data path. Historical SimpleTUN sources and benchmark reports remain reference material for the upstream project.
+Settings selects Hev TUN, Simple TUN, or Xray TUN. Hev and Simple TUN forward the Android VPN interface to the local SOCKS entry; Xray TUN receives its VPN descriptor directly. Simple TUN uses IPv4, while Hev and Xray TUN retain the IPv6 option.
 
 ### Routing and Fallback
 
@@ -98,6 +98,7 @@ Domain-based DoH endpoints receive an exact-name bootstrap resolver in the assem
 ### Android Integration
 
 - The Android app layer (UI + `TProxyService`) runs in a single process. Service state and log streams are delivered through in-memory `StateFlow` / `SharedFlow`.
+- The overview presents a green readiness check, separate upload/download speed panels, and application/core resident-memory totals. Memory uses RSS for both processes and refreshes with the visible overview; app memory remains visible with the core stopped.
 - Per-app proxy filtering, direct SOCKS5 access at `127.0.0.1:<socksPort>`, network handover callbacks, and adaptive layout for phones and tablets.
 - **Target SDK 37 (Android 17)**: Declares `ACCESS_LOCAL_NETWORK` (categorized by the OS as "Nearby devices") solely to comply with Android 17 local routing and LAN bypass requirements.
 

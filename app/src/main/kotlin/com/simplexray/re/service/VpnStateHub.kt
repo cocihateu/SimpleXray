@@ -16,6 +16,10 @@ sealed class VpnRunningState {
 }
 
 object VpnStateHub {
+    @Volatile
+    var coreProcessId: Int? = null
+        internal set
+
     private val _state = MutableStateFlow<VpnRunningState>(VpnRunningState.Disconnected)
     val state: StateFlow<VpnRunningState> = _state.asStateFlow()
 

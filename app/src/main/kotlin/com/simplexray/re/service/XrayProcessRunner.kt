@@ -105,6 +105,7 @@ internal class XrayProcessRunner(
     }
 
     @Synchronized fun kill() {
+        VpnStateHub.coreProcessId = null
         groupSession?.close()
         groupSession = null
         isStarted = false
@@ -234,6 +235,7 @@ internal class XrayProcessRunner(
                     spawn(xrayPath, application.filesDir.path, vpnFd)?.also {
                         currentPid = it[0]
                         pid = currentPid
+                        VpnStateHub.coreProcessId = currentPid
                     }
                 }
                     ?: run {
@@ -270,6 +272,9 @@ internal class XrayProcessRunner(
                     processBuilder.start().also {
                         currentProcess = it
                         process = it
+                        // Android's ProcessBuilder child exposes its PID in this representation.
+                        VpnStateHub.coreProcessId = PROCESS_PID.find(it.toString())
+                            ?.groupValues?.get(1)?.toIntOrNull()
                     }
                 }
                 Log.d(tag, "Xray child process started successfully via ProcessBuilder.")
@@ -397,9 +402,11 @@ internal class XrayProcessRunner(
                 if (groupSession === session) groupSession = null
                 if (currentProcess != null && process === currentProcess) {
                     process = null
+                    VpnStateHub.coreProcessId = null
                 }
                 if (pid > 0 && pid == currentPid) {
                     pid = -1
+                    VpnStateHub.coreProcessId = null
                 }
             }
             runCatching { reader?.close() }
@@ -491,6 +498,7 @@ internal class XrayProcessRunner(
         private const val MAX_START_ATTEMPTS = 2
         private const val STARTUP_PROBE_TIMEOUT_MS: Long = 15000
         private const val STARTUP_PROBE_INTERVAL_MS: Long = 500
+        private val PROCESS_PID = Regex("""^Process\[pid=(\d+)""")
         private val GO_LOG_TIMESTAMP_PREFIX = Regex("""^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(\.\d+)? """)
         private val logTimestampFormat = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss.SSS", Locale.US)
 

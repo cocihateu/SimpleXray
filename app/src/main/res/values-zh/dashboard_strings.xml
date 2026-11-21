@@ -7,4 +7,15 @@
     <string name="routing_mode_rule">规则</string>
     <string name="routing_mode_global">全局代理</string>
     <string name="routing_mode_direct">直连</string>
+    <string name="dashboard_status">状态</string>
+    <string name="dashboard_loaded">已加载</string>
+    <string name="dashboard_failed">服务异常</string>
+    <string name="dashboard_network_speed">网络速度</string>
+    <string name="dashboard_upload">↑ 上传</string>
+    <string name="dashboard_download">↓ 下载</string>
+    <string name="dashboard_traffic_total">累计 %1$s</string>
+    <string name="dashboard_memory">内存信息</string>
+    <string name="dashboard_memory_app">应用</string>
+    <string name="dashboard_memory_core">核心</string>
+    <string name="dashboard_memory_resident">驻留内存 · 应用＋核心</string>
 </resources>

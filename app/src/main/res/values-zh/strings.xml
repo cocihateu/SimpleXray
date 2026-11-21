@@ -22,9 +22,9 @@
 
     <!-- TUN 网络与 DNS 设置 -->
     <string name="dns_ipv4">TUN 接口 IPv4 DNS</string>
-    <string name="dns_ipv4_summary">系统 VPN 接口使用的 IPv4 DNS 服务器地址</string>
+    <string name="dns_ipv4_summary">提供给 Android VPN 网络的 IPv4 DNS 地址，查询按当前路由规则转发。全局 DNS 和 DoH 引导 DNS 分别配置。保存后重新连接生效。</string>
     <string name="dns_ipv6">TUN 接口 IPv6 DNS</string>
-    <string name="dns_ipv6_summary">系统 VPN 接口使用的 IPv6 DNS 服务器地址</string>
+    <string name="dns_ipv6_summary">通过 IPv6 访问的 VPN DNS 地址，在 Hev 或 Xray TUN 启用 IPv6 时生效。查询按当前路由规则转发。保存后重新连接生效。</string>
     <string name="ipv6">IPv6 支持</string>
     <string name="ipv6_summary">为系统 VPN 接口启用 IPv6 路由与协议栈支持</string>
     <string name="disable_vpn_title">禁用 VPN 接口</string>

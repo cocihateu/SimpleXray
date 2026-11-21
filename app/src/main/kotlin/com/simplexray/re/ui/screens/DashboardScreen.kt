@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,11 +17,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -34,9 +34,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -55,6 +57,8 @@ import kotlinx.coroutines.isActive
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
+import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
@@ -124,22 +128,29 @@ fun DashboardScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
+            RoutingModeCard(workspace.routingMode, mainViewModel::setRoutingMode)
+        }
+        item {
             HeroServiceCard(
                 state = state,
-                uploadSpeedRate = uploadSpeedRate,
-                downloadSpeedRate = downloadSpeedRate,
+                backendMode = backendMode,
+                uptime = stats.uptime,
+                activeConnections = liveConnectionCount,
                 onSwitchVpnService = onSwitchVpnService,
                 enabled = enabled
             )
         }
 
         item {
-            TrafficStatsGrid(
+            TrafficStatsCard(
+                uploadSpeedRate = uploadSpeedRate,
+                downloadSpeedRate = downloadSpeedRate,
                 uplinkTotal = stats.uplink,
-                downlinkTotal = stats.downlink,
-                activeConnections = liveConnectionCount,
-                memoryAlloc = stats.alloc
+                downlinkTotal = stats.downlink
             )
+        }
+        item {
+            MemoryStatsCard(stats.appMemoryBytes, stats.coreMemoryBytes)
         }
         item {
             Card(Modifier.fillMaxWidth()) {
@@ -188,34 +199,20 @@ fun DashboardScreen(
 
                     OverviewValue(stringResource(R.string.overview_active_profile), profileName)
                     OverviewValue(stringResource(R.string.overview_current_proxy), "$defaultTag → $activeLeaf")
-                    OverviewValue(stringResource(R.string.stats_uptime), formatUptime(stats.uptime))
-                    OverviewValue("传输引擎", "Xray-core ($backendMode)")
                 }
             }
         }
 
-        item {
+        if (workspace.groups.isNotEmpty()) item {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OverlayDropdownPreference(
-                        title = stringResource(R.string.workspace_routing_mode_title),
-                        items = listOf(
-                            stringResource(R.string.outbound_mode_rule),
-                            stringResource(R.string.outbound_mode_global),
-                            stringResource(R.string.outbound_mode_direct),
-                        ),
-                        selectedIndex = listOf("rule", "global", "direct").indexOf(workspace.routingMode).coerceAtLeast(0),
-                        onSelectedIndexChange = { mainViewModel.setRoutingMode(listOf("rule", "global", "direct")[it]) },
-                    )
                     val groups = workspace.groups
-                    if (groups.isNotEmpty()) {
-                        OverlayDropdownPreference(
-                            title = stringResource(R.string.proxies_set_default),
-                            items = groups.map { it.tag },
-                            selectedIndex = groups.indexOfFirst { it.tag == workspace.effectiveDefaultGroupTag() }.coerceAtLeast(0),
-                            onSelectedIndexChange = { mainViewModel.setDefaultWorkspaceGroup(groups[it].tag) },
-                        )
-                    }
+                    OverlayDropdownPreference(
+                        title = stringResource(R.string.proxies_set_default),
+                        items = groups.map { it.tag },
+                        selectedIndex = groups.indexOfFirst { it.tag == workspace.effectiveDefaultGroupTag() }.coerceAtLeast(0),
+                        onSelectedIndexChange = { mainViewModel.setDefaultWorkspaceGroup(groups[it].tag) },
+                    )
                 }
             }
         }
@@ -276,10 +273,36 @@ fun DashboardScreen(
 }
 
 @Composable
+private fun RoutingModeCard(mode: String, onModeChange: (String) -> Unit) {
+    val modes = listOf("rule", "global", "direct")
+    val labels = listOf(
+        stringResource(R.string.routing_mode_rule),
+        stringResource(R.string.routing_mode_global),
+        stringResource(R.string.routing_mode_direct),
+    )
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text(stringResource(R.string.workspace_routing_mode_title), style = MiuixTheme.textStyles.title3)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                modes.forEachIndexed { index, value ->
+                    Button(
+                        onClick = { onModeChange(value) },
+                        modifier = Modifier.weight(1f),
+                        insideMargin = PaddingValues(horizontal = 8.dp, vertical = 14.dp),
+                        colors = if (mode == value) ButtonDefaults.buttonColorsPrimary() else ButtonDefaults.buttonColors(),
+                    ) { Text(labels[index], maxLines = 1) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun HeroServiceCard(
     state: VpnRunningState,
-    uploadSpeedRate: Long,
-    downloadSpeedRate: Long,
+    backendMode: String,
+    uptime: Int,
+    activeConnections: Long,
     onSwitchVpnService: () -> Unit,
     enabled: Boolean
 ) {
@@ -290,83 +313,137 @@ private fun HeroServiceCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(stringResource(R.string.overview_service_title), style = MiuixTheme.textStyles.title2, fontWeight = FontWeight.Bold)
-                    val statusText = when (state) {
-                        VpnRunningState.Connected -> stringResource(R.string.vpn_status_connected)
-                        VpnRunningState.Connecting -> "正在连接中"
-                        is VpnRunningState.Failed -> (state as VpnRunningState.Failed).message ?: "服务异常"
-                        else -> stringResource(R.string.vpn_status_stopped)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(stringResource(R.string.dashboard_status), style = MiuixTheme.textStyles.title3)
+                        when (state) {
+                            VpnRunningState.Connected -> Icon(
+                                Icons.Default.CheckCircle,
+                                contentDescription = stringResource(R.string.dashboard_loaded),
+                                tint = Color(0xFF2E7D32),
+                                modifier = Modifier.size(28.dp),
+                            )
+                            VpnRunningState.Connecting -> CircularProgressIndicator(size = 22.dp)
+                            is VpnRunningState.Failed -> Text(
+                                stringResource(R.string.dashboard_failed),
+                                style = MiuixTheme.textStyles.body2,
+                                color = MiuixTheme.colorScheme.error,
+                            )
+                            else -> Text(
+                                stringResource(R.string.vpn_status_stopped),
+                                style = MiuixTheme.textStyles.body2,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
+                        }
                     }
-                    val statusColor = when (state) {
-                        VpnRunningState.Connected -> Color(0xFF2E7D32)
-                        VpnRunningState.Connecting -> Color(0xFFE65100)
-                        else -> MiuixTheme.colorScheme.onSurfaceVariantSummary
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Box(
-                            Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(statusColor)
-                        )
-                        Text(statusText, style = MiuixTheme.textStyles.body2, color = statusColor)
-                    }
+                    Text(backendMode, style = MiuixTheme.textStyles.body2,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                 }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    SpeedRateItem(label = "↑", rate = "${formatBytes(uploadSpeedRate)}/s")
-                    SpeedRateItem(label = "↓", rate = "${formatBytes(downloadSpeedRate)}/s")
+                Button(
+                    onClick = onSwitchVpnService,
+                    modifier = Modifier.size(64.dp),
+                    cornerRadius = 32.dp,
+                    minWidth = 64.dp,
+                    minHeight = 64.dp,
+                    insideMargin = PaddingValues(0.dp),
+                    colors = ButtonDefaults.buttonColorsPrimary(),
+                ) {
+                    Icon(
+                        painterResource(if (enabled) R.drawable.stop else R.drawable.play),
+                        contentDescription = stringResource(if (enabled) R.string.vpn_stop else R.string.vpn_start),
+                        modifier = Modifier.size(30.dp),
+                    )
                 }
             }
-
-            Button(
-                onClick = onSwitchVpnService,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColorsPrimary(),
-            ) {
-                Text(
-                    text = if (enabled) stringResource(R.string.vpn_stop) else stringResource(R.string.vpn_start),
-                    fontWeight = FontWeight.Bold
-                )
+            if (state is VpnRunningState.Failed) {
+                state.message?.let { Text(it, color = MiuixTheme.colorScheme.error) }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(stringResource(R.string.stats_uptime), style = MiuixTheme.textStyles.body2,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                    Text(if (state == VpnRunningState.Connected) formatUptime(uptime) else "—",
+                        style = MiuixTheme.textStyles.body1, fontFamily = FontFamily.Monospace)
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(stringResource(R.string.connections_title), style = MiuixTheme.textStyles.body2,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                    Text("$activeConnections", style = MiuixTheme.textStyles.body1, fontFamily = FontFamily.Monospace)
+                }
             }
         }
     }
 }
 
 @Composable
-private fun SpeedRateItem(label: String, rate: String) {
-    Column(horizontalAlignment = Alignment.End) {
-        Text(label, style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-        Text(rate, style = MiuixTheme.textStyles.body1, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
+private fun SpeedMetric(label: String, rate: Long, total: Long, modifier: Modifier = Modifier) {
+    Column(
+        modifier.clip(RoundedCornerShape(20.dp)).background(MiuixTheme.colorScheme.surfaceContainerHigh).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(label, style = MiuixTheme.textStyles.body1, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+        Text("${formatBytes(rate)}/s", style = MiuixTheme.textStyles.title3,
+            fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(stringResource(R.string.dashboard_traffic_total, formatBytes(total)), style = MiuixTheme.textStyles.body2,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary, maxLines = 1)
     }
 }
 
 @Composable
-private fun TrafficStatsGrid(
+private fun TrafficStatsCard(
+    uploadSpeedRate: Long,
+    downloadSpeedRate: Long,
     uplinkTotal: Long,
-    downlinkTotal: Long,
-    activeConnections: Long,
-    memoryAlloc: Long
+    downlinkTotal: Long
 ) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Card(Modifier.weight(1f)) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(stringResource(R.string.traffic_total_up), style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-                Text(formatBytes(uplinkTotal), style = MiuixTheme.textStyles.title3, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                Spacer(Modifier.height(4.dp))
-                Text(stringResource(R.string.traffic_total_down), style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-                Text(formatBytes(downlinkTotal), style = MiuixTheme.textStyles.title3, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text(stringResource(R.string.dashboard_network_speed), style = MiuixTheme.textStyles.title3)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                SpeedMetric(stringResource(R.string.dashboard_upload), uploadSpeedRate, uplinkTotal, Modifier.weight(1f))
+                SpeedMetric(stringResource(R.string.dashboard_download), downloadSpeedRate, downlinkTotal, Modifier.weight(1f))
             }
         }
-        Card(Modifier.weight(1f)) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(stringResource(R.string.connections_title), style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-                Text("$activeConnections", style = MiuixTheme.textStyles.title3, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                Spacer(Modifier.height(4.dp))
-                Text(stringResource(R.string.stats_alloc), style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-                Text(formatBytes(memoryAlloc), style = MiuixTheme.textStyles.title3, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+    }
+}
+
+@Composable
+private fun MemoryStatsCard(appBytes: Long?, coreBytes: Long?) {
+    val total = if (appBytes != null && coreBytes != null) appBytes + coreBytes else null
+    val appColor = MiuixTheme.colorScheme.primary
+    val coreColor = MiuixTheme.colorScheme.primary.copy(alpha = 0.4f)
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text(stringResource(R.string.dashboard_memory), style = MiuixTheme.textStyles.title3)
+            Text(total?.let(::formatBytes) ?: "—", style = MiuixTheme.textStyles.title2, fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.dashboard_memory_resident), style = MiuixTheme.textStyles.body2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            Row(Modifier.fillMaxWidth().height(10.dp).clip(CircleShape)
+                .background(MiuixTheme.colorScheme.surfaceContainerHigh)) {
+                if (total != null && total > 0L) {
+                    if (appBytes != null && appBytes > 0L) {
+                        Box(Modifier.weight((appBytes.toDouble() / total).toFloat()).height(10.dp).background(appColor))
+                    }
+                    if (coreBytes != null && coreBytes > 0L) {
+                        Box(Modifier.weight((coreBytes.toDouble() / total).toFloat()).height(10.dp).background(coreColor))
+                    }
+                }
             }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                MemoryLegend(stringResource(R.string.dashboard_memory_app), appBytes, appColor, Modifier.weight(1f))
+                MemoryLegend(stringResource(R.string.dashboard_memory_core), coreBytes, coreColor, Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun MemoryLegend(label: String, bytes: Long?, color: Color, modifier: Modifier = Modifier) {
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(label, style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            Text(bytes?.let(::formatBytes) ?: "—", style = MiuixTheme.textStyles.body1, fontWeight = FontWeight.Medium)
         }
     }
 }

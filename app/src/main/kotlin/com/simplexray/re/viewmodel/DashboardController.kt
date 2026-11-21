@@ -1,9 +1,11 @@
 package com.simplexray.re.viewmodel
 
 import android.content.Context
+import android.os.Process
 import android.util.Log
 import com.simplexray.re.common.ConfigUtils
 import com.simplexray.re.common.CoreStatsClient
+import com.simplexray.re.common.ProcessMemoryReader
 import com.simplexray.re.common.TcpPing
 import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.common.config.GroupProfile
@@ -13,6 +15,7 @@ import com.simplexray.re.common.config.GroupMemberRef
 import com.simplexray.re.service.StandaloneLatencySession
 import com.simplexray.re.prefs.Preferences
 import com.simplexray.re.service.GroupRuntimeStatus
+import com.simplexray.re.service.VpnStateHub
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -122,7 +125,7 @@ internal class DashboardController(
     }
 
     fun reset() {
-        _coreStatsState.value = CoreStatsState()
+        _coreStatsState.update { CoreStatsState(appMemoryBytes = it.appMemoryBytes) }
         close()
     }
 
@@ -134,7 +137,20 @@ internal class DashboardController(
     }
 
     suspend fun updateCoreStats() = withContext(Dispatchers.IO) {
-        if (!isVpnEnabled()) return@withContext
+        val appPid = Process.myPid()
+        val appMemoryBytes = ProcessMemoryReader.readRssBytes(appPid)
+        val vpnEnabled = isVpnEnabled()
+        val corePid = VpnStateHub.coreProcessId
+        val coreMemoryBytes = when {
+            vpnEnabled == false -> 0L
+            corePid == null -> null
+            corePid == appPid -> 0L
+            else -> ProcessMemoryReader.readRssBytes(corePid)
+        }
+        _coreStatsState.update {
+            it.copy(appMemoryBytes = appMemoryBytes, coreMemoryBytes = coreMemoryBytes)
+        }
+        if (vpnEnabled == false) return@withContext
 
         val client = synchronized(statsClientLock) {
             coreStatsClient ?: CoreStatsClient.create(prefs.apiAddress, prefs.apiPort).also {
@@ -160,6 +176,8 @@ internal class DashboardController(
             return@withContext
         }
 
+        if (isVpnEnabled() == false) return@withContext
+
         _coreStatsState.value = CoreStatsState(
             uplink = traffic?.uplink ?: 0,
             downlink = traffic?.downlink ?: 0,
@@ -172,7 +190,9 @@ internal class DashboardController(
             frees = stats?.frees ?: 0,
             liveObjects = stats?.liveObjects ?: 0,
             pauseTotalNs = stats?.pauseTotalNs ?: 0,
-            uptime = stats?.uptime ?: 0
+            uptime = stats?.uptime ?: 0,
+            appMemoryBytes = appMemoryBytes,
+            coreMemoryBytes = coreMemoryBytes
         )
         Log.d(TAG, "Core stats updated")
     }

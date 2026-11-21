@@ -102,6 +102,10 @@ Structured rules live in `rules_workspace.json`. Legacy Lua rules are migrated d
 
 Simple TUN uses IPv4 and SOCKS authentication mode `noauth`. Hev and Xray TUN retain their existing IPv6 and authenticated entry options.
 
+TUN IPv4 DNS defaults to `8.8.8.8`, and IPv6 DNS defaults to `2001:4860:4860::8888`. The VPN interface advertises these addresses to Android's resolver. IPv4/IPv6 describes the server address family; either transport can carry A and AAAA queries. These requests enter the TUN and follow the active routing rules. Global DNS serves Xray's internal lookups; DoH bootstrap DNS resolves DoH endpoint names. IPv6 DNS applies to Hev or Xray TUN with IPv6 enabled. TUN DNS changes apply when reconnecting.
+
+The overview shows readiness with a green check and provides direct rule/global/direct mode selection. Network speed has separate upload/download values and cumulative totals. Memory shows RSS for the Android app and Xray child process, their sum, and a proportion bar, sampled from `VmRSS` in `/proc/<pid>/status` during the existing visible-overview refresh loop. App memory remains visible while the core is stopped; missing samples display a placeholder. Summed RSS includes shared pages mapped by both processes. The existing Go `alloc` field retains its separate core-statistics meaning.
+
 ## Runtime Statistics Injection
 
 | Field | Action |

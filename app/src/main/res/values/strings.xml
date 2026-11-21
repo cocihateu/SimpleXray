@@ -27,9 +27,9 @@
 
     <!-- TUN Network & DNS Settings -->
     <string name="dns_ipv4">TUN IPv4 DNS</string>
-    <string name="dns_ipv4_summary">IPv4 DNS server used by system VPN interface</string>
+    <string name="dns_ipv4_summary">IPv4 DNS address advertised to Android on the VPN network. DNS requests follow current routing rules. Global DNS and DoH bootstrap DNS have separate settings. Reconnect to apply.</string>
     <string name="dns_ipv6">TUN IPv6 DNS</string>
-    <string name="dns_ipv6_summary">IPv6 DNS server used by system VPN interface</string>
+    <string name="dns_ipv6_summary">DNS server reached over IPv6 on the VPN network. Applies when IPv6 is enabled with Hev or Xray TUN. DNS requests follow current routing rules. Reconnect to apply.</string>
     <string name="ipv6">IPv6 Support</string>
     <string name="ipv6_summary">Enable IPv6 routing and the IPv6 protocol stack for the system VPN interface</string>
     <string name="disable_vpn_title">Disable VPN Interface</string>
