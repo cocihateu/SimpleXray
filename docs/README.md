@@ -123,6 +123,7 @@ System DNS entering the TUN now uses the same global DNS/DoH resolver. The App m
 
 ### Android Integration
 
+- The foreground notification shows the default group's current node, or Direct in direct mode.
 - The Android app layer (UI + `TProxyService`) runs in a single process. Service state and log streams are delivered through in-memory `StateFlow` / `SharedFlow`.
 - The dashboard presents a green readiness check, separate upload/download speed panels, and application/core resident-memory totals. Memory uses RSS for both processes and refreshes with the visible dashboard; app memory remains visible with the core stopped.
 - Per-app proxy filtering, direct SOCKS5 access at `127.0.0.1:<socksPort>`, network handover callbacks, and adaptive layout for phones and tablets.

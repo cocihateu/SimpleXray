@@ -51,8 +51,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.simplexray.re.R
 import com.simplexray.re.common.formatUptime
+import com.simplexray.re.service.GroupRuntimeStatus
 import com.simplexray.re.service.VpnRunningState
 import com.simplexray.re.service.VpnStateHub
+import com.simplexray.re.viewmodel.EXIT_INFO_HOST
 import com.simplexray.re.viewmodel.ExitInfoState
 import com.simplexray.re.viewmodel.MainViewModel
 import kotlinx.coroutines.delay
@@ -78,9 +80,9 @@ fun DashboardScreen(
     val active by mainViewModel.activeGroupNodes.collectAsStateWithLifecycle()
     val state by VpnStateHub.state.collectAsStateWithLifecycle()
     val exitInfo by mainViewModel.exitInfo.collectAsStateWithLifecycle()
-    val defaultGroup = workspace.effectiveDefaultGroupTag()
-    val exitNode = defaultGroup?.let(active::get)
-    LaunchedEffect(state, defaultGroup, exitNode, workspace.routingMode) {
+    val appliedRouting by GroupRuntimeStatus.appliedRouting.collectAsStateWithLifecycle()
+    val exitNode = appliedRouting?.defaultGroupTag?.let(active::get)
+    LaunchedEffect(state, appliedRouting, exitNode) {
         if (state != VpnRunningState.Connecting) mainViewModel.refreshExitInfo()
     }
 
@@ -123,7 +125,6 @@ fun DashboardScreen(
                 state = state,
                 exitInfo = exitInfo,
                 uptime = stats.uptime,
-                proxyExit = state == VpnRunningState.Connected && workspace.routingMode != "direct",
                 onSwitchVpnService = onSwitchVpnService,
                 onRefreshExit = mainViewModel::refreshExitInfo,
             )
@@ -188,7 +189,6 @@ private fun StatusCard(
     state: VpnRunningState,
     exitInfo: ExitInfoState,
     uptime: Int,
-    proxyExit: Boolean,
     onSwitchVpnService: () -> Unit,
     onRefreshExit: () -> Unit,
 ) {
@@ -239,9 +239,11 @@ private fun StatusCard(
                                 autoSize = TextAutoSize.StepBased(minFontSize = 13.sp, maxFontSize = 20.sp, stepSize = 1.sp),
                                 fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            StatusPill(stringResource(if (proxyExit) R.string.dashboard_proxy_exit else R.string.dashboard_direct_exit))
-                            if (location.isNotBlank()) StatusPill(location, Modifier.weight(1f, fill = false))
+                        if (exitInfo.ip.isNotBlank()) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                StatusPill(if (exitInfo.routedLookup) EXIT_INFO_HOST else stringResource(R.string.dashboard_direct_exit))
+                                if (location.isNotBlank()) StatusPill(location, Modifier.weight(1f, fill = false))
+                            }
                         }
                     }
                     Button(
@@ -292,7 +294,7 @@ private fun StatusPill(text: String, modifier: Modifier = Modifier) {
 @Composable
 private fun TrafficStatsCard(uploadRate: Long, downloadRate: Long, uplinkTotal: Long, downlinkTotal: Long) {
     DashboardCard {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Column(Modifier.padding(horizontal = 18.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             CardHeading(R.drawable.dashboard_speed, stringResource(R.string.dashboard_network_speed))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 SpeedMetric(R.drawable.dashboard_upload, stringResource(R.string.dashboard_upload),
@@ -306,10 +308,11 @@ private fun TrafficStatsCard(uploadRate: Long, downloadRate: Long, uplinkTotal: 
 
 @Composable
 private fun SpeedMetric(@DrawableRes icon: Int, label: String, rate: Long, total: Long, tint: Color, modifier: Modifier) {
-    Column(modifier.clip(RoundedCornerShape(24.dp)).background(MiuixTheme.colorScheme.surface).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(modifier.clip(RoundedCornerShape(24.dp)).background(MiuixTheme.colorScheme.surface)
+        .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(20.dp), tint = tint)
+            Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(18.dp), tint = tint)
             Text(label, fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
         }
         MetricNumber(rate, rate = true)
@@ -359,7 +362,7 @@ private fun MetricNumber(bytes: Long?, rate: Boolean = false) {
     val formatted = dashboardBytes(bytes)
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(formatted.first, modifier = Modifier.weight(1f, fill = false).alignByBaseline(),
-            autoSize = TextAutoSize.StepBased(minFontSize = 16.sp, maxFontSize = if (rate) 32.sp else 36.sp, stepSize = 1.sp),
+            autoSize = TextAutoSize.StepBased(minFontSize = 16.sp, maxFontSize = if (rate) 26.sp else 36.sp, stepSize = 1.sp),
             fontWeight = FontWeight.Medium,
             maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(formatted.second + if (rate) "/s" else "", modifier = Modifier.alignByBaseline(), fontSize = 14.sp,

@@ -2,9 +2,11 @@ package com.simplexray.re.service
 
 import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.common.config.GroupMemberRef
+import com.simplexray.re.common.config.GroupWorkspace
 import com.simplexray.re.common.config.GroupStrategy
 import com.simplexray.re.common.config.GroupWorkspaceStore
 import com.simplexray.re.common.config.RuleWorkspaceStore
+import com.simplexray.re.common.config.TrafficRule
 import com.simplexray.re.common.config.GroupWorkspace
 import com.xray.app.router.command.OverrideBalancerTargetRequest
 import com.xray.app.router.command.RoutingServiceGrpc
@@ -27,25 +29,35 @@ import java.util.concurrent.TimeUnit
 
 internal data class GroupNodeMeasurement(val delayMs: Long?, val completedAtMs: Long)
 internal data class ExitInfoProxy(val port: Int, val username: String, val password: String)
+internal data class AppliedGroupRouting(val mode: String, val defaultGroupTag: String?, val rules: List<TrafficRule>)
 
 internal object GroupRuntimeStatus {
     private val nodes = MutableStateFlow<Map<String, String>>(emptyMap())
     private val fallbacks = MutableStateFlow<Map<String, FallbackRuntimeInfo>>(emptyMap())
     private val latencies = MutableStateFlow<Map<String, Long>>(emptyMap())
     private val measurements = MutableStateFlow<Map<String, GroupNodeMeasurement>>(emptyMap())
+    private val routing = MutableStateFlow<AppliedGroupRouting?>(null)
     val activeNodes = nodes.asStateFlow()
     val fallbackStates = fallbacks.asStateFlow()
     val nodeLatencies = latencies.asStateFlow()
     val nodeMeasurements = measurements.asStateFlow()
+    val appliedRouting = routing.asStateFlow()
     @Volatile
     private var owner: GroupCoreSession? = null
 
-    @Synchronized fun start(session: GroupCoreSession) {
+    @Synchronized fun start(session: GroupCoreSession, workspace: GroupWorkspace, rules: List<TrafficRule>) {
         owner = session
         nodes.value = emptyMap()
         fallbacks.value = emptyMap()
         latencies.value = emptyMap()
         measurements.value = emptyMap()
+        applyRouting(session, workspace, rules)
+    }
+
+    @Synchronized fun applyRouting(session: GroupCoreSession, workspace: GroupWorkspace, rules: List<TrafficRule>) {
+        if (owner === session) {
+            routing.value = AppliedGroupRouting(workspace.routingMode, workspace.effectiveDefaultGroupTag(), rules)
+        }
     }
 
     @Synchronized fun publish(
@@ -68,6 +80,7 @@ internal object GroupRuntimeStatus {
             fallbacks.value = emptyMap()
             latencies.value = emptyMap()
             measurements.value = emptyMap()
+            routing.value = null
         }
     }
 
@@ -94,7 +107,7 @@ internal class GroupCoreSession(
     private val config: OutboundGroupConfig,
     private val apiPort: Int,
     private val ruleStore: RuleWorkspaceStore,
-    private val initialRules: List<com.simplexray.re.common.config.TrafficRule>,
+    private val initialRules: List<TrafficRule>,
     private val routingEditor: XrayRoutingEditor,
     private val logEvent: (String) -> Unit = VpnStateHub::emitLog,
 ) {
@@ -163,7 +176,7 @@ internal class GroupCoreSession(
 
     @Synchronized fun start(scope: CoroutineScope, onReady: () -> Unit, reload: () -> Unit) {
         if (closed) return
-        GroupRuntimeStatus.start(this)
+        GroupRuntimeStatus.start(this, config.workspace, initialRules)
         startRelayBeforeCore(scope)
         job = scope.launch(Dispatchers.IO) {
             val channel = ManagedChannelBuilder.forAddress("127.0.0.1", apiPort).usePlaintext().build()
@@ -247,6 +260,7 @@ internal class GroupCoreSession(
                             .onSuccess {
                                 previousRules = rules
                                 previousWorkspace = updated
+                                GroupRuntimeStatus.applyRouting(this@GroupCoreSession, updated, rules)
                                 RuleRuntimeStatus.applied()
                                 logEvent("[Info] Applied ${rules.count { it.enabled }} traffic rules.")
                             }

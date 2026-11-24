@@ -7,6 +7,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -19,6 +21,8 @@ import java.net.InetSocketAddress
 import java.net.Proxy
 import java.util.concurrent.TimeUnit
 
+internal const val EXIT_INFO_HOST = "ipwho.is"
+
 data class ExitInfoState(
     val loading: Boolean = false,
     val ip: String = "",
@@ -30,6 +34,7 @@ data class ExitInfoState(
     val organization: String = "",
     val isp: String = "",
     val error: String = "",
+    val routedLookup: Boolean = false,
 )
 
 internal class ExitInfoController(private val scope: CoroutineScope) {
@@ -43,7 +48,8 @@ internal class ExitInfoController(private val scope: CoroutineScope) {
             mutableState.value = ExitInfoState(loading = true)
             val connected = VpnStateHub.state.value == VpnRunningState.Connected
             val endpoint = if (connected) GroupRuntimeStatus.exitInfoProxy() else null
-            if (connected && endpoint == null) {
+            val routing = GroupRuntimeStatus.appliedRouting.value
+            if (connected && (endpoint == null || routing == null)) {
                 mutableState.value = ExitInfoState(error = "出口正在准备，稍后刷新")
                 return@launch
             }
@@ -59,7 +65,7 @@ internal class ExitInfoController(private val scope: CoroutineScope) {
             }.build()
             try {
                 val request = Request.Builder()
-                    .url("https://ipwho.is/?fields=success,message,ip,country,country_code,region,city,connection").build()
+                    .url("https://$EXIT_INFO_HOST/?fields=success,message,ip,country,country_code,region,city,connection").build()
                 val body = client.newCall(request).await().use { response ->
                     if (response.isSuccessful) response.body.string()
                     else throw IOException("出口信息 HTTP ${response.code}")
@@ -67,6 +73,7 @@ internal class ExitInfoController(private val scope: CoroutineScope) {
                 val root = JSONObject(body)
                 if (root.optBoolean("success") == false) throw IOException(root.optString("message", "出口信息查询失败"))
                 val network = root.optJSONObject("connection") ?: JSONObject()
+                currentCoroutineContext().ensureActive()
                 mutableState.value = ExitInfoState(
                     ip = root.optString("ip"),
                     country = root.optString("country"),
@@ -76,10 +83,12 @@ internal class ExitInfoController(private val scope: CoroutineScope) {
                     asn = network.optString("asn"),
                     organization = network.optString("org"),
                     isp = network.optString("isp"),
+                    routedLookup = endpoint != null && routing?.mode != "direct",
                 )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                currentCoroutineContext().ensureActive()
                 mutableState.value = ExitInfoState(error = e.message ?: "出口信息查询失败")
             } finally {
                 client.dispatcher.cancelAll()

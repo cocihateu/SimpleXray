@@ -39,7 +39,12 @@ internal class GroupRuntimeController(
 
     private data class Candidate(val member: GroupMemberRef, val route: Route)
     private data class Sample(val route: Route, val startedAt: Long, val completedAt: Long, val delayMs: Long?)
-    private data class Branch(val group: Group, val current: Candidate, val backups: List<Candidate>)
+    private data class Branch(
+        val group: Group,
+        val current: Candidate,
+        val backups: List<Candidate>,
+        val preferred: List<Candidate>,
+    )
     private data class Plan(val route: Route?, val branches: List<Branch>, val generation: Long)
 
     private class Group(val config: ProxyGroup) {
@@ -112,7 +117,7 @@ internal class GroupRuntimeController(
         FailoverPlan(
             primaryLeaf = plan.route?.leaf,
             candidates = (listOfNotNull(plan.route?.leaf) + plan.branches.flatMap { branch ->
-                branch.backups.map { it.route.leaf }
+                (branch.backups + branch.preferred).map { it.route.leaf }
             }).distinct(),
             failoverTimeoutMs = plan.branches.firstOrNull()?.group?.let(::fallbackTimeout) ?: 3_000,
             watchResponse = plan.branches.isNotEmpty(),
@@ -122,15 +127,8 @@ internal class GroupRuntimeController(
 
     fun onCandidateConnected(groupTag: String, leaf: String, generation: Long) {
         synchronized(lock) {
-            val plan = eventPlan(groupTag, generation) ?: return
-            val route = plan.route ?: return
-            if (route.leaf != leaf) {
-                val (branch, backup) = plan.branches.firstNotNullOfOrNull { branch ->
-                    branch.backups.firstOrNull { it.route.leaf == leaf }?.let { branch to it }
-                } ?: return
-                switch(branch.group, backup, route.leaf)
-            }
-            targetRoute(groupTag)?.steps?.forEach { step -> groups.getValue(step.groupTag).replyVersion++ }
+            val route = eventPlan(groupTag, generation)?.route?.takeIf { it.leaf == leaf } ?: return
+            route.steps.forEach { step -> groups.getValue(step.groupTag).replyVersion++ }
         }
     }
 
@@ -148,7 +146,7 @@ internal class GroupRuntimeController(
             val current = plan(groupTag)
             current.route?.let { it.leaf != leaf || current.branches.isNotEmpty() } == true
         }
-        // The relay retries the pending exchange; actual data can confirm the backup.
+        // The relay retries this exchange while the group verifies the active path.
         if (canRetry && applyIfWaiting {}) onCandidateFailed(groupTag, leaf, generation)
     }
 
@@ -159,7 +157,7 @@ internal class GroupRuntimeController(
     ) {
         val (plan, checks) = synchronized(lock) {
             val plan = eventPlan(groupTag, generation)?.takeIf { it.route?.leaf == leaf } ?: return
-            plan to plan.branches.map { FailureCheck(it, it.group.replyVersion) }
+            plan to plan.branches.filter { it.backups.isNotEmpty() }.map { FailureCheck(it, it.group.replyVersion) }
         }
         for (check in checks) {
             val (group, current, backups) = check.branch
@@ -185,7 +183,7 @@ internal class GroupRuntimeController(
                 if (confirmed) {
                     val backup = firstReachable(group, backups) ?: continue
                     synchronized(lock) {
-                        if (currentStillFailed()) switch(group, backup, leaf)
+                        if (currentStillFailed()) switch(group, current, backup)
                     }
                     return
                 }
@@ -213,11 +211,14 @@ internal class GroupRuntimeController(
         }
     }
 
-    private fun switch(group: Group, backup: Candidate, previousLeaf: String) {
+    private fun switch(group: Group, previous: Candidate, backup: Candidate) {
         selectFallback(group, backup.member)
-        logEvent("[Warning] ${group.config.tag}: switched from $previousLeaf to ${backup.route.leaf}")
+        logEvent("[Warning] ${group.config.tag}: switched from ${previous.displayName()} to ${backup.displayName()}")
         publish()
     }
+
+    private fun Candidate.displayName(): String =
+        if (member.isGroup) "${member.tag} (${route.leaf})" else route.leaf
 
     private fun selectFallback(group: Group, member: GroupMemberRef?) {
         group.selected = member
@@ -240,7 +241,7 @@ internal class GroupRuntimeController(
                     if (groups[group.config.tag] !== group || group.selected != member) return@launch
                     if (restored != null && candidate(restored.member) == restored) {
                         selectFallback(group, restored.member)
-                        logEvent("[Info] ${group.config.tag}: recovered to ${restored.route.leaf}")
+                        logEvent("[Info] ${group.config.tag}: recovered to ${restored.displayName()}")
                         publish()
                         return@launch
                     }
@@ -290,8 +291,12 @@ internal class GroupRuntimeController(
                 ?.delayMs?.let { candidate to it }
         }.minByOrNull { it.second }?.first
         if (best != null) {
+            val previous = group.selected?.let(::candidate) ?: primary(group)
             group.selected = best.member
             group.manual = false
+            if (previous?.member != best.member) {
+                logEvent("[Info] ${group.config.tag}: URL test selected ${best.displayName()}")
+            }
         }
     }
 
@@ -310,13 +315,18 @@ internal class GroupRuntimeController(
     fun forceSwitchMember(groupTag: String, member: GroupMemberRef) {
         synchronized(lock) {
             val group = groups[groupTag] ?: return
-            if (member in group.members && candidate(member) != null) {
+            val choice = candidate(member)
+            if (member in group.members && choice != null) {
+                val previous = group.selected?.let(::candidate) ?: primary(group)
                 if (group.config.strategy == GroupStrategy.FALLBACK) {
                     selectFallback(group, member)
                 } else {
                     group.selected = member
                     group.manual = true
                     group.selectionVersion++
+                }
+                if (previous?.member != member) {
+                    logEvent("[Info] $groupTag: manually selected ${choice.displayName()}")
                 }
                 publish()
             }
@@ -453,10 +463,12 @@ internal class GroupRuntimeController(
             val group = groups.getValue(step.groupTag)
             if (group.config.strategy != GroupStrategy.FALLBACK) return@mapNotNull null
             val current = candidate(step.member) ?: return@mapNotNull null
-            val backups = group.members.asSequence()
-                .filter { it != step.member }.mapNotNull(::candidate)
-                .filter { it.route.leaf != route.leaf }.distinctBy { it.route.leaf }.toList()
-            if (backups.isEmpty()) null else Branch(group, current, backups)
+            val priority = group.members.indexOf(step.member)
+            fun alternatives(members: List<GroupMemberRef>): List<Candidate> =
+                members.mapNotNull(::candidate).filter { it.route.leaf != route.leaf }.distinctBy { it.route.leaf }
+            val backups = alternatives(group.members.drop(priority + 1))
+            val preferred = alternatives(group.members.take(priority))
+            if (backups.isEmpty() && preferred.isEmpty()) null else Branch(group, current, backups, preferred)
         }
         return plans[tag]?.takeIf { it.route == route && it.branches == branches }
             ?: Plan(route, branches, ++nextGeneration).also { plans[tag] = it }

@@ -66,6 +66,7 @@ class TProxyService : VpnService() {
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val notificationHelper by lazy { VpnNotificationHelper(this) }
+    private val notificationUpdater by lazy { VpnNotificationUpdater(this, notificationHelper) }
     private val vpnWakeLock by lazy { VpnWakeLock(this) }
     private val powerManager by lazy { getSystemService(Context.POWER_SERVICE) as? PowerManager }
     private val geoUpdateScheduler by lazy { GeoUpdateScheduler(applicationContext) }
@@ -119,6 +120,8 @@ class TProxyService : VpnService() {
                 override fun onCoreReady() {
                     VpnStateHub.updateState(VpnRunningState.Connected)
                     startClashApi()
+                    val channelName = if (Preferences(applicationContext).disableVpn) "nosocks" else "socks5"
+                    notificationUpdater.start(serviceScope, channelName)
                     geoUpdateScheduler.start(serviceScope)
                     socksHealthMonitor.start()
                 }
@@ -250,6 +253,7 @@ class TProxyService : VpnService() {
         networkMonitor.stop()
         geoUpdateScheduler.stop()
         socksHealthMonitor.stop()
+        notificationUpdater.stop()
         serviceScope.cancel()
         xrayProcessRunner.kill()
         val pfd = tunFd
@@ -525,6 +529,7 @@ class TProxyService : VpnService() {
     private fun stopService(finalState: VpnRunningState = VpnRunningState.Disconnected) {
         stopClashApi()
         socksHealthMonitor.stop()
+        notificationUpdater.stop()
         isStartingLock.set(false)
         networkMonitor.stop()
         stopForeground(Service.STOP_FOREGROUND_REMOVE)
@@ -546,7 +551,7 @@ class TProxyService : VpnService() {
     private fun showForegroundNotification(channelName: String) {
         notificationHelper.ensureChannel(channelName)
         startForeground(
-            1,
+            VpnNotificationHelper.NOTIFICATION_ID,
             notificationHelper.buildForegroundNotification(channelName),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         )

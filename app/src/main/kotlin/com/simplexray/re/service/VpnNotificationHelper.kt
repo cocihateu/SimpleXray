@@ -20,7 +20,11 @@ internal class VpnNotificationHelper(private val context: Context) {
         notificationManager.createNotificationChannel(channel)
     }
 
-    fun buildForegroundNotification(channelName: String): Notification {
+    fun buildForegroundNotification(
+        channelName: String,
+        activeNode: String? = null,
+        connected: Boolean = false,
+    ): Notification {
         val intent = Intent(context, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             context,
@@ -28,10 +32,22 @@ internal class VpnNotificationHelper(private val context: Context) {
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+        val title = when {
+            activeNode != null -> context.getString(R.string.notification_active_node, activeNode)
+            connected -> context.getString(R.string.notification_connected)
+            else -> context.getString(R.string.app_name)
+        }
+        val text = if (connected) null else context.getString(R.string.connecting)
         return NotificationCompat.Builder(context, channelName)
-            .setContentTitle(context.getString(R.string.app_name))
+            .setContentTitle(title)
+            .setContentText(text)
             .setSmallIcon(R.drawable.ic_stat_lineal)
             .setContentIntent(pendingIntent)
+            .setOnlyAlertOnce(true)
             .build()
+    }
+
+    companion object {
+        const val NOTIFICATION_ID = 1
     }
 }

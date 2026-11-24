@@ -171,13 +171,7 @@ internal class OutboundGroupConfig(
                 .put("user", JSONArray().put(user)).put("outboundTag", healthOutbounds[target] ?: target)
                 .put("ruleTag", "sx-health/$user"))
         }
-        targetSpec(current, if (current.routingMode == "direct") "direct" else "GLOBAL")?.let { spec ->
-            compiled.put(JSONObject().put("type", "field")
-                .put("inboundTag", JSONArray().put(healthInbound))
-                .put("user", JSONArray().put(exitInfoUser))
-                .put("outboundTag", fallbackRelayOutbounds.getValue(spec.groupTag))
-                .put("ruleTag", "exit-info"))
-        }
+        // The exit-info account follows the configured application routing rules.
         if (current.routingMode == "rule") {
             rules.filter { it.enabled }.forEach { rule ->
                 targetSpec(current, rule.target)?.let { spec ->
