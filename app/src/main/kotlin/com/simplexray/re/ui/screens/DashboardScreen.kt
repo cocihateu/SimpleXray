@@ -25,7 +25,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -221,12 +220,9 @@ private fun StatusCard(
                     CardHeading(R.drawable.dashboard_status, stringResource(R.string.dashboard_status))
                     Spacer(Modifier.width(10.dp))
                     when (state) {
-                        VpnRunningState.Connected -> Icon(Icons.Default.CheckCircle,
-                            contentDescription = stringResource(R.string.dashboard_loaded),
-                            tint = Color(0xFF2E7D32), modifier = Modifier.size(24.dp))
                         VpnRunningState.Connecting -> CircularProgressIndicator(size = 18.dp)
                         is VpnRunningState.Failed -> StatusPill(stringResource(R.string.dashboard_failed))
-                        else -> StatusPill(stringResource(R.string.vpn_status_stopped))
+                        else -> Unit
                     }
                     Spacer(Modifier.weight(1f))
                     IconButton(onClick = onRefreshExit, enabled = exitInfo.loading == false && state != VpnRunningState.Connecting) {
@@ -329,15 +325,15 @@ private fun MemoryStatsCard(appBytes: Long?, coreBytes: Long?) {
     val appColor = MiuixTheme.colorScheme.primary
     val coreColor = appColor.copy(alpha = 0.4f)
     DashboardCard {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.padding(horizontal = 18.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             CardHeading(R.drawable.dashboard_memory, stringResource(R.string.dashboard_memory))
             MetricNumber(total)
-            Row(Modifier.fillMaxWidth().height(7.dp).clip(CircleShape).background(MiuixTheme.colorScheme.surface)) {
+            Row(Modifier.fillMaxWidth().height(9.dp).clip(CircleShape).background(MiuixTheme.colorScheme.surface)) {
                 if (total != null && total > 0L) {
                     if (appBytes != null && appBytes > 0L) Box(Modifier.weight((appBytes.toDouble() / total).toFloat())
-                        .height(7.dp).background(appColor))
+                        .height(9.dp).background(appColor))
                     if (coreBytes != null && coreBytes > 0L) Box(Modifier.weight((coreBytes.toDouble() / total).toFloat())
-                        .height(7.dp).background(coreColor))
+                        .height(9.dp).background(coreColor))
                 }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -353,7 +349,7 @@ private fun MemoryLegend(label: String, bytes: Long?, color: Color, modifier: Mo
     val formatted = dashboardBytes(bytes)
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Box(Modifier.size(8.dp).clip(CircleShape).background(color))
-        Text("$label ${formatted.first} ${formatted.second}".trim(), fontSize = 13.sp, maxLines = 1,
+        Text("$label ${formatted.first} ${formatted.second}".trim(), fontSize = 14.sp, maxLines = 1,
             overflow = TextOverflow.Ellipsis, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
     }
 }

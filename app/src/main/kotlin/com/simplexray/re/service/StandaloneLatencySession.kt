@@ -1,10 +1,8 @@
 package com.simplexray.re.service
 
 import android.content.Context
-import android.os.SystemClock
 import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.common.config.GroupMemberRef
-import com.simplexray.re.common.config.GroupStrategy
 import com.simplexray.re.common.config.GroupWorkspace
 import com.simplexray.re.prefs.Preferences
 import kotlinx.coroutines.CompletableDeferred
@@ -113,37 +111,12 @@ internal object StandaloneLatencySession {
                 if (withTimeoutOrNull(10_000) { ready.await(); true } != true) {
                     throw IOException("测速核心启动超时")
                 }
-                fun leaves(member: GroupMemberRef): List<String> =
-                    if (member.isGroup) workspace.groupByTag(member.tag)?.effectiveMembers()
-                        ?.flatMap(::leaves).orEmpty() else listOf(member.tag)
-                val prepared = mutableSetOf<GroupMemberRef>()
-                suspend fun prepare(member: GroupMemberRef) {
-                    if (prepared.add(member) == false) return
-                    if (member.isGroup) {
-                        val group = workspace.groupByTag(member.tag) ?: return
-                        group.effectiveMembers().forEach { prepare(it) }
-                        if (group.strategy == GroupStrategy.URL_TEST) {
-                            leaves(member).distinct().forEach { leaf ->
-                                val startedAt = SystemClock.elapsedRealtime()
-                                val delay = clients[leaf]?.let { HttpLatencyMeasurement.measure(it, group.testUrl) }
-                                controller.recordMeasurement(leaf, group.testUrl, delay, startedAt)
-                            }
-                        }
-                    } else {
-                        workspace.groups.firstOrNull { owner -> owner.nodes.any { it.tag == member.tag } }
-                            ?.frontProxy?.let { prepare(it) }
-                    }
-                }
-                members.forEach { prepare(it) }
+                controller.measureNestedGroups(members)
                 val concurrency = Semaphore(6)
                 members.map { member ->
                     async {
                         concurrency.withPermit {
-                            val leaf = controller.activeLeaf(member) ?: member.tag
-                            val startedAt = SystemClock.elapsedRealtime()
-                            val delay = clients[leaf]?.let { HttpLatencyMeasurement.measure(it, url) }
-                            controller.recordMeasurement(leaf, url, delay, startedAt)
-                            onResult(member, delay)
+                            onResult(member, controller.measureTarget(member, url, 5_000))
                         }
                     }
                 }.awaitAll()

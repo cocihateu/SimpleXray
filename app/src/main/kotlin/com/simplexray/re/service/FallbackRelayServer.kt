@@ -43,6 +43,7 @@ internal data class FailoverPlan(
     val candidates: List<String>,
     val failoverTimeoutMs: Int,
     val watchResponse: Boolean = true,
+    val generation: Long = 0L,
 )
 
 /** Routes initial TCP/UDP exchanges through ordered group candidates. */
@@ -53,9 +54,9 @@ internal class FallbackRelayServer(
     private val nodePassword: String,
     private val nodeUotVersions: Map<String, Int>,
     private val resolvePlan: (String) -> FailoverPlan,
-    private val onCandidateFailed: (String, String) -> Unit,
-    private val onCandidateConnected: (String, String) -> Unit,
-    private val onStalledUpload: suspend (String, String, (() -> Unit) -> Boolean) -> Unit,
+    private val onCandidateFailed: suspend (String, String, Long) -> Unit,
+    private val onCandidateConnected: (String, String, Long) -> Unit,
+    private val onStalledUpload: suspend (String, String, Long, (() -> Unit) -> Boolean) -> Unit,
     private val awaitReady: suspend () -> Unit = {},
 ) : Closeable {
     private val listeners = CopyOnWriteArrayList<ServerSocket>()
@@ -183,7 +184,7 @@ internal class FallbackRelayServer(
                     enabled = plan.watchResponse,
                     isOpen = { closed == false && entry.closed.get() == false && socket.isClosed == false },
                 ) { applyIfWaiting ->
-                    onStalledUpload(spec.groupTag, leaf) { failure ->
+                    onStalledUpload(spec.groupTag, leaf, plan.generation) { failure ->
                         applyIfWaiting {
                             failure()
                             entry.close()
@@ -236,7 +237,7 @@ internal class FallbackRelayServer(
                     }
                     entry.downloadBytes.addAndGet(count.toLong())
                     responseDelivered = true
-                    onCandidateConnected(spec.groupTag, leaf)
+                    onCandidateConnected(spec.groupTag, leaf, plan.generation)
                     while (isActive && entry.closed.get() == false) {
                         val size = socket.getInputStream().read(buffer)
                         if (size < 0) break
@@ -255,7 +256,7 @@ internal class FallbackRelayServer(
                     if (responseDelivered == false && closed == false &&
                         entry.closed.get() == false && localEnded.get() == false
                     ) {
-                        onCandidateFailed(spec.groupTag, leaf)
+                        onCandidateFailed(spec.groupTag, leaf, plan.generation)
                     }
                     if (responseDelivered || localEnded.get() || entry.closed.get() || flight.replayable == false) break
                 } finally {
@@ -395,12 +396,12 @@ internal class FallbackRelayServer(
                             deadline.cancel()
                             flight.establish()
                             responseDelivered = true
-                            onCandidateConnected(spec.groupTag, leaf)
+                            onCandidateConnected(spec.groupTag, leaf, plan.generation)
                         }
                     }
                     break
                 } catch (_: IOException) {
-                    if (closed == false && entry.closed.get() == false) onCandidateFailed(spec.groupTag, leaf)
+                    if (closed == false && entry.closed.get() == false) onCandidateFailed(spec.groupTag, leaf, plan.generation)
                     if (responseDelivered || entry.closed.get() || flight.replayable == false) break
                 } finally {
                     deadline.cancel()

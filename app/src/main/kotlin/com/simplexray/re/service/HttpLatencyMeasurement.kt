@@ -26,7 +26,7 @@ internal object HttpLatencyMeasurement {
                     chain.proceed(chain.request()).close()
                     chain.proceed(chain.request())
                 }
-                .addNetworkInterceptor { chain ->
+                .addInterceptor { chain ->
                     // Measure request writes through response headers after connection setup.
                     val startedAt = SystemClock.elapsedRealtime()
                     val response = chain.proceed(chain.request())

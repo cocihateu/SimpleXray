@@ -3,20 +3,18 @@ package com.simplexray.re.common
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import com.simplexray.re.service.ClashApiPreferences
 
 object ZashboardLauncher {
-    fun open(context: Context) {
-        val prefs = ClashApiPreferences(context)
+    fun open(context: Context, port: Int, secret: String) {
         val setup = Uri.Builder().path("/setup")
             .appendQueryParameter("hostname", "127.0.0.1")
-            .appendQueryParameter("port", prefs.port.toString())
+            .appendQueryParameter("port", port.toString())
             .appendQueryParameter("http", "true")
-            .appendQueryParameter("secret", prefs.secret)
+            .appendQueryParameter("secret", secret)
             .build()
         // Setup credentials stay in the browser fragment for the local controller.
         val url = Uri.parse("http://board.zash.run.place/").buildUpon()
             .encodedFragment(setup.toString()).build()
-        context.startActivity(Intent(Intent.ACTION_VIEW, url))
+        context.startActivity(Intent(Intent.ACTION_VIEW, url).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 }

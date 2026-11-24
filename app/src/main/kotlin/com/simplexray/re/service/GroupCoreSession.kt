@@ -1,6 +1,5 @@
 package com.simplexray.re.service
 
-import android.os.SystemClock
 import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.common.config.GroupMemberRef
 import com.simplexray.re.common.config.GroupStrategy
@@ -128,13 +127,8 @@ internal class GroupCoreSession(
 
     fun clearGroupSelection(groupTag: String) { controller?.clearSelection(groupTag) }
 
-    suspend fun measureTarget(member: GroupMemberRef, url: String, timeoutMs: Int): Long? {
-        val leaf = controller?.activeLeaf(member) ?: if (member.isGroup) return null else member.tag
-        val startedAt = SystemClock.elapsedRealtime()
-        val result = measureNode?.invoke(leaf, url, timeoutMs)
-        controller?.recordMeasurement(leaf, url, result, startedAt)
-        return result
-    }
+    suspend fun measureTarget(member: GroupMemberRef, url: String, timeoutMs: Int): Long? =
+        controller?.measureTarget(member, url, timeoutMs)
 
     /**
      * Binds local FALLBACK relay listeners before Xray spawns so the earliest packet already finds
@@ -151,14 +145,14 @@ internal class GroupCoreSession(
             resolvePlan = { groupTag ->
                 controller?.buildFailoverPlan(groupTag) ?: FailoverPlan(null, emptyList(), 3_000)
             },
-            onCandidateFailed = { groupTag, failedLeaf ->
-                controller?.onCandidateFailed(groupTag, failedLeaf)
+            onCandidateFailed = { groupTag, failedLeaf, generation ->
+                controller?.onCandidateFailed(groupTag, failedLeaf, generation)
             },
-            onCandidateConnected = { groupTag, leaf ->
-                controller?.onCandidateConnected(groupTag, leaf)
+            onCandidateConnected = { groupTag, leaf, generation ->
+                controller?.onCandidateConnected(groupTag, leaf, generation)
             },
-            onStalledUpload = { groupTag, leaf, applyIfWaiting ->
-                controller?.onStalledUpload(groupTag, leaf, applyIfWaiting)
+            onStalledUpload = { groupTag, leaf, generation, applyIfWaiting ->
+                controller?.onStalledUpload(groupTag, leaf, generation, applyIfWaiting)
             },
             awaitReady = { standbyReady.await() },
         )

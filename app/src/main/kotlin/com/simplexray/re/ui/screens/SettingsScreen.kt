@@ -79,7 +79,6 @@ fun SettingsScreen(
     val geoipProgress by mainViewModel.geoipDownloadProgress.collectAsStateWithLifecycle()
     val geositeProgress by mainViewModel.geositeDownloadProgress.collectAsStateWithLifecycle()
     val customDatProgress by mainViewModel.customDatDownloadProgress.collectAsStateWithLifecycle()
-    val isCheckingForUpdates by mainViewModel.isCheckingForUpdates.collectAsStateWithLifecycle()
     val newVersionTag by mainViewModel.newVersionAvailable.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
@@ -344,10 +343,7 @@ fun SettingsScreen(
         }
 
         if (category == 7) item {
-            SettingsAboutSection(
-                mainViewModel = mainViewModel,
-                isCheckingForUpdates = isCheckingForUpdates,
-            )
+            SettingsAboutSection(mainViewModel)
         }
     }
 }

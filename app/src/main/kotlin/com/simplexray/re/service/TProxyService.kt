@@ -3,6 +3,7 @@ package com.simplexray.re.service
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.widget.Toast
 import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.IBinder
@@ -10,6 +11,7 @@ import android.os.ParcelFileDescriptor
 import android.os.PowerManager
 import android.util.Log
 import com.simplexray.re.R
+import com.simplexray.re.common.ZashboardLauncher
 import com.simplexray.re.common.ConfigUtils
 import com.simplexray.re.common.SocksAuthenticatorInstaller
 import com.simplexray.re.common.config.GlobalConfigStore
@@ -191,6 +193,16 @@ class TProxyService : VpnService() {
     override fun onStartCommand(intent: Intent, flags: Int, startId: Int): Int {
         val action = intent.action
         when (action) {
+            ACTION_OPEN_ZASHBOARD -> {
+                val controller = clashApi
+                if (controller == null) {
+                    Toast.makeText(this, "控制器尚未监听，请确认接口端口可用", Toast.LENGTH_SHORT).show()
+                } else {
+                    ZashboardLauncher.open(this, controller.listeningPort, ClashApiPreferences(this).secret)
+                }
+                return START_NOT_STICKY
+            }
+
             ACTION_RELOAD_CLASH_API -> {
                 stopClashApi()
                 startClashApi()
@@ -557,6 +569,7 @@ class TProxyService : VpnService() {
         const val ACTION_START: String = "com.simplexray.re.START"
         const val ACTION_RELOAD_CONFIG: String = "com.simplexray.re.RELOAD_CONFIG"
         const val ACTION_RELOAD_CLASH_API: String = "com.simplexray.re.RELOAD_CLASH_API"
+        internal const val ACTION_OPEN_ZASHBOARD: String = "com.simplexray.re.OPEN_ZASHBOARD"
         private const val TAG = "TProxyService"
         private const val TEARDOWN_TIMEOUT_MS: Long = 3_000L
 

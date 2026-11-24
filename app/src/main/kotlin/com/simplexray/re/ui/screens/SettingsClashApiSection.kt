@@ -3,6 +3,7 @@ package com.simplexray.re.ui.screens
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
@@ -18,9 +19,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.simplexray.re.R
-import com.simplexray.re.common.ZashboardLauncher
 import com.simplexray.re.service.ClashApiPreferences
 import com.simplexray.re.service.TProxyService
+import com.simplexray.re.service.VpnRunningState
+import com.simplexray.re.service.VpnStateHub
 import com.simplexray.re.viewmodel.MainViewModel
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.SmallTitle
@@ -46,7 +48,16 @@ internal fun SettingsClashApiSection(
         ArrowPreference(
             title = "打开 zashboard",
             summary = "实时连接、日志、节点与规则",
-            onClick = { ZashboardLauncher.open(context) },
+            onClick = {
+                when {
+                    !prefs.enabled -> mainViewModel.showSnackbar("请先开启控制器")
+                    VpnStateHub.state.value != VpnRunningState.Connected ->
+                        mainViewModel.showSnackbar("请先启动服务，等待连接成功")
+                    else -> context.startService(
+                        Intent(context, TProxyService::class.java).setAction(TProxyService.ACTION_OPEN_ZASHBOARD)
+                    )
+                }
+            },
         )
         SwitchPreference(
             title = stringResource(R.string.clash_api_enable),
