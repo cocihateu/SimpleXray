@@ -2,6 +2,7 @@ package com.simplexray.re.service
 
 import android.os.SystemClock
 import com.simplexray.re.common.config.BUILTIN_GROUP_TARGET_TAGS
+import com.simplexray.re.common.config.GroupMemberRef
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -122,12 +123,12 @@ internal class FallbackRelayServer(
         jobs.clear()
     }
 
-    fun closeStalledConnections(groupTag: String, leaf: String) {
-        val samples = entries.mapNotNull { entry -> entry.sample(groupTag, leaf)?.let { entry to it } }
+    fun closeStalledConnections(groupTag: String, member: GroupMemberRef) {
+        val samples = entries.mapNotNull { entry -> entry.sample(groupTag, member)?.let { entry to it } }
         if (samples.isEmpty()) return
         cleanupScope?.launch {
             delay(FallbackPolicy.CLOSE_SAMPLE_DELAY_MS)
-            samples.forEach { (entry, bytes) -> entry.closeIfStalled(groupTag, leaf, bytes) }
+            samples.forEach { (entry, bytes) -> entry.closeIfStalled(groupTag, member, bytes) }
         }
     }
 

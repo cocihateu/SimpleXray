@@ -30,7 +30,7 @@ internal class GroupRuntimeController(
     private val publishStatus: (Map<String, String>, Map<String, FallbackRuntimeInfo>, Map<String, Long>) -> Unit,
     private val logEvent: (String) -> Unit,
     private val nowElapsedRealtimeMs: () -> Long = SystemClock::elapsedRealtime,
-    private val onDemoted: (String, String) -> Unit = { _, _ -> },
+    private val onDemoted: (String, GroupMemberRef) -> Unit = { _, _ -> },
 ) {
     private data class Step(
         val owner: Group,
@@ -452,7 +452,7 @@ internal class GroupRuntimeController(
                 (next.member != primary(group)?.member && group.recoveryJob == null))
         ) selectFallback(group, next.member)
         logEvent("[Warning] ${group.config.tag}: demoted ${state.candidate.displayName()} for ${cooldown / 1_000}s ($reason)")
-        onDemoted(group.config.tag, state.candidate.route.leaf)
+        onDemoted(group.config.tag, state.candidate.member)
         publish()
     }
 

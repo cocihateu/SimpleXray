@@ -1,5 +1,6 @@
 package com.simplexray.re.service
 
+import com.simplexray.re.common.config.GroupMemberRef
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -48,16 +49,18 @@ internal class RelayConnectionEntry(
         groupPath = path
     }
 
-    @Synchronized fun sample(group: String, leaf: String): Long? =
-        if (closed.get() == false && leafTag == leaf && (group == groupTag || group in groupPath))
+    @Synchronized fun sample(group: String, member: GroupMemberRef): Long? {
+        val matchesMember = if (member.isGroup) member.tag in groupPath else leafTag == member.tag
+        return if (closed.get() == false && matchesMember && (group == groupTag || group in groupPath))
             downloadBytes.get() else null
+    }
 
     @Synchronized fun recordDownload(size: Int) {
         downloadBytes.addAndGet(size.toLong())
     }
 
-    @Synchronized fun closeIfStalled(group: String, leaf: String, bytes: Long) {
-        if (sample(group, leaf) == bytes) close()
+    @Synchronized fun closeIfStalled(group: String, member: GroupMemberRef, bytes: Long) {
+        if (sample(group, member) == bytes) close()
     }
 
     fun close() {

@@ -119,7 +119,7 @@ internal class GroupCoreSession(
             GroupRuntimeStatus.publish(this, active, fallback, latency)
         },
         logEvent = logEvent,
-        onDemoted = { group, leaf -> relayServer?.closeStalledConnections(group, leaf) },
+        onDemoted = { group, member -> relayServer?.closeStalledConnections(group, member) },
     )
     private val initialGlobalVersion: Long = GlobalConfigStore.version.value
 
@@ -171,6 +171,7 @@ internal class GroupCoreSession(
         GroupRuntimeStatus.start(this, config.workspace, initialRules)
         startRelayBeforeCore(scope)
         job = scope.launch(Dispatchers.IO) {
+            val sessionScope = this
             val base = OkHttpClient.Builder()
                 .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", config.healthPort)))
                 .callTimeout(5, TimeUnit.SECONDS)
@@ -199,7 +200,7 @@ internal class GroupCoreSession(
             try {
                 onReady()
                 launch {
-                    runtimeController.start(this)
+                    runtimeController.start(sessionScope)
                     standbyReady.complete(Unit)
                 }
                 launch {
