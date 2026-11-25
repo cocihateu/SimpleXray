@@ -200,12 +200,13 @@ internal class GroupRuntimeController(
         leaf: String,
         owner: Any?,
         host: String,
+        strong: Boolean,
         applyIfWaiting: (() -> Unit) -> Boolean,
     ): Boolean = synchronized(lock) {
         var retry = false
         val claimed = applyIfWaiting {
             eventRoute(owner, leaf)?.let { route ->
-                reportSuspect(route, host, strong = true)
+                reportSuspect(route, host, strong)
             }
             synchronizeFallbackSelections()
             retry = plan(groupTag).route?.leaf?.let { it != leaf } == true
@@ -266,9 +267,8 @@ internal class GroupRuntimeController(
     }
 
     private fun reportSuspect(route: Route, host: String, strong: Boolean) {
-        val members = routeMembers(route)
-        members.forEachIndexed { index, (group, candidate) ->
-            reportSuspect(group, candidate, host, strong, resolveForAncestor = index < members.lastIndex)
+        routeMembers(route).forEach { (group, candidate) ->
+            reportSuspect(group, candidate, host, strong)
         }
     }
 
@@ -277,7 +277,6 @@ internal class GroupRuntimeController(
         candidate: Candidate,
         host: String,
         strong: Boolean,
-        resolveForAncestor: Boolean,
     ) {
         val state = failureState(group, candidate) ?: return
         val now = nowElapsedRealtimeMs()
@@ -296,7 +295,7 @@ internal class GroupRuntimeController(
         when {
             state.checkJob != null -> if (strong) state.pendingCheck = true
             state.lastCheckAt == null || now - requireNotNull(state.lastCheckAt) >= gap -> startComparativeCheck(group, state)
-            (strong || resolveForAncestor) && state.checkTimer == null ->
+            strong && state.checkTimer == null ->
                 scheduleCheck(group, state, gap - (now - requireNotNull(state.lastCheckAt)))
         }
     }
@@ -325,11 +324,12 @@ internal class GroupRuntimeController(
         val runtimeScope = scope ?: return
         stopCheckTimer(state)
         val generation = state.checkGeneration
+        val childEvidenceSince = nowElapsedRealtimeMs()
         lateinit var job: Job
         job = runtimeScope.launch(start = CoroutineStart.LAZY) {
             try {
                 // Child checks resolve their alternatives before an ancestor evaluates the branch.
-                awaitChildChecks(group, state, generation)
+                awaitChildChecks(group, state, generation, childEvidenceSince)
                 val peerMember = synchronized(lock) {
                     if (state.checkGeneration != generation) return@launch
                     val current = refreshFailureCandidate(group, state) ?: return@launch
@@ -340,7 +340,7 @@ internal class GroupRuntimeController(
                         ?: peers.firstOrNull { isDemoted(group, it) == false } ?: peers.firstOrNull()
                     peer?.member
                 }
-                if (peerMember != null) awaitChildChecks(group, state, generation, peerMember)
+                if (peerMember != null) awaitChildChecks(group, state, generation, childEvidenceSince, peerMember)
                 val (current, peer, timeoutMs) = synchronized(lock) {
                     if (state.checkGeneration != generation) return@launch
                     val current = refreshFailureCandidate(group, state) ?: return@launch
@@ -359,8 +359,8 @@ internal class GroupRuntimeController(
                     val peerResult = peer?.let { async { measure(group, it.route, timeoutMs) } }
                     selfResult.await() to peerResult?.await()
                 }
-                awaitChildChecks(group, state, generation)
-                if (peer != null) awaitChildChecks(group, state, generation, peer.member)
+                awaitChildChecks(group, state, generation, childEvidenceSince)
+                if (peer != null) awaitChildChecks(group, state, generation, childEvidenceSince, peer.member)
                 synchronized(lock) {
                     if (ownsFailure(group, state) == false || state.checkGeneration != generation) return@launch
                     val active = refreshFailureCandidate(group, state) ?: return@launch
@@ -406,6 +406,7 @@ internal class GroupRuntimeController(
         group: Group,
         state: ProxyFailure,
         generation: Long,
+        evidenceSince: Long,
         member: GroupMemberRef = state.candidate.member,
     ) {
         while (true) {
@@ -413,13 +414,15 @@ internal class GroupRuntimeController(
                 if (ownsFailure(group, state) == false || state.checkGeneration != generation) return
                 val current = candidate(member) ?: return
                 for ((childGroup, childCandidate) in routeMembers(current.route)) {
-                    val child = childGroup.failures[childCandidate.member]?.takeIf { ownsFailure(childGroup, it) }
-                    val existing = child?.checkTimer ?: child?.checkJob
-                    if (existing != null) return@synchronized existing
                     val sample = childGroup.samples[childCandidate.member]?.takeIf {
                         currentRoute(it.route) == childCandidate.route
                     }
-                    if (sample == null && isDemoted(childGroup, childCandidate) == false) {
+                    // This evaluation consumes completed child evidence while queued rechecks continue independently.
+                    if (sample != null && sample.completedAt >= evidenceSince) continue
+                    val child = childGroup.failures[childCandidate.member]?.takeIf { ownsFailure(childGroup, it) }
+                    val existing = child?.checkJob ?: child?.checkTimer
+                    if (existing != null) return@synchronized existing
+                    if (isDemoted(childGroup, childCandidate) == false) {
                         val next = failureState(childGroup, childCandidate) ?: continue
                         startComparativeCheck(childGroup, next)
                         return@synchronized next.checkJob

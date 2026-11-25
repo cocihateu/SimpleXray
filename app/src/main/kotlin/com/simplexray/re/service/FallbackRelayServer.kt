@@ -63,7 +63,7 @@ internal class FallbackRelayServer(
     private val resolvePlan: (String) -> FailoverPlan,
     private val onCandidateFailed: suspend (String, String, Any?, String, Boolean) -> Unit,
     private val onCandidateConnected: (String, String, Any?) -> Unit,
-    private val onStalledUpload: suspend (String, String, Any?, String, (() -> Unit) -> Boolean) -> Boolean,
+    private val onStalledUpload: suspend (String, String, Any?, String, Boolean, (() -> Unit) -> Boolean) -> Boolean,
     private val awaitReady: suspend () -> Unit = {},
     private val nowElapsedRealtimeMs: () -> Long = SystemClock::elapsedRealtime,
 ) : Closeable {
@@ -245,7 +245,7 @@ internal class FallbackRelayServer(
                         socket.close()
                     },
                 ) { applyIfWaiting ->
-                    onStalledUpload(spec.groupTag, leaf, plan.owner, entry.targetHost, applyIfWaiting)
+                    onStalledUpload(spec.groupTag, leaf, plan.owner, entry.targetHost, true, applyIfWaiting)
                 }
                 try {
                     connectNode(socket, leaf, 1, target, timeout)
@@ -426,7 +426,8 @@ internal class FallbackRelayServer(
                         remote?.close()
                     },
                 ) { applyIfWaiting ->
-                    onStalledUpload(spec.groupTag, leaf, plan.owner, exchangeHost(), applyIfWaiting)
+                    // Datagram silence supplies weak evidence while preserving route-change retries.
+                    onStalledUpload(spec.groupTag, leaf, plan.owner, exchangeHost(), false, applyIfWaiting)
                 }
                 try {
                     val uotVersion = nodeUotVersions[leaf] ?: 0
