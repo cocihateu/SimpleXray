@@ -1,4 +1,4 @@
-name: Build SimpleXray Groups APK
+name: Build LucX APK
 
 on:
   push:
@@ -57,6 +57,14 @@ jobs:
           chmod +x third_party/xray-prebuilt/arm64-v8a/libxray.so
           curl -fsSL https://github.com/XTLS/Xray-rules-dat/releases/latest/download/geoip-lite.dat -o app/src/main/assets/geoip.dat
           curl -fsSL https://github.com/XTLS/Xray-rules-dat/releases/latest/download/geosite.dat -o app/src/main/assets/geosite.dat
+          zashboard_tmp="$(mktemp -d "$RUNNER_TEMP/zashboard.XXXXXX")"
+          curl -fsSL --retry 3 https://github.com/Zephyruso/zashboard/releases/download/v3.30.0/dist.zip -o "$zashboard_tmp/dist.zip"
+          unzip -q "$zashboard_tmp/dist.zip" -d "$zashboard_tmp/unpacked"
+          test -f "$zashboard_tmp/unpacked/dist/index.html"
+          test -f "$zashboard_tmp/unpacked/dist/THIRD_PARTY_NOTICES.md"
+          rm -rf app/src/main/assets/zashboard
+          mv "$zashboard_tmp/unpacked/dist" app/src/main/assets/zashboard
+          rm -rf "$zashboard_tmp"
 
       - name: Build SimpleTUN for Android
         working-directory: third_party/simpletun
@@ -74,13 +82,11 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.GROUPS_KEYSTORE_PASSWORD }}
           KEY_ALIAS: simplexray-groups
           KEY_PASSWORD: ${{ secrets.GROUPS_KEYSTORE_PASSWORD }}
-        run: |
-          version_code=$((10001000 + GITHUB_RUN_NUMBER))
-          gradle :app:assembleDebug -x :app:ensureXrayCore -PappVerCode="$version_code" -PappVerName="1.0.0-groups.$GITHUB_RUN_NUMBER"
+        run: gradle :app:assembleDebug -PappVerCode=10001044 -PappVerName=1.0.0-44
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: SimpleXray-Groups-arm64-v8a
-          path: app/build/outputs/apk/debug/SimpleXray-Groups-arm64-v8a.apk
+          name: LucX-arm64-v8a
+          path: app/build/outputs/apk/debug/LucX-arm64-v8a.apk
           if-no-files-found: error
