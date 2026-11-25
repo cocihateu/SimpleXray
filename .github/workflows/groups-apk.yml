@@ -82,7 +82,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.GROUPS_KEYSTORE_PASSWORD }}
           KEY_ALIAS: simplexray-groups
           KEY_PASSWORD: ${{ secrets.GROUPS_KEYSTORE_PASSWORD }}
-        run: gradle :app:assembleDebug -PappVerCode=10001044 -PappVerName=1.0.0-44
+        run: gradle :app:assembleDebug -PappVerCode=10001045 -PappVerName=1.0.0-45
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

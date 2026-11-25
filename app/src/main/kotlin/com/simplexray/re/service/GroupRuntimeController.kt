@@ -7,6 +7,7 @@ import com.simplexray.re.common.config.GroupStrategy
 import com.simplexray.re.common.config.GroupWorkspace
 import com.simplexray.re.common.config.ProxyGroup
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -15,6 +16,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class FallbackRuntimeInfo(
     val inFallback: Boolean = false,
@@ -28,8 +30,14 @@ internal class GroupRuntimeController(
     private val publishStatus: (Map<String, String>, Map<String, FallbackRuntimeInfo>, Map<String, Long>) -> Unit,
     private val logEvent: (String) -> Unit,
     private val nowElapsedRealtimeMs: () -> Long = SystemClock::elapsedRealtime,
+    private val onDemoted: (String, String) -> Unit = { _, _ -> },
 ) {
-    private data class Step(val owner: Group, val member: GroupMemberRef, val generation: Long)
+    private data class Step(
+        val owner: Group,
+        val member: GroupMemberRef,
+        val generation: Long,
+        val eventGeneration: Long,
+    )
 
     private data class Route(
         val leaf: String,
@@ -39,13 +47,10 @@ internal class GroupRuntimeController(
 
     private data class Candidate(val member: GroupMemberRef, val route: Route)
     private data class Sample(val route: Route, val startedAt: Long, val completedAt: Long, val delayMs: Long?)
-    private data class Branch(
-        val group: Group,
-        val current: Candidate,
-        val backups: List<Candidate>,
-        val preferred: List<Candidate>,
-    )
-    private data class Plan(val route: Route?, val branches: List<Branch>, val generation: Long)
+    private data class RecoveryResult(val candidate: Candidate, val sample: Sample)
+    private data class Plan(val routes: List<Route>, val generation: Long) {
+        val route: Route? get() = routes.firstOrNull()
+    }
 
     private class Group(val config: ProxyGroup) {
         val members = config.effectiveMembers().distinct()
@@ -53,21 +58,24 @@ internal class GroupRuntimeController(
         var selected = if (config.strategy == GroupStrategy.SELECT) config.selectedMember else null
         var manual = false
         var selectionVersion = 0L
-        var replyVersion = 0L
-        var checking: FailureCheck? = null
+        var eventVersion = 0L
+        val failures = mutableMapOf<GroupMemberRef, ProxyFailure>()
         var urlJob: Job? = null
         var urlGeneration = 0L
         var recoveryJob: Job? = null
         var recoveryAt = 0L
     }
 
-    private class FailureCheck(
-        val groupTag: String,
-        val plan: Plan,
-        val branch: Branch,
-        val replyVersion: Long,
-        val selectionVersion: Long,
-    )
+    private class ProxyFailure(var candidate: Candidate) {
+        val suspectHosts = mutableMapOf<String, Long>()
+        var cooldownUntil = 0L
+        var backoffLevel = 0
+        var lastCheckAt: Long? = null
+        var checkJob: Job? = null
+        var pendingCheck = false
+        var checkTimer: Job? = null
+        var checkGeneration = 0L
+    }
 
     private data class ManualMeasurement(
         val route: Route,
@@ -100,6 +108,13 @@ internal class GroupRuntimeController(
                 config.tag to (existing?.takeIf { it.config == config } ?: Group(config))
             }
             previous.values.filter { groups[it.config.tag] !== it }.forEach(::stopJobs)
+            groups.values.forEach { group ->
+                val replaced = group.failures.filterValues { currentRoute(it.candidate.route) == null }
+                replaced.forEach { (member, state) ->
+                    stopFailure(state)
+                    group.failures.remove(member)
+                }
+            }
             plans.keys.retainAll(groups.keys)
             if (startHealthChecks) groups.values.forEach(::startUrlTest)
             publish()
@@ -116,7 +131,9 @@ internal class GroupRuntimeController(
 
     private fun stopJobs(group: Group) {
         group.selectionVersion++
-        group.checking = null
+        group.eventVersion++
+        group.failures.values.forEach(::stopFailure)
+        group.failures.clear()
         group.urlGeneration++
         group.urlJob?.cancel()
         group.urlJob = null
@@ -126,118 +143,277 @@ internal class GroupRuntimeController(
 
     fun buildFailoverPlan(groupTag: String): FailoverPlan = synchronized(lock) {
         val plan = plan(groupTag)
+        val routes = plan.routes.take(FallbackPolicy.MAX_DIAL_ATTEMPTS)
+        val fallback = plan.route?.steps?.asReversed()?.firstOrNull {
+            it.owner.config.strategy == GroupStrategy.FALLBACK
+        }?.owner
         FailoverPlan(
             primaryLeaf = plan.route?.leaf,
-            candidates = (listOfNotNull(plan.route?.leaf) + plan.branches.flatMap { branch ->
-                (branch.backups + branch.preferred).map { it.route.leaf }
-            }).distinct(),
-            failoverTimeoutMs = plan.branches.firstOrNull()?.group?.let(::fallbackTimeout) ?: 3_000,
-            watchResponse = plan.branches.isNotEmpty(),
+            candidates = routes.map { it.leaf },
+            failoverTimeoutMs = fallback?.let(::fallbackTimeout) ?: 3_000,
+            watchResponse = fallback != null,
             generation = plan.generation,
+            owner = plan,
+            stallTimeoutMs = FallbackPolicy.stallTimeoutMs(plan.route?.let(::routeLatency)),
+            stallTimeoutsMs = routes.associate { it.leaf to FallbackPolicy.stallTimeoutMs(routeLatency(it)) },
+            staggerDelaysMs = routes.associate { it.leaf to FallbackPolicy.staggerDelayMs(routeLatency(it)) },
+            groupPaths = routes.associate { it.leaf to it.steps.map { step -> step.owner.config.tag }.toSet() },
         )
     }
 
-    fun onCandidateConnected(groupTag: String, leaf: String, generation: Long) {
+    fun onCandidateConnected(groupTag: String, leaf: String, owner: Any?) {
         synchronized(lock) {
-            val route = eventPlan(groupTag, generation)?.route?.takeIf { it.leaf == leaf } ?: return
-            route.steps.forEach { step -> step.owner.replyVersion++ }
+            val route = eventRoute(owner, leaf) ?: return
+            val now = nowElapsedRealtimeMs()
+            for ((group, candidate) in routeMembers(route)) {
+                val state = group.failures[candidate.member]?.takeIf { ownsFailure(group, it) } ?: continue
+                if (now < state.cooldownUntil) continue
+                state.suspectHosts.clear()
+                if (state.backoffLevel > 0 && state.cooldownUntil > 0 &&
+                    now - state.cooldownUntil >= FallbackPolicy.RECOVERY_STABLE_MS
+                ) {
+                    state.backoffLevel--
+                    state.cooldownUntil = now
+                }
+            }
         }
     }
 
-    suspend fun onCandidateFailed(groupTag: String, leaf: String, generation: Long) {
-        val (runtimeScope, checks) = synchronized(lock) {
-            val runtimeScope = scope ?: return
-            val plan = eventPlan(groupTag, generation)?.takeIf { it.route?.leaf == leaf } ?: return
-            val checks = plan.branches.filter { it.backups.isNotEmpty() }.map {
-                FailureCheck(groupTag, plan, it, it.group.replyVersion, it.group.selectionVersion)
+    suspend fun onCandidateFailed(
+        groupTag: String,
+        leaf: String,
+        owner: Any?,
+        host: String,
+        strong: Boolean,
+    ) {
+        synchronized(lock) {
+            val route = eventRoute(owner, leaf) ?: return
+            for ((group, candidate) in routeMembers(route)) {
+                reportSuspect(group, candidate, host, strong)
             }
-            runtimeScope to checks
         }
-        runtimeScope.launch { corroborateFailure(checks) }
+    }
+
+    fun onDialResult(groupTag: String, winner: String?, failed: List<String>, owner: Any?) {
+        synchronized(lock) {
+            if (winner == null) {
+                logEvent("[Info] $groupTag: all connection candidates failed; retaining cooldown levels.")
+                return
+            }
+            val winningRoute = eventRoute(owner, winner) ?: return
+            for (leaf in failed) {
+                val route = eventRoute(owner, leaf) ?: continue
+                for ((group, candidate) in routeMembers(route)) {
+                    if (winningRoute.steps.any { it.owner === group && it.member == candidate.member }) continue
+                    failureState(group, candidate)?.let {
+                        demote(group, it, "connection failed while $winner connected")
+                    }
+                }
+            }
+        }
     }
 
     suspend fun onStalledUpload(
         groupTag: String,
         leaf: String,
-        generation: Long,
+        owner: Any?,
+        host: String,
         applyIfWaiting: (() -> Unit) -> Boolean,
     ) {
-        val canRetry = synchronized(lock) {
-            val current = plan(groupTag)
-            current.route?.let { it.leaf != leaf || current.branches.isNotEmpty() } == true
+        synchronized(lock) {
+            val route = eventRoute(owner, leaf) ?: return
+            if (applyIfWaiting {}) {
+                for ((group, candidate) in routeMembers(route)) {
+                    reportSuspect(group, candidate, host, strong = true)
+                }
+            }
         }
-        // The relay retries this exchange while the group verifies the active path.
-        if (canRetry && applyIfWaiting {}) onCandidateFailed(groupTag, leaf, generation)
     }
 
-    private suspend fun corroborateFailure(checks: List<FailureCheck>) {
-        for (check in checks) {
-            val (group, current, backups) = check.branch
-            val claimed = synchronized(lock) {
-                if (ownsFailure(check)) {
-                    if (group.checking?.let(::ownsFailure) == true) return
-                    group.checking = check
-                    true
-                } else false
+    private fun routeMembers(route: Route): List<Pair<Group, Candidate>> =
+        route.steps.mapIndexedNotNull { index, step ->
+            if (step.owner.config.strategy != GroupStrategy.FALLBACK || route.leaf in BUILTIN_GROUP_TARGET_TAGS) {
+                null
+            } else {
+                step.owner to Candidate(step.member, route.copy(steps = route.steps.drop(index + 1)))
             }
-            if (claimed == false) continue
+        }.asReversed()
+
+    private fun failureState(group: Group, candidate: Candidate): ProxyFailure? {
+        if (groups[group.config.tag] !== group || candidate.member !in group.members || currentRoute(candidate.route) == null ||
+            candidate.route.leaf in BUILTIN_GROUP_TARGET_TAGS
+        ) return null
+        val previous = group.failures[candidate.member]
+        if (previous != null && ownsFailure(group, previous)) {
+            if (previous.candidate != candidate) {
+                stopFailure(previous)
+                previous.candidate = candidate
+            }
+            return previous
+        }
+        previous?.let(::stopFailure)
+        return ProxyFailure(candidate).also { group.failures[candidate.member] = it }
+    }
+
+    private fun ownsFailure(group: Group, state: ProxyFailure): Boolean =
+        groups[group.config.tag] === group && group.failures[state.candidate.member] === state &&
+            state.candidate.member in group.members && currentRoute(state.candidate.route) != null
+
+    private fun stopCheckTimer(state: ProxyFailure) {
+        state.checkGeneration++
+        state.checkTimer?.cancel()
+        state.checkTimer = null
+        state.pendingCheck = false
+    }
+
+    private fun stopFailure(state: ProxyFailure) {
+        stopCheckTimer(state)
+        state.checkJob?.cancel()
+        state.checkJob = null
+    }
+
+    private fun reportSuspect(group: Group, candidate: Candidate, host: String, strong: Boolean) {
+        val state = failureState(group, candidate) ?: return
+        val now = nowElapsedRealtimeMs()
+        if (now < state.cooldownUntil) return
+        if (strong) {
+            state.suspectHosts.entries.removeAll { now - it.value > FallbackPolicy.HOST_WINDOW_MS }
+            state.suspectHosts[host.lowercase().ifBlank { "_unknown_" }] = now
+            if (state.suspectHosts.size >= FallbackPolicy.HOST_THRESHOLD) {
+                demote(group, state, "three distinct destinations stalled or failed within 60 seconds")
+                return
+            }
+        }
+        val gap = if (strong) FallbackPolicy.STRONG_CHECK_GAP_MS else FallbackPolicy.WEAK_CHECK_GAP_MS
+        when {
+            state.checkJob != null -> if (strong) state.pendingCheck = true
+            state.lastCheckAt == null || now - requireNotNull(state.lastCheckAt) >= gap -> startComparativeCheck(group, state)
+            strong && state.checkTimer == null -> scheduleCheck(group, state, gap - (now - requireNotNull(state.lastCheckAt)))
+        }
+    }
+
+    private fun scheduleCheck(group: Group, state: ProxyFailure, waitMs: Long) {
+        val runtimeScope = scope ?: return
+        val generation = ++state.checkGeneration
+        state.checkTimer = runtimeScope.launch(start = CoroutineStart.LAZY) {
+            delay(waitMs)
+            synchronized(lock) {
+                if (ownsFailure(group, state) == false || state.checkGeneration != generation) return@launch
+                state.checkTimer = null
+                if (nowElapsedRealtimeMs() < state.cooldownUntil) {
+                    state.pendingCheck = false
+                } else if (state.checkJob != null) {
+                    state.pendingCheck = true
+                } else {
+                    startComparativeCheck(group, state)
+                }
+            }
+        }
+        state.checkTimer?.start()
+    }
+
+    private fun startComparativeCheck(group: Group, state: ProxyFailure) {
+        val runtimeScope = scope ?: return
+        stopCheckTimer(state)
+        val generation = state.checkGeneration
+        val current = state.candidate
+        val peers = orderedCandidates(group, emptySet()).filter {
+            it.member != current.member && it.route.leaf != current.route.leaf && it.route.leaf !in BUILTIN_GROUP_TARGET_TAGS
+        }
+        val peer = peers.firstOrNull { isDemoted(group, it) == false && isAlive(group, it) }
+            ?: peers.firstOrNull { isDemoted(group, it) == false } ?: peers.firstOrNull()
+        state.lastCheckAt = nowElapsedRealtimeMs()
+        val timeoutMs = FallbackPolicy.stallTimeoutMs(group.samples[current.member]?.delayMs)
+        lateinit var job: Job
+        job = runtimeScope.launch(start = CoroutineStart.LAZY) {
             try {
-                val sample = measure(group, current.route, fallbackTimeout(group))
-                fun currentStillFailed(): Boolean {
-                    val latest = group.samples[current.member]
-                    return ownsFailure(check) && group.checking === check &&
-                        (latest?.delayMs == null || latest.startedAt <= sample.startedAt)
+                val startedAt = nowElapsedRealtimeMs()
+                val measured = coroutineScope {
+                    suspend fun bounded(candidate: Candidate): Sample =
+                        withTimeoutOrNull(timeoutMs.toLong()) { measure(group, candidate.route, timeoutMs) }
+                            ?: Sample(candidate.route, startedAt, nowElapsedRealtimeMs(), null)
+                    val selfResult = async { bounded(current) }
+                    val peerResult = peer?.let { async { bounded(it) } }
+                    selfResult.await() to peerResult?.await()
                 }
-                val confirmed = synchronized(lock) {
-                    if (ownsFailure(check) && group.checking === check) {
-                        saveSample(group, current, sample)
-                        sample.delayMs == null && currentStillFailed()
-                    } else false
-                }
-                if (confirmed) {
-                    val backup = firstReachable(group, backups) ?: continue
-                    val switched = synchronized(lock) {
-                        if (currentStillFailed()) {
-                            switch(group, current, backup)
-                            true
-                        } else false
+                synchronized(lock) {
+                    if (ownsFailure(group, state) == false || state.checkGeneration != generation) return@launch
+                    val selfSample = measured.first
+                    saveSample(group, current, selfSample)
+                    val peerSample = measured.second
+                    if (peer != null && candidate(peer.member) == peer && peerSample != null) {
+                        saveSample(group, peer, peerSample)
+                        if (selfSample.delayMs == null && peerSample.delayMs != null &&
+                            group.samples[current.member] === selfSample && group.samples[peer.member] === peerSample
+                        ) {
+                            demote(group, state, "health URL failed while ${peer.displayName()} succeeded")
+                        }
                     }
-                    if (switched) return
+                    publish()
                 }
             } finally {
                 synchronized(lock) {
-                    if (group.checking === check) group.checking = null
+                    if (state.checkJob === job) {
+                        state.checkJob = null
+                        if (ownsFailure(group, state) && state.checkGeneration == generation &&
+                            state.pendingCheck && state.checkTimer == null && nowElapsedRealtimeMs() >= state.cooldownUntil
+                        ) {
+                            state.pendingCheck = false
+                            scheduleCheck(group, state, FallbackPolicy.STRONG_CHECK_GAP_MS)
+                        }
+                    }
                 }
             }
         }
+        state.checkJob = job
+        job.start()
     }
 
-    private fun ownsFailure(check: FailureCheck): Boolean {
-        val group = check.branch.group
-        return groups[group.config.tag] === group && group.selectionVersion == check.selectionVersion &&
-            group.replyVersion == check.replyVersion && plan(check.groupTag) === check.plan
+    private fun demote(group: Group, state: ProxyFailure, reason: String) {
+        if (ownsFailure(group, state) == false) return
+        val now = nowElapsedRealtimeMs()
+        if (now < state.cooldownUntil) return
+        val previous = group.selected ?: primary(group)?.member
+        val cooldown = (FallbackPolicy.BASE_COOLDOWN_MS shl state.backoffLevel).coerceAtMost(FallbackPolicy.MAX_COOLDOWN_MS)
+        state.backoffLevel = (state.backoffLevel + 1).coerceAtMost(4)
+        state.cooldownUntil = now + cooldown
+        state.suspectHosts.clear()
+        stopCheckTimer(state)
+        state.checkJob?.cancel()
+        state.checkJob = null
+        if (group.selected == state.candidate.member) group.selected = null
+        val next = orderedCandidates(group, emptySet()).firstOrNull()
+        if (next != null && (previous != next.member ||
+                (next.member != primary(group)?.member && group.recoveryJob == null))
+        ) selectFallback(group, next.member)
+        logEvent("[Warning] ${group.config.tag}: demoted ${state.candidate.displayName()} for ${cooldown / 1_000}s ($reason)")
+        onDemoted(group.config.tag, state.candidate.route.leaf)
+        publish()
     }
 
-    private suspend fun firstReachable(group: Group, candidates: List<Candidate>): Candidate? = coroutineScope {
+    private suspend fun firstReachable(group: Group, candidates: List<Candidate>, generation: Long): RecoveryResult? = coroutineScope {
         val timeoutMs = fallbackTimeout(group)
-        val requests = candidates.map { alternative ->
+        val requests = candidates.filter { synchronized(lock) { isDemoted(group, it) == false } }.map { alternative ->
             async { alternative to measure(group, alternative.route, timeoutMs) }
         }
         try {
             for (request in requests) {
                 val (alternative, sample) = request.await()
-                if (sample.delayMs != null) return@coroutineScope alternative
+                val accepted = synchronized(lock) {
+                    if (groups[group.config.tag] === group && group.selectionVersion == generation &&
+                        candidate(alternative.member) == alternative
+                    ) {
+                        saveSample(group, alternative, sample)
+                        sample.delayMs != null && group.samples[alternative.member] === sample &&
+                            isDemoted(group, alternative) == false
+                    } else false
+                }
+                if (accepted) return@coroutineScope RecoveryResult(alternative, sample)
             }
             null
         } finally {
             requests.forEach { it.cancel() }
         }
-    }
-
-    private fun switch(group: Group, previous: Candidate, backup: Candidate) {
-        selectFallback(group, backup.member)
-        logEvent("[Warning] ${group.config.tag}: switched from ${previous.displayName()} to ${backup.displayName()}")
-        publish()
     }
 
     private fun Candidate.displayName(): String =
@@ -246,7 +422,6 @@ internal class GroupRuntimeController(
     private fun selectFallback(group: Group, member: GroupMemberRef?) {
         group.selected = member
         group.selectionVersion++
-        group.checking = null
         group.recoveryJob?.cancel()
         group.recoveryJob = null
         group.recoveryAt = 0L
@@ -262,10 +437,13 @@ internal class GroupRuntimeController(
                     if (groups[group.config.tag] !== group || group.selectionVersion != generation) return@launch
                     group.members.takeWhile { it != member }.mapNotNull(::candidate)
                 }
-                val restored = firstReachable(group, candidates)
+                val result = firstReachable(group, candidates, generation)
                 synchronized(lock) {
                     if (groups[group.config.tag] !== group || group.selectionVersion != generation) return@launch
-                    if (restored != null && candidate(restored.member) == restored) {
+                    val restored = result?.candidate
+                    if (result != null && restored != null && candidate(restored.member) == restored && isDemoted(group, restored) == false &&
+                        group.samples[restored.member] === result.sample
+                    ) {
                         selectFallback(group, restored.member)
                         logEvent("[Info] ${group.config.tag}: recovered to ${restored.displayName()}")
                         publish()
@@ -352,8 +530,10 @@ internal class GroupRuntimeController(
             val group = groups[groupTag] ?: return
             val choice = candidate(member)
             if (member in group.members && choice != null) {
+                group.eventVersion++
                 val previous = group.selected?.let(::candidate) ?: primary(group)
                 if (group.config.strategy == GroupStrategy.FALLBACK) {
+                    group.failures.remove(member)?.let(::stopFailure)
                     selectFallback(group, member)
                 } else {
                     group.selected = member
@@ -371,6 +551,7 @@ internal class GroupRuntimeController(
     fun clearSelection(groupTag: String) {
         synchronized(lock) {
             val group = groups[groupTag] ?: return
+            group.eventVersion++
             if (group.config.strategy == GroupStrategy.FALLBACK) {
                 selectFallback(group, null)
             } else {
@@ -454,7 +635,9 @@ internal class GroupRuntimeController(
                         GroupStrategy.URL_TEST -> updateUrlSelection(group, clearManual = false)
                         GroupStrategy.FALLBACK -> {
                             val primary = primary(group)
-                            if (restorePrimary && result != null && primary in measured && group.selected != null) {
+                            if (restorePrimary && result != null && primary in measured && group.selected != null &&
+                                primary != null && isDemoted(group, primary) == false
+                            ) {
                                 selectFallback(group, null)
                             }
                         }
@@ -471,8 +654,26 @@ internal class GroupRuntimeController(
 
     private fun primary(group: Group): Candidate? = group.members.firstNotNullOfOrNull(::candidate)
 
+    private fun isAlive(group: Group, candidate: Candidate): Boolean =
+        group.samples[candidate.member]?.takeIf { it.route == candidate.route }?.let { it.delayMs != null } ?: true
+
+    private fun isDemoted(group: Group, candidate: Candidate, now: Long = nowElapsedRealtimeMs()): Boolean =
+        group.failures[candidate.member]?.takeIf { ownsFailure(group, it) }
+            ?.let { now < it.cooldownUntil } == true
+
+    private fun orderedCandidates(group: Group, path: Set<GroupMemberRef>): List<Candidate> {
+        val candidates = group.members.mapNotNull { candidate(it, path) }
+        val now = nowElapsedRealtimeMs()
+        val ranked = candidates.map {
+            it to (if (isAlive(group, it)) 0 else 2) + (if (isDemoted(group, it, now)) 1 else 0)
+        }
+        val selected = ranked.firstOrNull { it.first.member == group.selected && it.second == 0 }?.first
+        return listOfNotNull(selected) + ranked.filter { it.first != selected }.sortedBy { it.second }.map { it.first }
+    }
+
     private fun selected(group: Group, path: Set<GroupMemberRef>): Candidate? =
-        group.selected?.takeIf { it in group.members }?.let { candidate(it, path) }
+        if (group.config.strategy == GroupStrategy.FALLBACK) orderedCandidates(group, path).firstOrNull()
+        else group.selected?.takeIf { it in group.members }?.let { candidate(it, path) }
             ?: group.members.firstNotNullOfOrNull { candidate(it, path) }
 
     private fun candidate(member: GroupMemberRef): Candidate? = route(member)?.let { Candidate(member, it) }
@@ -486,7 +687,7 @@ internal class GroupRuntimeController(
             val group = groups[member.tag] ?: return null
             val choice = selected(group, path + member) ?: return null
             return choice.route.copy(
-                steps = listOf(Step(group, choice.member, group.selectionVersion)) + choice.route.steps,
+                steps = listOf(Step(group, choice.member, group.selectionVersion, group.eventVersion)) + choice.route.steps,
             )
         }
         if (member.tag in BUILTIN_GROUP_TARGET_TAGS || member.tag in nodeFronts) {
@@ -496,30 +697,46 @@ internal class GroupRuntimeController(
         return null
     }
 
-    private fun targetRoute(tag: String): Route? =
-        if (tag.startsWith(OutboundGroupConfig.PHYSICAL_PREFIX)) {
-            route(GroupMemberRef(tag.removePrefix(OutboundGroupConfig.PHYSICAL_PREFIX)))
-        } else route(GroupMemberRef(tag, isGroup = true))
-
-    private fun plan(tag: String): Plan {
-        val route = targetRoute(tag)
-        val branches = if (route == null) emptyList() else route.steps.asReversed().mapNotNull { step ->
-            val group = step.owner
-            if (group.config.strategy != GroupStrategy.FALLBACK) return@mapNotNull null
-            val current = candidate(step.member) ?: return@mapNotNull null
-            val priority = group.members.indexOf(step.member)
-            fun alternatives(members: List<GroupMemberRef>): List<Candidate> =
-                members.mapNotNull(::candidate).filter { it.route.leaf != route.leaf }.distinctBy { it.route.leaf }
-            val backups = alternatives(group.members.drop(priority + 1))
-            val preferred = alternatives(group.members.take(priority))
-            if (backups.isEmpty() && preferred.isEmpty()) null else Branch(group, current, backups, preferred)
+    private fun routes(member: GroupMemberRef, path: Set<GroupMemberRef>): List<Route> {
+        if (member in path) return emptyList()
+        if (member.isGroup == false) return listOfNotNull(route(member, path))
+        val group = groups[member.tag] ?: return emptyList()
+        val nextPath = path + member
+        val choices = if (group.config.strategy == GroupStrategy.FALLBACK) orderedCandidates(group, nextPath)
+            else listOfNotNull(selected(group, nextPath))
+        return choices.flatMap { choice ->
+            routes(choice.member, nextPath).map {
+                it.copy(steps = listOf(Step(group, choice.member, group.selectionVersion, group.eventVersion)) + it.steps)
+            }
         }
-        return plans[tag]?.takeIf { it.route == route && it.branches == branches }
-            ?: Plan(route, branches, ++nextGeneration).also { plans[tag] = it }
     }
 
-    private fun eventPlan(tag: String, generation: Long): Plan? =
-        plan(tag).takeIf { it.generation == generation }
+    private fun routeLatency(route: Route): Long? = routeMembers(route).firstNotNullOfOrNull { (group, candidate) ->
+        group.samples[candidate.member]?.takeIf { it.route == candidate.route }?.delayMs
+    }
+
+    private fun plan(tag: String): Plan {
+        val member = if (tag.startsWith(OutboundGroupConfig.PHYSICAL_PREFIX)) {
+            GroupMemberRef(tag.removePrefix(OutboundGroupConfig.PHYSICAL_PREFIX))
+        } else GroupMemberRef(tag, isGroup = true)
+        val routes = routes(member, emptySet()).distinctBy { it.leaf }
+        return plans[tag]?.takeIf { it.routes == routes }
+            ?: Plan(routes, ++nextGeneration).also { plans[tag] = it }
+    }
+
+    private fun eventRoute(owner: Any?, leaf: String): Route? {
+        val route = (owner as? Plan)?.routes?.firstOrNull { it.leaf == leaf } ?: return null
+        return currentRoute(route)
+    }
+
+    private fun currentRoute(route: Route): Route? {
+        if (route.steps.any {
+                groups[it.owner.config.tag] !== it.owner || it.owner.eventVersion != it.eventGeneration
+            }
+        ) return null
+        val front = route.front?.let { currentRoute(it) ?: return null }
+        return route.copy(steps = route.steps.map { it.copy(generation = it.owner.selectionVersion) }, front = front)
+    }
 
     private fun publish() {
         val active = mutableMapOf<String, String>()

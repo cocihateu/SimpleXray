@@ -25,7 +25,7 @@ This document compares the current fork against the frozen upstream snapshot `4c
 - The full-configuration and Lua editor pages are removed, not the existing data. First-run store initialization retains legacy global/node/group data and converts supported old rule patterns; unsupported scripted logic may need manual rule adjustment.
 - DNS has query strategy, DoH bootstrap, global servers, split servers, and hosts entries without resetting saved defaults. DNS saves reload a running core; inbound sniffing `routeOnly` changes require a core restart.
 - The APK embeds zashboard at `http://127.0.0.1:<port>/ui/` (default `9090`). Static assets need no API authentication or external hosted page; controller HTTP/WebSocket operations require the secret. The App launcher supplies setup in a browser fragment; typing the URL requires backend and secret setup on first use. The listener and service must run, and live data requires the core. See [Clash API](./clash-api.md).
-- Fallback groups normally do not poll a healthy primary. They verify failures before switching; a real backup reply starts one recovery countdown without later replies postponing it. Recovery sends new streams to the primary while preserving working backup/TLS streams. URL-test groups retain their own measurement schedule.
+- Fallback groups combine real-traffic stall detection, multi-destination strong failures, paired health checks, queued strong signals, progressive cooldowns and staggered TCP dialing. Demotion closes connections with stalled received-byte counters while preserving active downloads. Selecting a backup starts the app's configured recovery interval; recovery applies to new streams. URL-test groups retain their independent schedule.
 
 ---
 

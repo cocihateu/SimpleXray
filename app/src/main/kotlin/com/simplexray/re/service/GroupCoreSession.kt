@@ -119,6 +119,7 @@ internal class GroupCoreSession(
             GroupRuntimeStatus.publish(this, active, fallback, latency)
         },
         logEvent = logEvent,
+        onDemoted = { group, leaf -> relayServer?.closeStalledConnections(group, leaf) },
     )
     private val initialGlobalVersion: Long = GlobalConfigStore.version.value
 
@@ -149,14 +150,17 @@ internal class GroupCoreSession(
             resolvePlan = { groupTag ->
                 controller?.buildFailoverPlan(groupTag) ?: FailoverPlan(null, emptyList(), 3_000)
             },
-            onCandidateFailed = { groupTag, failedLeaf, generation ->
-                controller?.onCandidateFailed(groupTag, failedLeaf, generation)
+            onCandidateFailed = { groupTag, failedLeaf, owner, host, strong ->
+                controller?.onCandidateFailed(groupTag, failedLeaf, owner, host, strong)
             },
-            onCandidateConnected = { groupTag, leaf, generation ->
-                controller?.onCandidateConnected(groupTag, leaf, generation)
+            onCandidateConnected = { groupTag, leaf, owner ->
+                controller?.onCandidateConnected(groupTag, leaf, owner)
             },
-            onStalledUpload = { groupTag, leaf, generation, applyIfWaiting ->
-                controller?.onStalledUpload(groupTag, leaf, generation, applyIfWaiting)
+            onStalledUpload = { groupTag, leaf, owner, host, applyIfWaiting ->
+                controller?.onStalledUpload(groupTag, leaf, owner, host, applyIfWaiting)
+            },
+            onDialResult = { groupTag, winner, failed, owner ->
+                controller?.onDialResult(groupTag, winner, failed, owner)
             },
             awaitReady = { standbyReady.await() },
         )

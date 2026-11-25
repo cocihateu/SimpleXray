@@ -1,6 +1,8 @@
 package com.simplexray.re.service
 
 import android.os.SystemClock
+import com.simplexray.re.common.config.BUILTIN_GROUP_TARGET_TAGS
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -8,10 +10,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.onTimeout
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayInputStream
@@ -46,6 +51,11 @@ internal data class FailoverPlan(
     val failoverTimeoutMs: Int,
     val watchResponse: Boolean = true,
     val generation: Long = 0L,
+    val stallTimeoutMs: Int = failoverTimeoutMs,
+    val staggerDelaysMs: Map<String, Long> = emptyMap(),
+    val groupPaths: Map<String, Set<String>> = emptyMap(),
+    val stallTimeoutsMs: Map<String, Int> = emptyMap(),
+    val owner: Any? = null,
 )
 
 /** Routes initial TCP/UDP exchanges through ordered group candidates. */
@@ -56,21 +66,27 @@ internal class FallbackRelayServer(
     private val nodePassword: String,
     private val nodeUotVersions: Map<String, Int>,
     private val resolvePlan: (String) -> FailoverPlan,
-    private val onCandidateFailed: suspend (String, String, Long) -> Unit,
-    private val onCandidateConnected: (String, String, Long) -> Unit,
-    private val onStalledUpload: suspend (String, String, Long, (() -> Unit) -> Boolean) -> Unit,
+    private val onCandidateFailed: suspend (String, String, Any?, String, Boolean) -> Unit,
+    private val onCandidateConnected: (String, String, Any?) -> Unit,
+    private val onStalledUpload: suspend (String, String, Any?, String, (() -> Unit) -> Boolean) -> Unit,
     private val awaitReady: suspend () -> Unit = {},
     private val nowElapsedRealtimeMs: () -> Long = SystemClock::elapsedRealtime,
+    private val onDialResult: (String, String?, List<String>, Any?) -> Unit = { _, _, _, _ -> },
 ) : Closeable {
     private val listeners = CopyOnWriteArrayList<ServerSocket>()
     private val jobs = CopyOnWriteArrayList<Job>()
     private val resources = ConcurrentHashMap.newKeySet<Closeable>()
+    private val entries = ConcurrentHashMap.newKeySet<RelayConnectionEntry>()
+    @Volatile private var cleanupScope: CoroutineScope? = null
     private val relayIo = Dispatchers.IO.limitedParallelism(1024)
     @Volatile private var closed = false
 
     fun start(scope: CoroutineScope) {
         check(closed == false && listeners.isEmpty())
         try {
+            val cleanupJob = Job(scope.coroutineContext[Job])
+            jobs += cleanupJob
+            cleanupScope = CoroutineScope(cleanupJob + Dispatchers.Default)
             specs.groupBy { it.port }.forEach { (port, targets) ->
                 val server = ServerSocket()
                 listeners += server
@@ -104,11 +120,31 @@ internal class FallbackRelayServer(
 
     override fun close() {
         closed = true
+        cleanupScope = null
         listeners.forEach { runCatching { it.close() } }
         listeners.clear()
         resources.toList().forEach(::release)
         jobs.forEach { it.cancel() }
         jobs.clear()
+    }
+
+    fun closeStalledConnections(groupTag: String, leaf: String) {
+        val samples = entries.mapNotNull { entry -> entry.sample(groupTag, leaf)?.let { entry to it } }
+        if (samples.isEmpty()) return
+        cleanupScope?.launch {
+            delay(FallbackPolicy.CLOSE_SAMPLE_DELAY_MS)
+            samples.forEach { (entry, bytes) -> entry.closeIfStalled(groupTag, leaf, bytes) }
+        }
+    }
+
+    private fun register(entry: RelayConnectionEntry) {
+        entries += entry
+        RelayConnectionRegistry.register(entry)
+    }
+
+    private fun unregister(entry: RelayConnectionEntry) {
+        entries -= entry
+        RelayConnectionRegistry.unregister(entry.id)
     }
 
     private fun release(resource: Closeable) {
@@ -147,21 +183,94 @@ internal class FallbackRelayServer(
 
     private suspend fun nextPlan(group: String, attempted: Set<String>, ruleId: String): FailoverPlan {
         val plan = resolvePlan(group)
-        if (plan.candidates.any { it !in attempted } || ruleId == "dialer") return plan
+        if (plan.remaining(attempted).isNotEmpty() || ruleId == "dialer") return plan
         if (withTimeoutOrNull(plan.failoverTimeoutMs.toLong().coerceAtLeast(1L)) { awaitReady(); true } != true) return plan
         return resolvePlan(group)
     }
 
+    private fun FailoverPlan.remaining(attempted: Set<String>) = candidates.distinct()
+        .take(FallbackPolicy.MAX_DIAL_ATTEMPTS).filter { it !in attempted }
+        .take(FallbackPolicy.MAX_DIAL_ATTEMPTS - attempted.size)
+
+    private data class TcpDial(val leaf: String, val socket: Socket?)
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private suspend fun raceTcp(
+        plan: FailoverPlan, candidates: List<String>, target: SocksAddress, entry: RelayConnectionEntry,
+        sockets: MutableSet<Socket>, attempted: MutableSet<String>,
+    ): TcpDial? = coroutineScope {
+        val events = Channel<TcpDial>(Channel.UNLIMITED)
+        val workers = mutableMapOf<Socket, Job>()
+        val failures = mutableListOf<String>()
+        var winner: TcpDial? = null
+        var started = 0
+        val timeout = plan.failoverTimeoutMs.coerceAtLeast(1)
+        fun startNext() {
+            val leaf = candidates[started++]
+            val socket = Socket()
+            sockets += socket
+            track(socket)
+            if (entry.closed.get()) release(socket)
+            workers[socket] = launch(relayIo) {
+                val deadline = deadlineJob(socket, nowElapsedRealtimeMs() + timeout)
+                val result = try {
+                    connectNode(socket, leaf, 1, target, timeout)
+                    deadline.cancelAndJoin()
+                    socket.takeUnless { it.isClosed }
+                } catch (_: IOException) {
+                    null
+                } finally {
+                    deadline.cancel()
+                }
+                events.trySend(TcpDial(leaf, result))
+            }
+        }
+        try {
+            startNext()
+            while (isActive && closed == false && entry.closed.get() == false) {
+                val event = select<TcpDial?> {
+                    events.onReceive { it }
+                    if (started < candidates.size) {
+                        onTimeout(plan.staggerDelaysMs[candidates[started - 1]] ?: FallbackPolicy.staggerDelayMs(null)) { null }
+                    }
+                }
+                if (event?.socket != null) {
+                    winner = event
+                    break
+                }
+                if (event != null) failures += event.leaf
+                if (started < candidates.size) startNext() else if (failures.size == started) break
+            }
+        } finally {
+            workers.forEach { (socket, worker) ->
+                if (socket !== winner?.socket) {
+                    worker.cancel()
+                    release(socket)
+                    sockets -= socket
+                }
+            }
+        }
+        if (isActive && closed == false && entry.closed.get() == false) {
+            attempted += failures
+            winner?.let {
+                attempted += it.leaf
+                entry.select(it.leaf, plan.groupPaths[it.leaf].orEmpty())
+            }
+            onDialResult(entry.groupTag, winner?.leaf, failures, plan.owner)
+        }
+        winner
+    }
+
     private suspend fun handleTcp(spec: FallbackRelaySpec, client: Socket, target: SocksAddress, ruleId: String) = coroutineScope {
         client.soTimeout = 0
-        val currentUpstream = AtomicReference<Socket?>(null)
+        val sockets = ConcurrentHashMap.newKeySet<Socket>()
         val entry = RelayConnectionEntry("tcp", client.inetAddress.hostAddress.orEmpty(), client.port, spec.groupTag) {
-            runCatching { currentUpstream.get()?.close() }
+            sockets.forEach(::release)
             runCatching { client.close() }
         }
         target.describe(entry)
         entry.ruleId = ruleId
-        RelayConnectionRegistry.register(entry)
+        register(entry)
         val flight = FirstFlight()
         val localEnded = AtomicBoolean(false)
         val reader = launch(relayIo) {
@@ -189,33 +298,25 @@ internal class FallbackRelayServer(
             val attempted = mutableSetOf<String>()
             while (isActive && closed == false && entry.closed.get() == false && flight.canReplay) {
                 val plan = nextPlan(spec.groupTag, attempted, ruleId)
-                val leaf = plan.candidates.firstOrNull { it !in attempted } ?: break
-                attempted += leaf
-                val socket = Socket()
-                track(socket)
-                currentUpstream.set(socket)
-                entry.leafTag = leaf
-                val timeout = plan.failoverTimeoutMs.coerceAtLeast(1)
-                val deadline = deadlineJob(socket, nowElapsedRealtimeMs() + timeout)
+                val candidates = plan.remaining(attempted)
+                if (candidates.isEmpty()) break
+                val dial = raceTcp(plan, candidates, target, entry, sockets, attempted) ?: break
+                val leaf = dial.leaf
+                val socket = requireNotNull(dial.socket)
                 var sender: Job? = null
                 val failureConfirmed = AtomicBoolean(false)
+                val ioFailure = AtomicReference<IOException?>()
                 val responseWait = UploadResponseWait(
                     scope = this@coroutineScope,
-                    timeoutMs = timeout,
-                    enabled = plan.watchResponse,
+                    timeoutMs = plan.stallTimeoutsMs[leaf] ?: plan.stallTimeoutMs,
+                    enabled = plan.watchResponse && leaf !in BUILTIN_GROUP_TARGET_TAGS,
                     isOpen = { closed == false && entry.closed.get() == false && socket.isClosed == false },
                 ) { applyIfWaiting ->
-                    onStalledUpload(spec.groupTag, leaf, plan.generation) { failure ->
-                        applyIfWaiting {
-                            failureConfirmed.set(true)
-                            failure()
-                            if (flight.established) entry.close() else socket.close()
-                        }
+                    reportStall(spec.groupTag, leaf, plan, entry.targetHost, failureConfirmed, applyIfWaiting) {
+                        socket.close()
                     }
                 }
                 try {
-                    connectNode(socket, leaf, 1, target, timeout)
-                    deadline.cancel()
                     socket.soTimeout = 0
                     if (accepted == false) {
                         try { reply(client.getOutputStream(), 0) } catch (e: IOException) {
@@ -229,7 +330,11 @@ internal class FallbackRelayServer(
                     sender = launch(relayIo) {
                         try {
                             val output = socket.getOutputStream()
-                            replay.forEach { chunk -> responseWait.write { output.write(chunk) } }
+                            fun send(chunk: ByteArray) {
+                                output.write(chunk)
+                                if (chunk.isNotEmpty() && flight.established == false) responseWait.wrote()
+                            }
+                            replay.forEach(::send)
                             replay.clear()
                             while (isActive) {
                                 val chunk = flight.pending.poll(100, TimeUnit.MILLISECONDS)
@@ -243,9 +348,10 @@ internal class FallbackRelayServer(
                                 // No suspension between dequeue and retention. Teardown joins this
                                 // sender before another attempt snapshots the complete initial flight.
                                 flight.retain(chunk)
-                                responseWait.write { output.write(chunk) }
+                                send(chunk)
                             }
-                        } catch (_: IOException) {
+                        } catch (e: IOException) {
+                            if (isActive && socket.isClosed == false) ioFailure.compareAndSet(null, e)
                             runCatching { socket.close() }
                         }
                     }
@@ -258,34 +364,37 @@ internal class FallbackRelayServer(
                         }
                         if (count == 0) continue
                         // Pin on observation, BEFORE writing to the client (which may partly fail).
-                        flight.establish()
-                        responseWait.responded()
-                        onCandidateConnected(spec.groupTag, leaf, plan.generation)
+                        if (flight.established == false) {
+                            if (responseWait.responded() == false) throw IOException("Exchange timed out")
+                            flight.establish()
+                            onCandidateConnected(spec.groupTag, leaf, plan.owner)
+                        }
+                        entry.recordDownload(count)
                         try { client.getOutputStream().write(buffer, 0, count) } catch (e: IOException) {
                             entry.close()
                             throw e
                         }
-                        entry.downloadBytes.addAndGet(count.toLong())
                     }
                     break
-                } catch (_: IOException) {
-                    // Close and join first: neither a late sender nor retained suffix may escape
-                    // into the next socket. A stream with any response is never replayed.
+                } catch (e: IOException) {
+                    if (socket.isClosed == false) ioFailure.compareAndSet(null, e)
                 } finally {
-                    deadline.cancel()
-                    responseWait.close()
+                    responseWait.finish()
                     release(socket)
                     withContext(NonCancellable) { sender?.cancelAndJoin() }
-                    currentUpstream.compareAndSet(socket, null)
+                    sockets -= socket
+                    entry.select("", emptySet())
                 }
                 if (isActive && flight.established == false && failureConfirmed.get() == false &&
                     closed == false && entry.closed.get() == false
-                ) onCandidateFailed(spec.groupTag, leaf, plan.generation)
+                ) ioFailure.get()?.let { error ->
+                    onCandidateFailed(spec.groupTag, leaf, plan.owner, entry.targetHost, FallbackPolicy.isStrongFailure(error))
+                }
             }
             if (accepted == false && entry.closed.get() == false) reply(client.getOutputStream(), 1)
         } finally {
             entry.close()
-            RelayConnectionRegistry.unregister(entry.id)
+            unregister(entry)
             withContext(NonCancellable) { reader.cancelAndJoin() }
         }
     }
@@ -304,16 +413,17 @@ internal class FallbackRelayServer(
             runCatching { currentControl.get()?.close() }
             runCatching { client.close() }
         }
-        RelayConnectionRegistry.register(entry)
+        register(entry)
         entry.ruleId = ruleId
         val flight = FirstFlight()
+        val firstHost = CompletableDeferred<String>()
         client.soTimeout = 0
         try {
             reply(client.getOutputStream(), 0, local.localPort)
         } catch (e: IOException) {
             entry.close()
             release(local)
-            RelayConnectionRegistry.unregister(entry.id)
+            unregister(entry)
             throw e
         }
         val controlReader = launch(relayIo) {
@@ -335,8 +445,9 @@ internal class FallbackRelayServer(
                     try { parseSocksDatagram(data) } catch (_: IOException) { continue }
                     endpoint.compareAndSet(null, source)
                     if (endpoint.get() != source) continue
-                    if (entry.destinationPort == 0) {
-                        readAddress(DataInputStream(ByteArrayInputStream(data, 3, data.size - 3))).describe(entry)
+                    if (firstHost.isCompleted == false) {
+                        datagramTarget(data).describe(entry)
+                        firstHost.complete(entry.targetHost)
                     }
                     entry.uploadBytes.addAndGet(data.size.toLong())
                     while (isActive && flight.pending.offer(data, 100, TimeUnit.MILLISECONDS) == false) {
@@ -349,32 +460,33 @@ internal class FallbackRelayServer(
         }
         try {
             val attempted = mutableSetOf<String>()
+            val dialFailures = mutableListOf<String>()
+            var associationPlan: FailoverPlan? = null
             while (isActive && closed == false && entry.closed.get() == false && flight.canReplay) {
-                val plan = nextPlan(spec.groupTag, attempted, ruleId)
-                val leaf = plan.candidates.firstOrNull { it !in attempted } ?: break
+                val plan = associationPlan ?: nextPlan(spec.groupTag, attempted, ruleId)
+                val leaf = plan.remaining(attempted).firstOrNull() ?: break
                 attempted += leaf
                 val control = Socket()
                 track(control)
                 currentControl.set(control)
-                entry.leafTag = leaf
+                if (entry.closed.get()) release(control)
                 val timeout = plan.failoverTimeoutMs.coerceAtLeast(1)
                 val deadline = deadlineJob(control, nowElapsedRealtimeMs() + timeout)
                 var remote: RelayDatagramTransport? = null
                 var sender: Job? = null
                 var remoteControlReader: Job? = null
                 val failureConfirmed = AtomicBoolean(false)
+                val outstandingHost = AtomicReference<String?>(null)
+                val ioFailure = AtomicReference<Pair<IOException, String>?>()
+                fun exchangeHost() = outstandingHost.get() ?: entry.targetHost
                 val responseWait = UploadResponseWait(
                     scope = this@coroutineScope,
-                    timeoutMs = timeout,
-                    enabled = plan.watchResponse,
+                    timeoutMs = plan.stallTimeoutsMs[leaf] ?: plan.stallTimeoutMs,
+                    enabled = plan.watchResponse && leaf !in BUILTIN_GROUP_TARGET_TAGS,
                     isOpen = { closed == false && entry.closed.get() == false && control.isClosed == false },
                 ) { applyIfWaiting ->
-                    onStalledUpload(spec.groupTag, leaf, plan.generation) { failure ->
-                        applyIfWaiting {
-                            failureConfirmed.set(true)
-                            failure()
-                            if (flight.established) entry.close() else remote?.close()
-                        }
+                    reportStall(spec.groupTag, leaf, plan, exchangeHost(), failureConfirmed, applyIfWaiting) {
+                        remote?.close()
                     }
                 }
                 try {
@@ -395,69 +507,121 @@ internal class FallbackRelayServer(
                             throw e
                         }
                     }
-                    remote = upstream
                     track(upstream)
                     currentUdp.set(upstream)
+                    deadline.cancelAndJoin()
+                    if (entry.closed.get() || closed || isActive == false) break
+                    if (control.isClosed) throw IOException("SOCKS association timed out")
                     control.soTimeout = 0
-                    deadline.cancel()
+                    remote = upstream
+                    entry.select(leaf, plan.groupPaths[leaf].orEmpty())
+                    if (dialFailures.isNotEmpty()) {
+                        val failed = dialFailures.toList()
+                        dialFailures.clear()
+                        launch(start = CoroutineStart.UNDISPATCHED) {
+                            val host = firstHost.await()
+                            for (failedLeaf in failed) {
+                                if (isActive && closed == false && entry.closed.get() == false) {
+                                    onCandidateFailed(spec.groupTag, failedLeaf, plan.owner, host, true)
+                                }
+                            }
+                        }
+                    }
+                    associationPlan = null
                     if (uotVersion == 0) remoteControlReader = launch(relayIo) {
-                        try { while (control.getInputStream().read() >= 0) { /* Upstream association lifetime. */ } }
-                        catch (_: IOException) { /* Upstream control socket ended. */ }
-                        finally { upstream.close() }
+                        try {
+                            while (control.getInputStream().read() >= 0) { /* Upstream association lifetime. */ }
+                            throw EOFException("Upstream association ended")
+                        } catch (e: IOException) {
+                            if (isActive && control.isClosed == false) ioFailure.compareAndSet(null, e to exchangeHost())
+                        } finally { upstream.close() }
                     }
                     val replay = flight.replay().toMutableList()
                     sender = launch(relayIo) {
-                        try {
-                            replay.forEach { data -> responseWait.write { upstream.send(data) } }
-                            replay.clear()
-                            while (isActive) {
-                                val data = flight.pending.poll(100, TimeUnit.MILLISECONDS) ?: continue
-                                flight.retain(data)
-                                responseWait.write { upstream.send(data) }
+                        fun send(data: ByteArray): Boolean {
+                            try {
+                                upstream.send(data)
+                                if (flight.established == false && data.size > parseSocksDatagram(data).payloadOffset) {
+                                    responseWait.wrote { outstandingHost.set(datagramTarget(data).host) }
+                                }
+                                return true
+                            } catch (e: IOException) {
+                                if (isActive && control.isClosed == false) ioFailure.compareAndSet(null, e to datagramTarget(data).host)
+                                upstream.close()
+                                return false
                             }
-                        } catch (_: IOException) {
-                            upstream.close()
+                        }
+                        for (data in replay) if (send(data) == false) return@launch
+                        replay.clear()
+                        while (isActive) {
+                            val data = flight.pending.poll(100, TimeUnit.MILLISECONDS) ?: continue
+                            flight.retain(data)
+                            if (send(data) == false) break
                         }
                     }
                     while (isActive && entry.closed.get() == false) {
                         val data = upstream.receive()
                         val clientEndpoint = endpoint.get() ?: continue
-                        flight.establish()
-                        responseWait.responded()
-                        onCandidateConnected(spec.groupTag, leaf, plan.generation)
+                        if (flight.established == false) {
+                            if (responseWait.responded() == false) throw IOException("Exchange timed out")
+                            flight.establish()
+                            onCandidateConnected(spec.groupTag, leaf, plan.owner)
+                        }
+                        entry.recordDownload(data.size)
                         try { local.send(DatagramPacket(data, data.size, clientEndpoint)) } catch (e: IOException) {
                             entry.close()
                             throw e
                         }
-                        entry.downloadBytes.addAndGet(data.size.toLong())
                     }
                     break
-                } catch (_: IOException) {
-                    // The association remains pinned after its first response, like TCP.
+                } catch (e: IOException) {
+                    if (remote == null) {
+                        dialFailures += leaf
+                        associationPlan = plan
+                    } else if (control.isClosed == false) ioFailure.compareAndSet(null, e to exchangeHost())
                 } finally {
                     deadline.cancel()
-                    responseWait.close()
-                    remote?.let(::release)
+                    responseWait.finish()
+                    currentUdp.getAndSet(null)?.let(::release)
                     release(control)
                     withContext(NonCancellable) {
                         sender?.cancelAndJoin()
                         remoteControlReader?.cancelAndJoin()
                     }
-                    currentUdp.set(null)
                     currentControl.compareAndSet(control, null)
+                    entry.select("", emptySet())
                 }
                 if (isActive && flight.established == false && failureConfirmed.get() == false &&
                     closed == false && entry.closed.get() == false
-                ) onCandidateFailed(spec.groupTag, leaf, plan.generation)
+                ) ioFailure.get()?.let { (error, host) ->
+                    if (host.isNotEmpty()) onCandidateFailed(spec.groupTag, leaf, plan.owner, host, FallbackPolicy.isStrongFailure(error))
+                }
             }
         } finally {
+            firstHost.cancel()
             entry.close()
             release(local)
-            RelayConnectionRegistry.unregister(entry.id)
+            unregister(entry)
             withContext(NonCancellable) {
                 reader.cancelAndJoin()
                 controlReader.cancelAndJoin()
             }
+        }
+    }
+
+    private suspend fun reportStall(
+        group: String, leaf: String, plan: FailoverPlan, host: String, confirmed: AtomicBoolean,
+        applyIfWaiting: (() -> Unit) -> Boolean, closeExchange: () -> Unit,
+    ) {
+        try {
+            onStalledUpload(group, leaf, plan.owner, host) { failure ->
+                applyIfWaiting {
+                    confirmed.set(true)
+                    failure()
+                }
+            }
+        } finally {
+            if (confirmed.get()) closeExchange()
         }
     }
 
@@ -530,7 +694,13 @@ internal class FallbackRelayServer(
         output.write(byteArrayOf(5, result.toByte(), 0, 1, 127, 0, 0, 1, (port shr 8).toByte(), port.toByte()))
     }
 
+    private fun datagramTarget(packet: ByteArray) =
+        readAddress(DataInputStream(ByteArrayInputStream(packet, 3, packet.size - 3)))
+
     private data class SocksAddress(val type: Int, val raw: ByteArray, val port: Int) {
+        val host: String get() = if (type == 3) raw.copyOfRange(1, raw.size).toString(Charsets.UTF_8).lowercase()
+            else InetAddress.getByAddress(raw).hostAddress.orEmpty()
+
         fun describe(entry: RelayConnectionEntry) {
             if (type == 3) entry.destinationHost = raw.copyOfRange(1, raw.size).toString(Charsets.UTF_8)
             else entry.destinationIp = InetAddress.getByAddress(raw).hostAddress.orEmpty()
@@ -561,13 +731,15 @@ internal class FallbackRelayServer(
             }
         }
 
-        @Synchronized fun establish() {
+        @Synchronized fun establish(): Boolean {
+            if (established) return false
             established = true
             initial.clear()
+            return true
         }
     }
 
-    /** Only outstanding writes trigger probes. Healthy/stale results back off, not disconnect. */
+    /** Observes the interval from the first completed payload write to the first response. */
     internal class UploadResponseWait(
         private val scope: CoroutineScope,
         private val timeoutMs: Int,
@@ -577,67 +749,51 @@ internal class FallbackRelayServer(
         private val confirm: suspend ((() -> Unit) -> Boolean) -> Unit,
     ) {
         private var waiting: Job? = null
+        private var reporting: Job? = null
         private var open = true
-        private var outstanding = false
 
-        fun write(block: () -> Unit) {
-            synchronized(this) {
-                if (open && isOpen()) {
-                    outstanding = true
-                    arm()
-                }
-            }
-            // Do not rearm on write completion: a response may have arrived mid-write.
-            block()
-        }
-
-        private fun arm() {
-            if (enabled == false || open == false || outstanding == false || waiting != null || isOpen() == false) return
+        @Synchronized fun wrote(onOutstanding: () -> Unit = {}) {
+            if (enabled == false || open == false || waiting != null || isOpen() == false) return
+            onOutstanding()
             waiting = scope.launch(Dispatchers.Default, start = CoroutineStart.LAZY) {
                 val current = coroutineContext[Job]
-                var interval = timeoutMs.toLong().coerceAtLeast(1L)
-                try {
-                    while (isActive) {
-                        waitFor(interval)
-                        val shouldCheck = synchronized(this@UploadResponseWait) {
-                            open && outstanding && waiting === current && isOpen()
-                        }
-                        if (shouldCheck == false) break
-                        confirm { failure ->
-                            synchronized(this@UploadResponseWait) {
-                                if (open == false || outstanding == false || waiting !== current || isOpen() == false) false else {
-                                    outstanding = false
-                                    failure()
-                                    true
-                                }
-                            }
-                        }
-                        val stillWaiting = synchronized(this@UploadResponseWait) {
-                            open && outstanding && waiting === current && isOpen()
-                        }
-                        if (stillWaiting == false) break
-                        interval = (interval * 2).coerceAtMost(maxOf(30_000L, timeoutMs.toLong()))
-                    }
-                } finally {
+                waitFor(timeoutMs.toLong().coerceAtLeast(1L))
+                confirm { failure ->
                     synchronized(this@UploadResponseWait) {
-                        if (waiting === current) waiting = null
+                        if (open && waiting === current && isOpen()) {
+                            open = false
+                            // A claimed stall finishes policy delivery before transport teardown.
+                            reporting = current
+                            waiting = null
+                            failure()
+                            true
+                        } else {
+                            false
+                        }
                     }
                 }
             }
             waiting?.start()
         }
 
-        @Synchronized fun responded() {
-            outstanding = false
-            waiting?.cancel()
-            waiting = null
+        @Synchronized fun responded(): Boolean {
+            if (open == false) return false
+            close()
+            return true
         }
 
         @Synchronized fun close() {
             open = false
-            outstanding = false
             waiting?.cancel()
             waiting = null
+        }
+
+        suspend fun finish() {
+            val claimed = synchronized(this) {
+                close()
+                reporting
+            }
+            if (claimed != null) withContext(NonCancellable) { claimed.join() }
         }
     }
 

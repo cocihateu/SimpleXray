@@ -32,10 +32,14 @@ Manual selections are saved even while stopped. Automatic groups allow temporary
 
 ### Fallback and recovery
 
-- A fallback group's healthy primary is not normally polled. URL-test groups have their own measurement schedule; explicit measurements remain available.
-- A response timeout or connection failure triggers a connectivity check before the node is treated as failed. A slow destination or an idle stream alone is not proof of node failure; newer successful measurements and real replies take precedence over stale failure results.
-- The first real reply from a backup starts the primary-recovery timer once for that fallback episode. Further replies do not keep postponing it. Checks repeat at the configured recovery interval while recovery is needed.
-- Once the primary recovers, new connections use it. Working backup streams, including TLS streams, are not forcibly closed or moved. A failed established encrypted stream needs the application to reconnect; a healthy test URL does not guarantee every destination is reachable.
+- Healthy fallback members use real traffic as their failure signal. URL-test groups retain their independent measurement schedule.
+- TCP connection setup races up to three ordered candidates, starting the next after a failure or an RTT-based 1.5–3 second stagger. The first successful connection carries the request. UDP associations try up to three candidates sequentially. The connection-establishment timeout uses the group setting.
+- The first successful payload write starts an RTT-based 4–10 second response timer. The first real response ends observation for that exchange and clears accumulated destination evidence outside an active cooldown. Resets, refusals, broken pipes and timeouts are strong signals; EOF is a weak signal.
+- Strong failures from three distinct destination hosts within 60 seconds demote a member even while its health URL responds. Other suspect events trigger simultaneous checks of the member and a peer; a failed member with a healthy peer is demoted. A failed TCP dial followed by a successful backup dial supplies direct comparative evidence. A successful UDP association reports earlier association failures as strong destination evidence. When every dial fails, cooldown levels remain unchanged.
+- Strong and weak checks use 3-second and 15-second minimum gaps. Strong signals arriving during a check or its gap schedule another check. State owners and generation tokens keep queued work bound to its current member.
+- Demotion cools a member for 30, 60, 120, 240, then at most 300 seconds. Repeated failures during one cooldown retain its deadline. Real replies preserve active cooldowns; a real reply after five stable minutes reduces the backoff level. Candidate order follows alive members outside cooldown, alive members in cooldown, other members outside cooldown, then remaining members. Manual member selection clears that member's failure state.
+- Selecting a backup starts the app's configured primary-recovery interval. Recovery checks use members whose cooldown has elapsed; successful recovery applies to new connections.
+- Demotion samples matching live connections for two seconds and closes those whose received-byte counter stays unchanged. Active downloads keep their transport. Initial exchanges retain bounded replay; established TCP/TLS sessions reconnect through the application after a stalled transport closes.
 
 ## Storage and Editing
 

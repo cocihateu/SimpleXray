@@ -223,7 +223,7 @@ fun GroupSettingsScreen(
             }
         }
         item {
-            SmallTitle(if (strategy == GroupStrategy.FALLBACK) "备用成员 · 从上到下依次回落" else "组内成员")
+            SmallTitle(if (strategy == GroupStrategy.FALLBACK) "备用成员 · 按优先级发起连接" else "组内成员")
             if (members.isEmpty()) {
                 Text("留空则在保存后使用本组全部 ${group.nodes.size} 个节点",
                     modifier = Modifier.padding(horizontal = 16.dp),
@@ -263,8 +263,8 @@ fun GroupSettingsScreen(
             Card {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (strategy == GroupStrategy.FALLBACK) {
-                        Text("响应超时后测活，确认故障再切换备用；备用收到数据后定时检查主节点，恢复后新连接使用主节点")
-                        GroupSecondsField("响应等待上限 · 秒", timeout) { timeout = it }
+                        Text("业务停滞会触发主备对照检查；多个目标持续失败时降低节点优先级。切换备用后定时检查主节点，健康连接继续传输")
+                        GroupSecondsField("连接建立超时 · 秒", timeout) { timeout = it }
                         GroupSecondsField("主节点恢复检查间隔 · 秒", recovery) { recovery = it }
                     } else if (strategy == GroupStrategy.URL_TEST) {
                         Text("定时测速，优先选择有效测活结果中延迟最低的节点")

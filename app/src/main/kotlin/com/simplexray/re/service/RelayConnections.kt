@@ -34,10 +34,31 @@ internal class RelayConnectionEntry(
     val uploadBytes = AtomicLong()
     val downloadBytes = AtomicLong()
     @Volatile var leafTag = ""
+        private set
+    private var groupPath = emptySet<String>()
     @Volatile var destinationHost = ""
     @Volatile var destinationIp = ""
     @Volatile var destinationPort = 0
     @Volatile var ruleId = "default"
+
+    val targetHost: String get() = destinationHost.ifEmpty { destinationIp }.lowercase()
+
+    @Synchronized fun select(leaf: String, path: Set<String>) {
+        leafTag = leaf
+        groupPath = path
+    }
+
+    @Synchronized fun sample(group: String, leaf: String): Long? =
+        if (closed.get() == false && leafTag == leaf && (group == groupTag || group in groupPath))
+            downloadBytes.get() else null
+
+    @Synchronized fun recordDownload(size: Int) {
+        downloadBytes.addAndGet(size.toLong())
+    }
+
+    @Synchronized fun closeIfStalled(group: String, leaf: String, bytes: Long) {
+        if (sample(group, leaf) == bytes) close()
+    }
 
     fun close() {
         if (closed.compareAndSet(false, true)) closeTransport()
