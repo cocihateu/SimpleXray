@@ -1,0 +1,4 @@
+<resources>
+    <string name="panel_secret">Secret</string>
+    <string name="panel_secret_generated">New secret generated</string>
+</resources>

@@ -13,7 +13,7 @@ object ZashboardLauncher {
             .appendQueryParameter("secret", secret)
             .build()
         // Setup credentials stay in the browser fragment for the local controller.
-        val url = Uri.parse("http://board.zash.run.place/").buildUpon()
+        val url = Uri.parse("http://127.0.0.1:$port/ui/").buildUpon()
             .encodedFragment(setup.toString()).build()
         context.startActivity(Intent(Intent.ACTION_VIEW, url).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }

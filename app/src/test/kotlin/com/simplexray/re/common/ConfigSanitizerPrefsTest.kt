@@ -8,7 +8,6 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -229,27 +228,33 @@ class ConfigSanitizerPrefsTest {
     }
 
     @Test
-    fun routingScriptSkipsBypassLanRuleInjection() {
-        prefs.bypassLan = true
-        val raw = """
-        {
-          "inbounds": [
-            { "tag": "socks-in", "protocol": "socks", "listen": "127.0.0.1", "port": 1080 }
-          ],
-          "outbounds": [
-            { "tag": "direct", "protocol": "freedom" }
-          ],
-          "routing": {
-            "script": "routing.lua"
-          }
+    fun echCoverNameNeverReplacesOriginalDestinationAndCustomExclusionsSurvive() {
+        prefs.sniffingRouteOnly = false
+        val raw = """{"inbounds":[{"protocol":"socks","tag":"socks-in","sniffing":{
+            "enabled":true,"destOverride":["tls","http"],"domainsExcluded":["full:keep.example"]
+        }}],"outbounds":[{"tag":"proxy","protocol":"vless","targetStrategy":"AsIs"}]}"""
+        val first = JSONObject(ConfigUtils.sanitizeConfig(raw, prefs))
+        val second = JSONObject(ConfigUtils.sanitizeConfig(first.toString(), prefs))
+        val sniffing = findInbound(second, "socks").getJSONObject("sniffing")
+        assertFalse(sniffing.getBoolean("routeOnly"))
+        assertEquals(listOf("full:keep.example", "full:cloudflare-ech.com"),
+            sniffing.getJSONArray("domainsExcluded").let { array ->
+                (0 until array.length()).map { array.getString(it) }
+            })
+        assertEquals("AsIs", second.getJSONArray("outbounds").getJSONObject(0).getString("targetStrategy"))
+    }
+
+    @Test
+    fun injectedHttpAndTunInboundsHaveEchDestinationProtection() {
+        prefs.tunnelMode = TunnelMode.XrayTun
+        prefs.httpProxyEnabled = true
+        prefs.sniffingRouteOnly = true
+        val root = JSONObject(ConfigUtils.injectStatsServiceIntoSanitized(prefs, ConfigUtils.sanitizeConfig("{}", prefs)))
+        for (protocol in listOf("socks", "http", "tun")) {
+            val sniffing = findInbound(root, protocol).getJSONObject("sniffing")
+            assertEquals("full:cloudflare-ech.com", sniffing.getJSONArray("domainsExcluded").getString(0))
+            assertEquals(true, sniffing.getBoolean("routeOnly"))
         }
-        """.trimIndent()
-
-        val routing = JSONObject(ConfigUtils.sanitizeConfig(raw, prefs))
-            .getJSONObject("routing")
-
-        assertEquals("routing.lua", routing.getString("script"))
-        assertFalse(routing.has("rules"))
     }
 
     private fun findInbound(root: JSONObject, protocol: String): JSONObject {

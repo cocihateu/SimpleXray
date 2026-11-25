@@ -1,9 +1,6 @@
 <resources>
-    <string name="clash_api_restart_notice">服务运行时自动应用控制器设置，Xray 与代理连接继续运行。</string>
-    <string name="clash_api_controller_url">复制控制器地址</string>
-    <string name="clash_api_url_copied">已复制控制器地址</string>
+    <string name="clash_api_restart_notice">服务运行时应用控制器设置，不重启内核或中断代理连接</string>
     <string name="clash_api_copy_secret">复制控制器密钥</string>
-    <string name="workspace_routing_mode_title">分流模式</string>
     <string name="dashboard_routing_mode">出站模式</string>
     <string name="routing_mode_rule">规则</string>
     <string name="routing_mode_global">全局</string>
@@ -18,7 +15,6 @@
     <string name="dashboard_memory">内存信息</string>
     <string name="dashboard_memory_app">应用</string>
     <string name="dashboard_memory_core">核心</string>
-    <string name="dashboard_memory_resident">驻留内存 · 应用＋核心</string>
     <string name="dashboard_exit_refresh">刷新</string>
     <string name="dashboard_exit_loading">查询中…</string>
     <string name="dashboard_exit_waiting">等待查询</string>
@@ -26,7 +22,5 @@
     <string name="dashboard_organization">组织</string>
     <string name="dashboard_direct_exit">直连</string>
     <string name="dashboard_proxy_exit">代理</string>
-    <string name="dashboard_unknown_country">—</string>
     <string name="dashboard_uptime">运行时长</string>
-    <string name="dashboard_zashboard">zashboard · 实时连接与日志</string>
 </resources>

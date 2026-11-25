@@ -1,9 +1,6 @@
 <resources>
-    <string name="clash_api_restart_notice">Controller changes apply while the service runs. Xray and proxy connections stay active.</string>
-    <string name="clash_api_controller_url">Copy controller address</string>
-    <string name="clash_api_url_copied">Controller address copied</string>
+    <string name="clash_api_restart_notice">Controller settings apply while the service runs, without restarting Xray or interrupting proxy connections</string>
     <string name="clash_api_copy_secret">Copy controller secret</string>
-    <string name="workspace_routing_mode_title">Routing mode</string>
     <string name="dashboard_routing_mode">Outbound mode</string>
     <string name="routing_mode_rule">Rules</string>
     <string name="routing_mode_global">Global</string>
@@ -18,7 +15,6 @@
     <string name="dashboard_memory">Memory</string>
     <string name="dashboard_memory_app">App</string>
     <string name="dashboard_memory_core">Core</string>
-    <string name="dashboard_memory_resident">RSS · App + core</string>
     <string name="dashboard_exit_refresh">Refresh</string>
     <string name="dashboard_exit_loading">Loading…</string>
     <string name="dashboard_exit_waiting">Waiting for lookup</string>
@@ -26,7 +22,5 @@
     <string name="dashboard_organization">Organization</string>
     <string name="dashboard_direct_exit">Direct</string>
     <string name="dashboard_proxy_exit">Proxy</string>
-    <string name="dashboard_unknown_country">—</string>
     <string name="dashboard_uptime">Uptime</string>
-    <string name="dashboard_zashboard">zashboard · Live connections and logs</string>
 </resources>

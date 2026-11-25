@@ -162,8 +162,6 @@ class PreferencesTest {
         assertEquals(10808, prefs.socksPort)
         assertEquals("", prefs.socksUsername)
         assertEquals("", prefs.socksPassword)
-        assertEquals("8.8.8.8", prefs.dnsIpv4)
-        assertEquals("2001:4860:4860::8888", prefs.dnsIpv6)
         assertTrue(prefs.ipv4)
         assertFalse(prefs.ipv6)
         assertFalse(prefs.global)
@@ -187,7 +185,6 @@ class PreferencesTest {
         assertFalse(prefs.customGeoipImported)
         assertFalse(prefs.customGeositeImported)
         assertFalse(prefs.keepAwake)
-        assertTrue(prefs.configFilesOrder.isEmpty())
         assertEquals("https://example.com/geoip.dat", prefs.geoipUrl)
         assertEquals("https://example.com/geosite.dat", prefs.geositeUrl)
         assertEquals("127.0.0.1", prefs.apiAddress)
@@ -266,11 +263,6 @@ class PreferencesTest {
         val targetApps = setOf("com.google.android.youtube", "org.telegram.messenger")
         prefs.apps = targetApps
         assertEquals(targetApps, prefs.apps)
-
-        // Config files order
-        val targetOrder = listOf("hk.json", "us.yaml", "jp.json")
-        prefs.configFilesOrder = targetOrder
-        assertEquals(targetOrder, prefs.configFilesOrder)
 
         // Custom dat URLs map
         val targetMap = mapOf(

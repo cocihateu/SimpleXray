@@ -1,0 +1,4 @@
+<resources>
+    <string name="panel_secret">密钥</string>
+    <string name="panel_secret_generated">已生成新密钥</string>
+</resources>

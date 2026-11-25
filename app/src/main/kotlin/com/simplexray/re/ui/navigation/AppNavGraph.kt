@@ -10,7 +10,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavBackStackEntry
@@ -18,16 +17,12 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.simplexray.re.common.ROUTE_APP_LIST
-import com.simplexray.re.common.ROUTE_CONFIG_EDIT
 import com.simplexray.re.common.ROUTE_MAIN
 import com.simplexray.re.ui.screens.AppListScreen
-import com.simplexray.re.ui.screens.ConfigEditScreen
 import com.simplexray.re.ui.screens.MainScreen
 import com.simplexray.re.viewmodel.AppListViewModel
-import com.simplexray.re.viewmodel.ConfigEditViewModel
 import com.simplexray.re.viewmodel.MainViewModel
 import top.yukonga.miuix.kmp.basic.SnackbarHostState
-import java.io.File
 
 @Composable
 fun AppNavHost(
@@ -68,41 +63,6 @@ fun AppNavHost(
             )
         }
 
-        composable(
-            route = ROUTE_CONFIG_EDIT,
-            enterTransition = { enterTransition() },
-            exitTransition = { exitTransition() },
-            popEnterTransition = { EnterTransition.None },
-            popExitTransition = { popExitTransition() }
-        ) {
-            val path = mainViewModel.editingFilePath ?: mainViewModel.prefs.selectedConfigPath
-            if (!path.isNullOrEmpty() && File(path).exists()) {
-                val configEditViewModel: ConfigEditViewModel = viewModel(
-                    key = path,
-                    factory = ConfigEditViewModel.factory(
-                        application = mainViewModel.getApplication(),
-                        initialFilePath = path,
-                        prefs = mainViewModel.prefs
-                    )
-                )
-                ConfigEditScreen(
-                    onBackClick = {
-                        val savedSelected = configEditViewModel.consumeSavedSelectedConfig()
-                        mainViewModel.editingFilePath = null
-                        // Renaming in the editor updates prefs.selectedConfigPath
-                        // on disk; refresh so ConfigScreen shows the new name.
-                        mainViewModel.onConfigEditFinished(savedSelected)
-                        navController.popBackStack()
-                    },
-                    snackbarHostState = remember { SnackbarHostState() },
-                    viewModel = configEditViewModel
-                )
-            } else {
-                LaunchedEffect(Unit) {
-                    navController.popBackStack()
-                }
-            }
-        }
     }
 }
 

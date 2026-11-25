@@ -175,6 +175,7 @@ class Preferences(context: Context) {
     val tcpConnectTimeout: Int get() = TCP_CONNECT_TIMEOUT
 
     var selectedConfigPath: String? by nullableStringPref(SELECTED_CONFIG_PATH)
+    var selectedConfigurationGroupTag: String by stringPref(SELECTED_CONFIGURATION_GROUP) { "" }
     var bypassLan: Boolean by booleanPref(BYPASS_LAN, true)
     var hideFromRecents: Boolean by booleanPref(HIDE_FROM_RECENTS, true)
     var geoUpdateIntervalHours: Int by intPref(GEO_UPDATE_INTERVAL_HOURS, 0)
@@ -186,29 +187,14 @@ class Preferences(context: Context) {
     var customGeositeImported: Boolean by booleanPref(CUSTOM_GEOSITE_IMPORTED, false)
     var keepAwake: Boolean by booleanPref(KEEP_AWAKE, false)
 
-    var configFilesOrder: List<String>
-        get() {
-            val jsonList = sp.getString(CONFIG_FILES_ORDER, null)
-            return jsonList?.let {
-                try {
-                    Json.decodeFromString<List<String>>(it)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error deserializing CONFIG_FILES_ORDER List<String>", e)
-                    emptyList()
-                }
-            } ?: emptyList()
-        }
-        set(order) {
-            val jsonList = Json.encodeToString(order)
-            sp.edit { putString(CONFIG_FILES_ORDER, jsonList) }
-        }
-
     var geoipUrl: String by stringPref(GEOIP_URL) { appContext.getString(R.string.geoip_url) }
     var geositeUrl: String by stringPref(GEOSITE_URL) { appContext.getString(R.string.geosite_url) }
     var apiAddress: String by stringPref(API_ADDRESS) { "127.0.0.1" }
     var appIcon: String? by nullableStringPref(APP_ICON)
     var apiPort: Int by intPref(API_PORT, 0)
     var bypassSelectedApps: Boolean by booleanPref(BYPASS_SELECTED_APPS, false)
+    var showSystemApps: Boolean by booleanPref(SHOW_SYSTEM_APPS, true)
+    var showNoInternetApps: Boolean by booleanPref(SHOW_NO_INTERNET_APPS, false)
 
     var theme: ThemeMode
         get() = sp.getString(THEME, null)?.let { ThemeMode.fromString(it) } ?: ThemeMode.Auto
@@ -275,12 +261,12 @@ class Preferences(context: Context) {
         const val APPS: String = "Apps"
         const val ENABLE: String = "Enable"
         const val SELECTED_CONFIG_PATH: String = "SelectedConfigPath"
+        const val SELECTED_CONFIGURATION_GROUP: String = "SelectedConfigurationGroup"
         const val BYPASS_LAN: String = "BypassLan"
         const val HTTP_PROXY_ENABLED: String = "HttpProxyEnabled"
         const val SNIFFING_ROUTE_ONLY: String = "SniffingRouteOnly"
         const val CUSTOM_GEOIP_IMPORTED: String = "CustomGeoipImported"
         const val CUSTOM_GEOSITE_IMPORTED: String = "CustomGeositeImported"
-        const val CONFIG_FILES_ORDER: String = "ConfigFilesOrder"
         const val DISABLE_VPN: String = "DisableVpn"
         const val TUNNEL_MODE: String = "TunnelMode"
         const val TUNNEL_MTU: String = "TunnelMtu"
@@ -290,6 +276,8 @@ class Preferences(context: Context) {
         const val API_ADDRESS: String = "ApiAddress"
         const val API_PORT: String = "ApiPort"
         const val BYPASS_SELECTED_APPS: String = "BypassSelectedApps"
+        const val SHOW_SYSTEM_APPS: String = "ShowSystemApps"
+        const val SHOW_NO_INTERNET_APPS: String = "ShowNoInternetApps"
         const val THEME: String = "Theme"
         const val COLOR_MODE: String = "ColorMode"
         const val HIDE_FROM_RECENTS: String = "HideFromRecents"

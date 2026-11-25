@@ -97,7 +97,7 @@ class GeoUpdateWorker(
          * Performs the rule files update in background.
          * Returns true if any rule file was successfully updated, or false if errors occurred.
          */
-        suspend fun performUpdate(context: Context, onComplete: ((Boolean) -> Unit)? = null): Boolean {
+        suspend fun performUpdate(context: Context): Boolean {
             return withContext(Dispatchers.IO) {
                 val prefs = Preferences(context)
                 val app = context.applicationContext as? android.app.Application ?: return@withContext false
@@ -169,7 +169,6 @@ class GeoUpdateWorker(
                     showFailureNotification(context)
                 }
 
-                onComplete?.invoke(anySuccess)
                 anySuccess
             }
         }

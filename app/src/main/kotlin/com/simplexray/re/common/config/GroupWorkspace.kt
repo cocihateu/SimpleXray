@@ -5,6 +5,7 @@ import org.json.JSONObject
 
 const val DEFAULT_URL_TEST = "https://www.gstatic.com/generate_204"
 const val DEFAULT_DOH_BOOTSTRAP_DNS = "223.5.5.5"
+internal val RESERVED_ROUTING_TARGET_TAGS = BUILTIN_GROUP_TARGET_TAGS + setOf("GLOBAL", "DIRECT", "REJECT")
 
 enum class GroupSourceType {
     LOCAL,
@@ -48,7 +49,6 @@ data class ProxyGroup(
     val intervalSeconds: Int = 60,
     val trustSeconds: Int = 120,
     val testUrl: String = DEFAULT_URL_TEST,
-    val routingTargets: List<String> = emptyList(),
     val frontProxy: GroupMemberRef? = null,
 ) {
     fun effectiveMembers(): List<GroupMemberRef> =
@@ -77,14 +77,6 @@ data class GroupWorkspace(
     fun effectiveDefaultGroupTag(): String? =
         defaultGroupTag?.takeIf { tag -> groups.any { it.tag == tag } }
             ?: groups.firstOrNull()?.tag
-
-    /** Business routing aliases are applied after the internal physical-node routing branch. */
-    fun effectiveRoutingBindings(): Map<String, String> = buildMap {
-        groups.forEach { put(it.tag, it.tag) }
-        groups.forEach { group ->
-            group.routingTargets.forEach { target -> put(target, group.tag) }
-        }
-    }
 
     fun hasCycle(): Boolean {
         val byTag = groups.associateBy { it.tag }
@@ -116,9 +108,6 @@ data class GroupWorkspace(
         if (routingMode !in setOf("rule", "global", "direct")) return false
         if (groups.any { it.tag.isBlank() || it.tag in BUILTIN_GROUP_TARGET_TAGS }) return false
         if (groups.map { it.tag }.toSet().size != groups.size) return false
-        val targets = groups.flatMap { it.routingTargets }
-        if (targets.any { it.isBlank() || it in BUILTIN_GROUP_TARGET_TAGS }) return false
-        if (targets.distinct().size != targets.size) return false
         if (groups.any {
                 it.failoverTimeoutSeconds < 1 ||
                     it.recoveryIntervalSeconds < 5 ||

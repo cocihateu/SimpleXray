@@ -5,7 +5,6 @@ import android.content.Intent
 import android.net.VpnService
 import android.util.Log
 import androidx.activity.result.ActivityResultLauncher
-import java.io.File
 import com.simplexray.re.R
 import com.simplexray.re.common.config.GroupWorkspaceStore
 import com.simplexray.re.prefs.Preferences
@@ -22,7 +21,6 @@ internal class VpnServiceController(
     private val application: Application,
     private val prefs: Preferences,
     private val scope: CoroutineScope,
-    private val selectedConfig: StateFlow<File?>,
     private val sendEvent: (MainViewUiEvent) -> Unit,
 ) {
     private val _isServiceEnabled = MutableStateFlow(false)

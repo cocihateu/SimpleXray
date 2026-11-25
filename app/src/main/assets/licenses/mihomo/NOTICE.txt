@@ -1,33 +1,20 @@
-mihomo v1.19.34
+Mihomo attribution and license reference
 
 Project: MetaCubeX/mihomo
+Upstream reference: v1.19.34
 Copyright: the mihomo contributors and upstream authors identified in the
-corresponding source files. Their original notices remain in the source archive.
+corresponding source files.
 License: GNU General Public License, version 3 (GPL-3.0).
-The complete upstream license is included here as LICENSE.txt.
+The upstream license text is retained here as LICENSE.txt.
 
-Binary provenance
-Official release: https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.34
-Official binary:
-https://github.com/MetaCubeX/mihomo/releases/download/v1.19.34/mihomo-android-arm64-v8-v1.19.34.gz
-The workflow decompresses the official executable and packages it as
-lib/arm64-v8a/libmihomo.so alongside libxray.so. Packaging consists of gzip
-decompression and renaming; the upstream executable is retained as supplied.
+LucX supports importing Mihomo-format subscription nodes. Its current APK
+uses Xray and local Kotlin relays; it does not package libmihomo.so or a
+Mihomo source archive. This notice is an attribution/license reference, not
+a claim that a Mihomo executable or Corresponding Source is bundled.
 
-Source availability
-Matching source tag: https://github.com/MetaCubeX/mihomo/tree/v1.19.34
-Matching source archive:
-https://github.com/MetaCubeX/mihomo/archive/refs/tags/v1.19.34.tar.gz
-The workflow bundles this archive in APK assets at
-licenses/mihomo/mihomo-v1.19.34-source.tar.gz and publishes it with this notice
-and LICENSE.txt in the companion artifact named mihomo-v1.19.34-source.
-The tagged archive preserves upstream source, copyright notices, Go dependency
-manifests, and build scripts. Dependency modules are obtained through the
-upstream Go build process; retain their corresponding source and notices
-when distributing the executable.
+Upstream source: https://github.com/MetaCubeX/mihomo/tree/v1.19.34
+Source archive: https://github.com/MetaCubeX/mihomo/archive/refs/tags/v1.19.34.tar.gz
 
-Recipients may copy, redistribute, and modify mihomo under the GPL-3.0 terms.
-The program is provided "AS IS"; warranty and liability terms appear in
-sections 15 and 16 of LICENSE.txt.
-Redistributors are responsible for providing complete Corresponding Source
-and maintaining equivalent source access for recipients under GPL section 6.
+If redistributing a Mihomo executable, provide its complete Corresponding
+Source and preserve the upstream notices as required by GPL section 6.
+The upstream program is provided without warranty; see LICENSE.txt.

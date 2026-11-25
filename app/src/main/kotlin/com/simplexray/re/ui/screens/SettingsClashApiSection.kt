@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
@@ -13,6 +14,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -24,13 +26,18 @@ import com.simplexray.re.service.TProxyService
 import com.simplexray.re.service.VpnRunningState
 import com.simplexray.re.service.VpnStateHub
 import com.simplexray.re.viewmodel.MainViewModel
+import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Copy
+import top.yukonga.miuix.kmp.icon.extended.Refresh
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import java.util.UUID
 
 @Composable
 internal fun SettingsClashApiSection(
@@ -41,13 +48,12 @@ internal fun SettingsClashApiSection(
     var enabled by remember { mutableStateOf(prefs.enabled) }
     var port by remember { mutableIntStateOf(prefs.port) }
     var secret by remember { mutableStateOf(prefs.secret) }
-    val controllerUrl = "http://127.0.0.1:$port"
 
     SmallTitle(text = stringResource(R.string.clash_api_title))
     Card(modifier = Modifier.fillMaxWidth()) {
         ArrowPreference(
-            title = "打开 zashboard",
-            summary = "实时连接、日志、节点与规则",
+            title = "打开内置 zashboard",
+            summary = "http://127.0.0.1:$port · 离线可用，需启动服务",
             onClick = {
                 when {
                     !prefs.enabled -> mainViewModel.showSnackbar("请先开启控制器")
@@ -89,54 +95,37 @@ internal fun SettingsClashApiSection(
             enabled = enabled,
         )
 
-        EditableListItemWithMiuixBottomSheet(
-            headline = stringResource(R.string.clash_api_secret),
-            currentValue = secret.ifBlank { "—" },
-            onValueConfirmed = { newValue ->
-                val trimmed = newValue.trim()
-                prefs.secret = trimmed
-                secret = prefs.secret
-                TProxyService.applyClashApiSettings(context)
-                mainViewModel.showSnackbar(context.getString(R.string.clash_api_restart_notice))
-            },
-            label = stringResource(R.string.clash_api_secret),
-            supportingText = stringResource(R.string.clash_api_secret),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
-            enabled = enabled,
-        )
-
-        ArrowPreference(
-            title = stringResource(R.string.clash_api_controller_url),
-            summary = controllerUrl,
-            onClick = {
-                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("Clash Controller URL", controllerUrl))
-                mainViewModel.showSnackbar(context.getString(R.string.clash_api_url_copied))
-            },
-            enabled = enabled,
-        )
-
-        ArrowPreference(
-            title = stringResource(R.string.clash_api_copy_secret),
-            summary = secret.ifBlank { null },
-            onClick = {
-                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("Clash Secret", secret))
-                mainViewModel.showSnackbar(context.getString(R.string.clash_api_secret_copied))
-            },
-            enabled = enabled && secret.isNotBlank(),
-        )
-
-        ArrowPreference(
-            title = stringResource(R.string.clash_api_generate_secret),
-            summary = secret.ifBlank { null },
-            onClick = {
-                prefs.resetSecret()
-                secret = prefs.secret
-                TProxyService.applyClashApiSettings(context)
-                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("Clash Secret", secret))
-                mainViewModel.showSnackbar(context.getString(R.string.clash_api_secret_copied))
+        BasicComponent(
+            title = stringResource(R.string.panel_secret),
+            endActions = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = {
+                            secret = prefs.resetSecret()
+                            TProxyService.applyClashApiSettings(context)
+                            mainViewModel.showSnackbar(context.getString(R.string.panel_secret_generated))
+                        },
+                        enabled = enabled,
+                    ) {
+                        Icon(
+                            imageVector = MiuixIcons.Refresh,
+                            contentDescription = stringResource(R.string.clash_api_generate_secret),
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("Clash Secret", secret))
+                            mainViewModel.showSnackbar(context.getString(R.string.clash_api_secret_copied))
+                        },
+                        enabled = enabled && secret.isNotBlank(),
+                    ) {
+                        Icon(
+                            imageVector = MiuixIcons.Copy,
+                            contentDescription = stringResource(R.string.clash_api_copy_secret),
+                        )
+                    }
+                }
             },
             enabled = enabled,
         )

@@ -1,6 +1,5 @@
 package com.simplexray.re.common
 
-import android.content.Context
 import android.util.Log
 import java.io.File
 
@@ -27,7 +26,7 @@ object GeoDataValidator {
      *   common failure mode: a CDN returning an HTML 404/403 page instead of the
      *   actual binary file.
      */
-    fun validateDatFile(context: Context, candidateFile: File, targetFileName: String): Boolean {
+    fun validateDatFile(candidateFile: File, targetFileName: String): Boolean {
         // Check 1: file must exist and be at least 1 KB
         if (!candidateFile.exists() || candidateFile.length() < 1024) {
             Log.e(

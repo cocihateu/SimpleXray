@@ -13,13 +13,9 @@ import com.simplexray.re.service.TProxyService
 import com.simplexray.re.viewmodel.LogViewModel
 import com.simplexray.re.viewmodel.MainViewModel
 import kotlinx.coroutines.launch
-import java.io.File
 
 data class MainScreenCallbacks(
-    val onCreateNewConfigFileAndEdit: () -> Unit,
-    val onImportConfigFromClipboard: () -> Unit,
     val onPerformExport: () -> Unit,
-    val onDeleteConfigClick: (File) -> Unit,
     val onSwitchVpnService: () -> Unit
 )
 
@@ -38,22 +34,6 @@ fun rememberMainScreenCallbacks(
 
     return remember(mainViewModel, logViewModel, launchers, applicationContext) {
         MainScreenCallbacks(
-            onCreateNewConfigFileAndEdit = {
-                scope.launch {
-                    val filePath = mainViewModel.createConfigFile()
-                    filePath?.let {
-                        mainViewModel.editConfig(it)
-                    }
-                }
-            },
-            onImportConfigFromClipboard = {
-                scope.launch {
-                    val filePath = mainViewModel.importConfigFromClipboard()
-                    filePath?.let {
-                        mainViewModel.editConfig(it)
-                    }
-                }
-            },
             onPerformExport = {
                 scope.launch {
                     val logFile = logViewModel.getLogFile()
@@ -87,9 +67,6 @@ fun rememberMainScreenCallbacks(
                         Log.w("MainActivity", "Export log file is null, empty, or no logs in adapter.")
                     }
                 }
-            },
-            onDeleteConfigClick = { file ->
-                mainViewModel.deleteConfigFile(file)
             },
             onSwitchVpnService = onSwitchVpnService@{
                 if (mainViewModel.isServiceEnabled.value) {

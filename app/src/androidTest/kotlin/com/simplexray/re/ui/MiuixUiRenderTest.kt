@@ -3,10 +3,7 @@ package com.simplexray.re.ui
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -15,7 +12,6 @@ import androidx.compose.ui.test.performClick
 import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import androidx.navigationevent.compose.rememberNavigationEventDispatcherOwner
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.simplexray.re.ui.screens.StatRow
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -31,24 +27,6 @@ class MiuixUiRenderTest {
 
     @get:Rule
     val composeTestRule = createAndroidComposeRule<ComponentActivity>()
-
-    @Test
-    fun testStatRowRendersLabelAndValue() {
-        composeTestRule.setContent {
-            val dispatcherOwner = rememberNavigationEventDispatcherOwner(parent = null)
-            val themeController = ThemeController(isDark = false)
-            CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides dispatcherOwner) {
-                MiuixTheme(controller = themeController) {
-                    Surface(modifier = Modifier.fillMaxSize()) {
-                        StatRow(label = "Uplink", value = "1.23 MB")
-                    }
-                }
-            }
-        }
-
-        composeTestRule.onNodeWithText("Uplink").assertIsDisplayed()
-        composeTestRule.onNodeWithText("1.23 MB").assertIsDisplayed()
-    }
 
     @Test
     fun testMiuixCardAndTitleRenderInDarkTheme() {
@@ -91,26 +69,4 @@ class MiuixUiRenderTest {
         assert(clicked)
     }
 
-    @Test
-    fun testMiuixNavigationRailRender() {
-        composeTestRule.setContent {
-            val dispatcherOwner = rememberNavigationEventDispatcherOwner(parent = null)
-            val themeController = ThemeController(isDark = false)
-            val railState = remember { top.yukonga.miuix.kmp.basic.NavigationRailState() }
-            CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides dispatcherOwner) {
-                MiuixTheme(controller = themeController) {
-                    top.yukonga.miuix.kmp.basic.NavigationRail(state = railState) {
-                        top.yukonga.miuix.kmp.basic.NavigationRailItem(
-                            selected = true,
-                            onClick = {},
-                            icon = androidx.compose.material.icons.Icons.Default.MoreVert,
-                            label = "Dashboard"
-                        )
-                    }
-                }
-            }
-        }
-
-        composeTestRule.onNodeWithText("Dashboard").assertIsDisplayed()
-    }
 }

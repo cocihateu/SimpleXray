@@ -21,7 +21,7 @@ class ClashApiPreferences(context: Context) {
         get() = LogLevel.fromString(prefs.getString(KEY_LOG_LEVEL, "error") ?: "error")
         set(value) = prefs.edit().putString(KEY_LOG_LEVEL, value.value).apply()
 
-    var secret: String
+    val secret: String
         get() = synchronized(SECRET_LOCK) {
             val existing = prefs.getString(KEY_SECRET, null)
             if (!existing.isNullOrBlank()) {
@@ -30,9 +30,6 @@ class ClashApiPreferences(context: Context) {
             val generated = UUID.randomUUID().toString()
             prefs.edit().putString(KEY_SECRET, generated).apply()
             generated
-        }
-        set(value) = synchronized(SECRET_LOCK) {
-            prefs.edit().putString(KEY_SECRET, value.trim()).apply()
         }
 
     fun resetSecret(): String = synchronized(SECRET_LOCK) {

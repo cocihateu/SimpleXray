@@ -1,72 +1,73 @@
-# Traffic Rules and Workspace Store Architecture
+# Structured Traffic Rules
 
-## Overview
+LucX edits traffic rules under **Settings → Rules**. Rules are ordered, first-match business-routing entries stored in `rules_workspace.json`. The page provides add/edit/delete, target selection, enable/disable, long-press drag ordering, up/down controls, and JSON import/export. **Rule resources** opens management of bundled and custom `.dat` files.
 
-This document outlines the traffic rules architecture implemented for SimpleXray to replace legacy `routing.lua` scripting with reactive, structured rule configuration.
+## Rule Types
 
-## Core Components
+Each rule has `id`, `type`, `payload`, `target`, and `enabled`. Disabled rows remain saved but are not compiled into business routing.
 
-### 1. `TrafficRule` Data Model
+| Type | Payload | Xray matching field |
+| --- | --- | --- |
+| `Domain` | Exact hostname | `domain: ["full:..."]` |
+| `DomainSuffix` | Domain and its subdomains | `domain: ["domain:..."]` |
+| `DomainKeyword` | Hostname substring | `domain: ["keyword:..."]` |
+| `GeoSite` | Geosite category | `domain: ["geosite:..."]` |
+| `IPCIDR` | IP address or CIDR | `ip` array |
+| `GeoIP` | GeoIP category/country | `ip: ["geoip:..."]` |
+| `DstPort` | Port expression, such as `443` or `1000-2000` | `port` |
+| `Network` | `tcp` or `udp` | `network` |
+| `Match` | Empty | `network: "tcp,udp"` |
+| `Xray` | JSON object of matching conditions | Preserves the supplied fields |
 
-`TrafficRule` is the primary unit of routing logic:
+Domain, geodata, and IP list types accept comma- or newline-separated values. `Xray` supports compound conditions, regular expressions, and custom resource references, for example `{"network":"udp","port":"443"}` or `{"domain":["ext:custom.dat:list"]}`. Different fields in a compound rule retain Xray's conjunction semantics. The App supplies `type: field`, `ruleTag`, and the selected outbound; the payload is not a node or whole configuration.
 
-```kotlin
-public data class TrafficRule(
-    val id: String = UUID.randomUUID().toString(),
-    val type: String,
-    val payload: String,
-    val target: String,
-    val enabled: Boolean = true
-)
-```
+Put specific rules before `Match`. A newly added rule is inserted before the first `Match` row. Ordering matters even if another `Match` exists later.
 
-#### Supported Rule Types
-- `Domain`: Exact domain matching (`full:<domain>`).
-- `DomainSuffix`: Domain suffix matching (`domain:<domain>`).
-- `DomainKeyword`: Substring/keyword matching (`keyword:<keyword>`).
-- `GeoSite`: GeoSite category list reference (`geosite:<list>`).
-- `IPCIDR`: Direct IP CIDR address or subnet matching (`ip` array).
-- `GeoIP`: GeoIP country/region code matching (`geoip:<code/list>`).
-- `DstPort`: Destination port matching.
-- `Network`: Network layer protocol matching (`tcp`, `udp`).
-- `Match`: Universal catch-all rule matching `tcp,udp`.
-- `Xray`: Raw JSON object representing compound or specialized Xray routing criteria.
-- Domain regular expressions retain their `regexp:` fields inside the `Xray` rule type.
+## Targets and Modes
 
-#### Xray Conversion
+| Target | Meaning |
+| --- | --- |
+| `GLOBAL` | The workspace's selected default group. |
+| Group name | That group's runtime strategy and selected member. |
+| Node name | That physical node, rather than its owning group's strategy. |
+| `direct` / `DIRECT` | Built-in direct target. |
+| `block` / `REJECT` | Built-in reject target. |
 
-Each `TrafficRule` can be converted into an Xray field rule via `rule.toXrayRule(outboundTag)`:
-- Sets `"type": "field"`.
-- Preserves rule ID in `"ruleTag"`.
-- Emits proper domain/ip/port/network arrays.
-- Targets select the shared business relay; `"GLOBAL"` selects the default group, and direct/block targets select their physical builtins.
-- Compound match conditions retain their multi-field conjunction semantics inside `type = "Xray"`.
+Reserved built-in names resolve first; otherwise a group takes precedence over a same-named node. The native target picker lists `GLOBAL`, `direct`, `block`, groups, and nodes, with duplicate names shown once. Rename a same-named node if a rule needs to address it separately from the group. Unknown targets remain in stored rules but cannot be compiled into runtime routing, so update rules after deleting their targets.
 
-### 2. `RuleWorkspaceStore`
+- **Rule mode** compiles enabled rules in their saved order, followed by the default-group catch-all.
+- **Global mode** sends business traffic to the default group without evaluating the saved business rules.
+- **Direct mode** uses the direct target instead.
 
-Manages disk persistence and reactive updates for rules in `rules_workspace.json`:
+The App-managed DNS interception and internal measurement routes remain ahead of business routing in all three modes. A user rule does not override this port-53 interception.
 
-- `observe(): Flow<List<TrafficRule>>`: Emits the updated rule list on changes.
-- `load(): List<TrafficRule>`: Reads the current persisted rule list from disk.
-- `save(rules: List<TrafficRule>)`: Atomically writes the rule list to disk and updates the companion version.
-- `update(transform: (List<TrafficRule>) -> List<TrafficRule>): List<TrafficRule>`: Atomic read-modify-write helper.
-- `RuleWorkspaceStore.version: StateFlow<Long>`: Emits timestamps on every write.
-- `migrationNotice: String?`: Readable property containing migration notices or warnings.
-- Query filtering helpers: `activeRules()`, `ruleById(id)`, `rulesByTarget(target)`, and `rulesByType(type)`.
+Set the default group in **Proxies → Group settings → Save and set as default group**, or select a workspace group through the Clash API `GLOBAL` selector. This also changes the **last enabled `Match`** row to target `GLOBAL`. Specific rules are untouched; an earlier catch-all still takes precedence. If no explicit default is valid, the first workspace group is used.
 
-### 3. `LegacyLuaRuleImporter`
+## Import and Export
 
-Automates migration from legacy `routing.lua` files:
+The document picker accepts JSON in these forms:
 
-- Extracts `geodata.BuildDomainMatcher` and `geodata.BuildIPMatcher` definitions.
-- Translates conditions and return statements in `HandleRoute` into ordered `TrafficRule` rows.
-- Preserves compound conditions (such as UDP + 443 QUIC blocking) via `Xray` rule payload objects.
-- When arbitrary Lua scripts contain unparsable logic, generates readable descriptions in `migrationNotice` and applies default rules ending with a terminal `Match GLOBAL`.
+- An array of structured rules or Xray field rules.
+- An object containing a `rules` array.
+- An Xray object containing `routing.rules`.
+- A single structured rule or Xray rule object.
 
-The supplied `HandleRoute` migration keeps nested domain branches and their return order. Repeated IP checks merge into the same structured criteria. Legacy scripted routing uses `IPOnDemand` so domain rules run before IP resolution and the terminal default rule.
+**A successful import replaces the entire rule list.** Importing `routing.rules` reads only rules; it does not import nodes, DNS, inbounds, or other configuration sections. Export writes a JSON object with `version` and `rules`. The rule importer uses JSON, not YAML or Lua.
 
-Runtime edits add required relay outbounds through `api ado`, then replace routing through `api adrules --append=false`. The API listener retains StatsService, RoutingService, and HandlerService. Importing a full Xray configuration updates the rule workspace as well as global settings.
+Compound Xray rules remain a single `Xray` row. Domain rules containing `regexp:` retain that expression in an `Xray` payload. Simpler domain/IP arrays may become multiple rows with the same target. Use valid Xray matching criteria; successful JSON parsing alone does not validate every core-specific field.
 
-The rules page imports and exports structured JSON through Android's document picker. Imports also accept Xray `routing.rules`. Long-press dragging updates the displayed order, scrolls at viewport edges, and saves the final order when released. Group targets carry a small group label in the list and target selectors.
+## Applying Changes
 
-Choosing the default group in the app or the Clash API GLOBAL selector also changes the last enabled Match rule to target GLOBAL. This connects the catch-all rule to the selected default group while preserving specific domain, IP, and other rule targets.
+Rules, enablement, mode, and default-group changes are applied while running through Xray's routing API. Required relay outbounds are added before routing replacement. The Rules page reports application success or failure. Node content and relay-topology changes may reload the core instead.
+
+Group and node business targets, including direct/reject, use the shared local relay. Measurement traffic has separate internal entries. The built-in `GLOBAL`, direct, and reject targets remain available independently of source-group management.
+
+## Existing Data and Renames
+
+Renaming a group updates its group references, front-proxy references, default selection, and rules targeting that group. Renaming a node updates its node references and rules that actually target the node; rules using a same-named group remain attached to that group.
+
+Older stored routing-alias targets are rewritten **once** to their owning group names before the alias data is dropped. The migration covers explicit stored aliases and unambiguous previously inferred primary-node targets, preserves reserved built-in targets, and uses workspace/rule schema markers to avoid repeated rewriting. Current rules target groups or nodes directly; there is no routing-alias editor or API.
+
+On first initialization without a rule workspace, the App can recover rules from existing global/legacy Xray data and supported legacy Lua patterns. This is data migration, not a script editor or a general Lua interpreter. Unsupported scripted logic can produce a migration notice and fallback rules; review the resulting structured list before relying on it.
+
+See [configuration behavior](./configuration.md) for DNS interception, sniffing, and restart requirements, and [Clash API](./clash-api.md) for rule inspection and enablement endpoints.

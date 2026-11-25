@@ -1,14 +1,23 @@
 package com.simplexray.re.ui.screens
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -16,9 +25,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -29,14 +41,21 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.simplexray.re.R
 import com.simplexray.re.prefs.LogLevel
-import com.simplexray.re.ui.scaffold.LocalLayerBackdrop
+import com.simplexray.re.ui.components.InfoOverlayDialog
 import com.simplexray.re.viewmodel.LogViewModel
-import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.DropdownArrowEndAction
+import top.yukonga.miuix.kmp.basic.DropdownDefaults
+import top.yukonga.miuix.kmp.basic.DropdownEntry
+import top.yukonga.miuix.kmp.basic.DropdownItem
+import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.VerticalScrollBar
 import top.yukonga.miuix.kmp.basic.rememberScrollBarAdapter
-import top.yukonga.miuix.kmp.glass.GlassDropdownPreference
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.basic.Check
+import top.yukonga.miuix.kmp.icon.extended.Help
 import top.yukonga.miuix.kmp.interfaces.ExperimentalScrollBarApi
+import top.yukonga.miuix.kmp.popup.OverlayDropdownPopup
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @OptIn(ExperimentalScrollBarApi::class)
@@ -46,16 +65,27 @@ fun LogScreen(
     listState: LazyListState,
     logLevel: LogLevel,
     onLogLevelChange: (LogLevel) -> Unit,
+    accessLog: Boolean,
+    onAccessLogChange: (Boolean) -> Unit,
+    dnsLog: Boolean,
+    onDnsLogChange: (Boolean) -> Unit,
     paddingValues: PaddingValues = PaddingValues()
 ) {
-    val backdrop = LocalLayerBackdrop.current
-    val logLevelOptions = LogLevel.entries
-    val logLevelNames = remember { LogLevel.entries.map { it.name } }
     val filteredEntries by logViewModel.filteredEntries.collectAsStateWithLifecycle()
     val searchQuery by logViewModel.searchQuery.collectAsStateWithLifecycle()
     val isInitialLoad = remember { mutableStateOf(true) }
+    var showLogHelp by remember { mutableStateOf(false) }
+    var showLogLevels by remember { mutableStateOf(false) }
     val topPadding = paddingValues.calculateTopPadding() + 12.dp
     val bottomPadding = paddingValues.calculateBottomPadding().coerceAtLeast(12.dp)
+
+    if (showLogHelp) {
+        InfoOverlayDialog(
+            title = stringResource(R.string.app_log_level_title),
+            summary = stringResource(R.string.loglevel_summary),
+            onDismiss = { showLogHelp = false }
+        )
+    }
 
     DisposableEffect(key1 = Unit) {
         logViewModel.loadLogs()
@@ -81,16 +111,84 @@ fun LogScreen(
             .fillMaxSize()
             .padding(top = topPadding)
     ) {
-        Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
-            GlassDropdownPreference(
-                title = stringResource(R.string.app_log_level_title),
-                items = logLevelNames,
-                selectedIndex = logLevelOptions.indexOf(logLevel),
-                onSelectedIndexChange = { index ->
-                    onLogLevelChange(logLevelOptions[index])
-                },
-                backdrop = backdrop
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp)
+                .height(48.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            LogToggleChip(
+                label = "access日志",
+                checked = accessLog,
+                onCheckedChange = onAccessLogChange,
+                modifier = Modifier.weight(1.1f)
             )
+            LogToggleChip(
+                label = "DNS日志",
+                checked = dnsLog,
+                onCheckedChange = onDnsLogChange,
+                modifier = Modifier.weight(0.9f)
+            )
+            Box(modifier = Modifier.weight(1.6f)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MiuixTheme.colorScheme.surfaceContainer)
+                        .clickable(
+                            role = Role.DropdownList,
+                            onClickLabel = "日志级别",
+                            onClick = { showLogLevels = true }
+                        )
+                        .padding(horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "日志级别 ${logLevel.name}",
+                        modifier = Modifier.weight(1f),
+                        style = MiuixTheme.textStyles.body2,
+                        fontSize = 13.sp,
+                        color = MiuixTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                    DropdownArrowEndAction(
+                        actionColor = MiuixTheme.colorScheme.onSurfaceVariantActions
+                    )
+                }
+                OverlayDropdownPopup(
+                    entry = DropdownEntry(
+                        items = LogLevel.entries.map { level ->
+                            DropdownItem(
+                                text = level.name,
+                                selected = level == logLevel,
+                                onClick = { onLogLevelChange(level) }
+                            )
+                        } + DropdownItem(
+                            text = "日志级别帮助",
+                            onClick = { showLogHelp = true },
+                            icon = { modifier ->
+                                Icon(
+                                    imageVector = MiuixIcons.Help,
+                                    contentDescription = null,
+                                    modifier = modifier,
+                                    tint = MiuixTheme.colorScheme.onSurfaceVariantActions
+                                )
+                            }
+                        )
+                    ),
+                    show = showLogLevels,
+                    onDismiss = { showLogLevels = false },
+                    onDismissFinished = {},
+                    maxHeight = null,
+                    dropdownColors = DropdownDefaults.dropdownColors(),
+                    renderInRootScaffold = true
+                )
+            }
         }
         if (savingPaused) {
             Box(
@@ -147,6 +245,61 @@ fun LogScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun LogToggleChip(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val contentColor = if (checked) {
+        MiuixTheme.colorScheme.onPrimaryContainer
+    } else {
+        MiuixTheme.colorScheme.onSurface
+    }
+    Row(
+        modifier = modifier
+            .height(48.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                if (checked) MiuixTheme.colorScheme.primaryContainer
+                else MiuixTheme.colorScheme.surfaceContainer
+            )
+            .toggleable(
+                value = checked,
+                role = Role.Switch,
+                onValueChange = onCheckedChange
+            )
+            .padding(horizontal = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(14.dp)
+                .border(1.dp, contentColor, RoundedCornerShape(4.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            if (checked) {
+                Icon(
+                    imageVector = MiuixIcons.Basic.Check,
+                    contentDescription = null,
+                    modifier = Modifier.size(12.dp),
+                    tint = contentColor
+                )
+            }
+        }
+        Text(
+            text = label,
+            style = MiuixTheme.textStyles.body2,
+            fontSize = 13.sp,
+            color = contentColor,
+            maxLines = 1,
+            softWrap = false
+        )
     }
 }
 

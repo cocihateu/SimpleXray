@@ -3,17 +3,17 @@ package com.simplexray.re.service
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.widget.Toast
 import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.PowerManager
 import android.util.Log
+import android.widget.Toast
 import com.simplexray.re.R
-import com.simplexray.re.common.ZashboardLauncher
 import com.simplexray.re.common.ConfigUtils
 import com.simplexray.re.common.SocksAuthenticatorInstaller
+import com.simplexray.re.common.ZashboardLauncher
 import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.common.isLoopbackAddress
 import com.simplexray.re.prefs.TunnelMode
@@ -119,7 +119,6 @@ class TProxyService : VpnService() {
 
                 override fun onCoreReady() {
                     VpnStateHub.updateState(VpnRunningState.Connected)
-                    startClashApi()
                     val channelName = if (Preferences(applicationContext).disableVpn) "nosocks" else "socks5"
                     notificationUpdater.start(serviceScope, channelName)
                     geoUpdateScheduler.start(serviceScope)
@@ -161,13 +160,17 @@ class TProxyService : VpnService() {
     private var clashApi: ClashApiServer? = null
 
     @Synchronized private fun startClashApi() {
-        if (clashApi != null || ClashApiPreferences(this).enabled == false) return
+        val prefs = ClashApiPreferences(this)
+        if (isStartingLock.get() == false || clashApi != null || prefs.enabled == false) return
         val server = ClashApiServer(applicationContext)
         runCatching { server.start() }
             .onSuccess { clashApi = server }
             .onFailure {
                 server.close()
-                val line = XrayProcessRunner.formatAppLogLine("[Error] Clash API startup failed (${it.javaClass.simpleName}).")
+                val line = XrayProcessRunner.formatAppLogLine(
+                    "[Error] Clash API startup failed at 127.0.0.1:${prefs.port} " +
+                        "(${it.javaClass.simpleName}: ${it.message})."
+                )
                 logFileManager.appendLog(line)
                 VpnStateHub.emitLog(line)
             }
@@ -196,6 +199,12 @@ class TProxyService : VpnService() {
     override fun onStartCommand(intent: Intent, flags: Int, startId: Int): Int {
         val action = intent.action
         when (action) {
+            ACTION_RELOAD_CLASH_API -> {
+                stopClashApi()
+                startClashApi()
+                return START_NOT_STICKY
+            }
+
             ACTION_OPEN_ZASHBOARD -> {
                 val controller = clashApi
                 if (controller == null) {
@@ -203,12 +212,6 @@ class TProxyService : VpnService() {
                 } else {
                     ZashboardLauncher.open(this, controller.listeningPort, ClashApiPreferences(this).secret)
                 }
-                return START_NOT_STICKY
-            }
-
-            ACTION_RELOAD_CLASH_API -> {
-                stopClashApi()
-                startClashApi()
                 return START_NOT_STICKY
             }
 
@@ -248,8 +251,8 @@ class TProxyService : VpnService() {
 
     override fun onDestroy() {
         super.onDestroy()
-        stopClashApi()
         isStartingLock.set(false)
+        stopClashApi()
         networkMonitor.stop()
         geoUpdateScheduler.stop()
         socksHealthMonitor.stop()
@@ -527,10 +530,10 @@ class TProxyService : VpnService() {
 
 
     private fun stopService(finalState: VpnRunningState = VpnRunningState.Disconnected) {
+        isStartingLock.set(false)
         stopClashApi()
         socksHealthMonitor.stop()
         notificationUpdater.stop()
-        isStartingLock.set(false)
         networkMonitor.stop()
         stopForeground(Service.STOP_FOREGROUND_REMOVE)
         val pfd = tunFd

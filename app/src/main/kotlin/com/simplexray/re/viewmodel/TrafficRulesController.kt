@@ -22,10 +22,6 @@ internal class TrafficRulesController(private val context: Context, private val 
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
 
-    fun clearMessage() {
-        _message.value = null
-    }
-
     fun save(rule: TrafficRule) = scope.launch(Dispatchers.IO) {
         store.update { rows ->
             if (rows.any { it.id == rule.id }) rows.map { if (it.id == rule.id) rule else it }
@@ -101,13 +97,13 @@ internal class TrafficRulesController(private val context: Context, private val 
                 }
             }
             if (parsedList.isEmpty()) {
-                _message.value = "解析规则列表为空"
+                _message.value = "未找到可导入的规则"
                 return@launch
             }
             store.save(parsedList)
-            _message.value = "成功导入 ${parsedList.size} 条规则"
+            _message.value = "已导入 ${parsedList.size} 条规则，替换原规则列表"
         } catch (e: Exception) {
-            _message.value = "导入异常: ${e.message ?: "解析错误"}"
+            _message.value = "导入失败：${e.message ?: "解析错误"}"
         }
     }
 
@@ -121,13 +117,13 @@ internal class TrafficRulesController(private val context: Context, private val 
                 array.put(rule.toJson())
             }
             root.put("rules", array)
-            val stream = context.contentResolver.openOutputStream(uri) ?: error("文件写入入口为空")
+            val stream = context.contentResolver.openOutputStream(uri) ?: error("无法打开文件进行写入")
             stream.bufferedWriter().use { writer ->
                 writer.write(root.toString(2))
             }
-            _message.value = "成功导出 ${current.size} 条规则"
+            _message.value = "已导出 ${current.size} 条规则"
         } catch (e: Exception) {
-            _message.value = "导出异常: ${e.message ?: "写入错误"}"
+            _message.value = "导出失败：${e.message ?: "写入错误"}"
         }
     }
 

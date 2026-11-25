@@ -16,7 +16,7 @@ internal class VpnNotificationHelper(private val context: Context) {
             context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val name: CharSequence = context.getString(R.string.app_name)
         val channel =
-            NotificationChannel(channelName, name, NotificationManager.IMPORTANCE_DEFAULT)
+            NotificationChannel(channelName, name, NotificationManager.IMPORTANCE_LOW)
         notificationManager.createNotificationChannel(channel)
     }
 
@@ -43,7 +43,11 @@ internal class VpnNotificationHelper(private val context: Context) {
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_stat_lineal)
             .setContentIntent(pendingIntent)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setShowWhen(false)
             .build()
     }
 

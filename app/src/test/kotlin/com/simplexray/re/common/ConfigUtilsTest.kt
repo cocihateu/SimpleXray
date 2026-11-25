@@ -1,10 +1,22 @@
 package com.simplexray.re.common
 
+import com.simplexray.re.common.config.ConfigSanitizer
+import com.simplexray.re.prefs.FakeContext
+import com.simplexray.re.prefs.LogLevel
+import com.simplexray.re.prefs.Preferences
+import com.simplexray.re.prefs.TunnelMode
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 
 class ConfigUtilsTest {
+
+    private val prefs = Preferences(FakeContext()).apply {
+        tunnelMode = TunnelMode.HevSocks5Tunnel
+        logLevel = LogLevel.Auto
+        accessLog = true
+        bypassLan = false
+    }
 
     @Test
     fun testDesktopTunInboundRemoval() {
@@ -25,7 +37,7 @@ class ConfigUtilsTest {
         }
         """.trimIndent()
 
-        val sanitized = ConfigUtils.sanitizeConfig(rawConfig)
+        val sanitized = ConfigUtils.sanitizeConfig(rawConfig, prefs)
         val json = JSONObject(sanitized)
         val inbounds = json.getJSONArray("inbounds")
 
@@ -55,7 +67,7 @@ class ConfigUtilsTest {
         }
         """.trimIndent()
 
-        val sanitized = ConfigUtils.sanitizeConfig(rawConfig)
+        val sanitized = ConfigUtils.sanitizeConfig(rawConfig, prefs)
         val json = JSONObject(sanitized)
         val inbounds = json.getJSONArray("inbounds")
 
@@ -75,7 +87,7 @@ class ConfigUtilsTest {
         }
         """.trimIndent()
 
-        val sanitized = ConfigUtils.sanitizeConfig(rawConfig, null)
+        val sanitized = ConfigUtils.sanitizeConfig(rawConfig, prefs)
         val json = JSONObject(sanitized)
         val log = json.getJSONObject("log")
 
@@ -85,56 +97,8 @@ class ConfigUtilsTest {
     }
 
     @Test
-    fun testExtractOutboundsExcludesNonProxyProtocols() {
-        val rawConfig = """
-        {
-          "outbounds": [
-            { "tag": "proxy-1", "protocol": "vless" },
-            { "tag": "direct", "protocol": "freedom" },
-            { "tag": "black", "protocol": "blackhole" },
-            { "tag": "dns-out", "protocol": "dns" },
-            { "tag": "proxy-2", "protocol": "VMess" }
-          ]
-        }
-        """.trimIndent()
-
-        val outbounds = ConfigUtils.extractOutbounds(rawConfig)
-
-        assertEquals(2, outbounds.size)
-        assertEquals("proxy-1", outbounds[0].tag)
-        assertEquals("vless", outbounds[0].protocol)
-        assertEquals("proxy-2", outbounds[1].tag)
-        assertEquals("vmess", outbounds[1].protocol)
-    }
-
-    @Test
-    fun testExtractOutboundsHandlesInvalidInput() {
-        assertTrue(ConfigUtils.extractOutbounds("not json").isEmpty())
-        assertTrue(ConfigUtils.extractOutbounds("{}").isEmpty())
-        assertTrue(ConfigUtils.extractOutbounds("").isEmpty())
-    }
-
-    @Test
-    fun testExtractOutboundsSkipsOutboundWithoutTag() {
-        val rawConfig = """
-        {
-          "outbounds": [
-            { "protocol": "vless" },
-            { "tag": "ok", "protocol": "trojan" }
-          ]
-        }
-        """.trimIndent()
-
-        val outbounds = ConfigUtils.extractOutbounds(rawConfig)
-
-        assertEquals(1, outbounds.size)
-        assertEquals("ok", outbounds[0].tag)
-        assertEquals("trojan", outbounds[0].protocol)
-    }
-
-    @Test
     fun testCreateDefaultSniffingObject() {
-        val sniffing = ConfigUtils.createDefaultSniffingObject()
+        val sniffing = ConfigSanitizer.createDefaultSniffingObject()
         assertTrue(sniffing.getBoolean("enabled"))
         assertFalse(sniffing.getBoolean("metadataOnly"))
         assertFalse(sniffing.getBoolean("routeOnly"))
@@ -145,31 +109,6 @@ class ConfigUtilsTest {
         assertTrue(overrides.contains("tls"))
         assertTrue(overrides.contains("quic"))
         assertTrue(overrides.contains("fakedns"))
-    }
-
-    @Test
-    fun testTemplateIntegrity() {
-        val templateFile = java.io.File("src/main/assets/template").takeIf { it.exists() }
-            ?: java.io.File("app/src/main/assets/template")
-        assertTrue("Template file should exist", templateFile.exists())
-        val content = templateFile.readText()
-        val json = JSONObject(content)
-
-        val outbounds = json.getJSONArray("outbounds")
-        val tags = (0 until outbounds.length()).map { outbounds.getJSONObject(it).getString("tag") }.toSet()
-        assertTrue("Template must contain proxy tag", tags.contains("proxy"))
-        assertTrue("Template must contain direct tag", tags.contains("direct"))
-        assertTrue("Template must contain block tag", tags.contains("block"))
-
-        val routing = json.getJSONObject("routing")
-        val rules = routing.getJSONArray("rules")
-        for (i in 0 until rules.length()) {
-            val rule = rules.getJSONObject(i)
-            if (rule.has("outboundTag")) {
-                val tag = rule.getString("outboundTag")
-                assertTrue("Outbound tag '$tag' used in rule $i must exist in outbounds $tags", tags.contains(tag))
-            }
-        }
     }
 
     @Test
@@ -195,7 +134,7 @@ class ConfigUtilsTest {
         }
         """.trimIndent()
 
-        val sanitized = ConfigUtils.sanitizeConfig(rawConfig, null)
+        val sanitized = ConfigUtils.sanitizeConfig(rawConfig, prefs)
         val json = JSONObject(sanitized)
         val rules = json.getJSONObject("routing").getJSONArray("rules")
         assertEquals(3, rules.length())
@@ -220,7 +159,7 @@ class ConfigUtilsTest {
         }
         """.trimIndent()
 
-        val sanitized = ConfigUtils.sanitizeConfig(rawConfig, null)
+        val sanitized = ConfigUtils.sanitizeConfig(rawConfig, prefs)
         val json = JSONObject(sanitized)
         val rules = json.getJSONObject("routing").getJSONArray("rules")
         assertEquals(2, rules.length())
@@ -263,7 +202,7 @@ class ConfigUtilsTest {
         }
         """.trimIndent()
 
-        val sanitized = ConfigUtils.sanitizeConfig(rawConfig, null)
+        val sanitized = ConfigUtils.sanitizeConfig(rawConfig, prefs)
         val json = JSONObject(sanitized)
         val rules = json.getJSONObject("routing").getJSONArray("rules")
         assertEquals(0, rules.length())
@@ -289,7 +228,7 @@ class ConfigUtilsTest {
         }
         """.trimIndent()
 
-        val sanitized = ConfigUtils.sanitizeConfig(rawConfig, null)
+        val sanitized = ConfigUtils.sanitizeConfig(rawConfig, prefs)
         val json = JSONObject(sanitized)
         val inbounds = json.getJSONArray("inbounds")
         assertEquals(2, inbounds.length())
@@ -303,78 +242,6 @@ class ConfigUtilsTest {
         assertEquals("socks-secondary", secondary.getString("tag"))
         assertEquals(10809, secondary.getInt("port"))
         assertEquals("127.0.0.1", secondary.getString("listen"))
-    }
-
-    @Test
-    fun testExtractOutboundEndpointsSupportsFlatSettings() {
-        val rawConfig = """
-        {
-          "outbounds": [
-            {
-              "tag": "nested-vless",
-              "protocol": "vless",
-              "settings": {
-                "vnext": [{ "address": "example.com", "port": 443 }]
-              }
-            },
-            {
-              "tag": "flat-node",
-              "protocol": "trojan",
-              "settings": {
-                "address": "trojan.example.org",
-                "port": 8443
-              }
-            }
-          ]
-        }
-        """.trimIndent()
-
-        val endpoints = ConfigUtils.extractOutboundEndpoints(rawConfig)
-        assertEquals(2, endpoints.size)
-
-        assertEquals("nested-vless", endpoints[0].tag)
-        assertEquals("example.com", endpoints[0].host)
-        assertEquals(443, endpoints[0].port)
-
-        assertEquals("flat-node", endpoints[1].tag)
-        assertEquals("trojan.example.org", endpoints[1].host)
-        assertEquals(8443, endpoints[1].port)
-    }
-
-    @Test
-    fun testExtractOutboundEndpointsExcludesHysteriaProtocols() {
-        val rawConfig = """
-        {
-          "outbounds": [
-            {
-              "tag": "hy1-node",
-              "protocol": "hysteria",
-              "settings": { "address": "hy.example.com", "port": 443 }
-            },
-            {
-              "tag": "hy2-node",
-              "protocol": "hysteria2",
-              "settings": { "address": "hy2.example.com", "port": 443 }
-            },
-            {
-              "tag": "wg-node",
-              "protocol": "wireguard",
-              "settings": { "address": "wg.example.com", "port": 51820 }
-            },
-            {
-              "tag": "vless-node",
-              "protocol": "vless",
-              "settings": {
-                "vnext": [{ "address": "vless.example.com", "port": 443 }]
-              }
-            }
-          ]
-        }
-        """.trimIndent()
-
-        val endpoints = ConfigUtils.extractOutboundEndpoints(rawConfig)
-        assertEquals(1, endpoints.size)
-        assertEquals("vless-node", endpoints[0].tag)
     }
 
     @Test
@@ -408,7 +275,7 @@ class ConfigUtilsTest {
         }
         """.trimIndent()
 
-        val json = JSONObject(ConfigUtils.sanitizeConfig(rawConfig))
+        val json = JSONObject(ConfigUtils.sanitizeConfig(rawConfig, prefs))
         val outbounds = json.getJSONArray("outbounds")
 
         val vlessSockopt = outbounds.getJSONObject(0)
@@ -446,7 +313,7 @@ class ConfigUtilsTest {
         }
         """.trimIndent()
 
-        val json = JSONObject(ConfigUtils.sanitizeConfig(rawConfig))
+        val json = JSONObject(ConfigUtils.sanitizeConfig(rawConfig, prefs))
         val custom = json.getJSONArray("outbounds").getJSONObject(0)
             .getJSONObject("streamSettings").getJSONObject("sockopt")
             .getJSONArray("customSockopt")
@@ -454,24 +321,4 @@ class ConfigUtilsTest {
         assertEquals("7", custom.getJSONObject(0).getString("value"))
     }
 
-    @Test
-    fun testParseConfigErrorReturnsDetailsForMalformedYamlAndJson() {
-        assertNull(ConfigUtils.parseConfigError("""{"inbounds": []}"""))
-        assertNull(ConfigUtils.parseConfigError("inbounds: []\noutbounds: []"))
-
-        val yamlError = ConfigUtils.parseConfigError(
-            """
-            outbounds:
-              - protocol: vless
-                settings:
-                  vnext:
-                    - address: *undefined_anchor
-            """.trimIndent()
-        )
-        assertNotNull(yamlError)
-        assertTrue(yamlError!!.contains("undefined_anchor"))
-
-        val jsonError = ConfigUtils.parseConfigError("""{"inbounds": [""")
-        assertNotNull(jsonError)
-    }
 }

@@ -1,69 +1,42 @@
 package com.simplexray.re.ui.screens
 
-import android.content.Intent
-import androidx.core.net.toUri
 import androidx.activity.result.ActivityResultLauncher
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboard
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.simplexray.re.R
-import com.simplexray.re.common.ThemeMode
-import com.simplexray.re.prefs.TunnelMode
 import com.simplexray.re.viewmodel.MainViewModel
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.launch
-import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.DropdownEntry
-import top.yukonga.miuix.kmp.basic.DropdownItem
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.InputField
-import top.yukonga.miuix.kmp.basic.SmallTitle
-import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.glass.GlassBottomSheet
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Close
-import top.yukonga.miuix.kmp.icon.extended.Help
 import top.yukonga.miuix.kmp.icon.extended.Ok
-import top.yukonga.miuix.kmp.preference.ArrowPreference
-import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 import com.simplexray.re.ui.components.ConfirmOverlayDialog
 import com.simplexray.re.ui.components.InfoOverlayDialog
 import com.simplexray.re.ui.scaffold.LocalLayerBackdrop
@@ -74,7 +47,9 @@ fun SettingsScreen(
     geoipFilePickerLauncher: ActivityResultLauncher<Array<String>>,
     geositeFilePickerLauncher: ActivityResultLauncher<Array<String>>,
     scrollState: LazyListState,
-    paddingValues: PaddingValues = PaddingValues()
+    paddingValues: PaddingValues = PaddingValues(),
+    onOpenRuleResources: () -> Unit = {},
+    ruleResourcesOnly: Boolean = false,
 ) {
     val geoipProgress by mainViewModel.geoipDownloadProgress.collectAsStateWithLifecycle()
     val geositeProgress by mainViewModel.geositeDownloadProgress.collectAsStateWithLifecycle()
@@ -88,7 +63,6 @@ fun SettingsScreen(
 
     var showGeoipDeleteDialog by remember { mutableStateOf(false) }
     var showGeositeDeleteDialog by remember { mutableStateOf(false) }
-    var deletingLuaFileName by remember { mutableStateOf<String?>(null) }
 
     var editingRuleFile by remember { mutableStateOf<String?>(null) }
     var ruleFileUrl by remember { mutableStateOf("") }
@@ -100,7 +74,7 @@ fun SettingsScreen(
     val geositeUrlDefault = stringResource(R.string.geosite_url)
     val backdrop = LocalLayerBackdrop.current
     val category = mainViewModel.settingsCategory
-    val categories = listOf("通用", "TUN", "入站", "规则资源", "DNS", "zashboard", "日志", "关于")
+    val categories = listOf("通用", "TUN", "入站", "规则", "DNS", "面板", "关于")
 
     if (editingRuleFile != null) {
         GlassBottomSheet(
@@ -228,21 +202,6 @@ fun SettingsScreen(
         )
     }
 
-    if (deletingLuaFileName != null) {
-        val fileName = deletingLuaFileName!!
-        ConfirmOverlayDialog(
-            title = stringResource(R.string.delete_lua_file_title),
-            summary = stringResource(R.string.delete_lua_file_message, fileName),
-            confirmText = stringResource(R.string.confirm),
-            cancelText = stringResource(R.string.cancel),
-            onConfirm = {
-                mainViewModel.deleteLuaFile(fileName)
-                deletingLuaFileName = null
-            },
-            onDismiss = { deletingLuaFileName = null }
-        )
-    }
-
     var activeHelpDialog by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     if (activeHelpDialog != null) {
@@ -270,6 +229,18 @@ fun SettingsScreen(
     val topPadding = paddingValues.calculateTopPadding() + 12.dp
     val bottomPadding = paddingValues.calculateBottomPadding().coerceAtLeast(12.dp)
 
+    if (category == 3 && ruleResourcesOnly == false) {
+        RulesScreen(
+            mainViewModel = mainViewModel,
+            paddingValues = paddingValues,
+            onOpenRuleResources = onOpenRuleResources,
+            categoryHeader = {
+                SettingsCategorySelector(mainViewModel, categories, category)
+            },
+        )
+        return
+    }
+
     androidx.compose.foundation.layout.Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.TopCenter
@@ -283,33 +254,30 @@ fun SettingsScreen(
                 ),
             contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = topPadding, bottom = bottomPadding)
         ) {
-        item {
-            Card {
-                OverlayDropdownPreference(title = "设置分类", items = categories, selectedIndex = category,
-                    onSelectedIndexChange = { mainViewModel.settingsCategory = it })
-            }
+        if (ruleResourcesOnly == false) item {
+            SettingsCategorySelector(mainViewModel, categories, category)
         }
-        if (category == 0) item {
+        if (category == 0 && ruleResourcesOnly == false) item {
             SettingsGeneralSection(
                 mainViewModel = mainViewModel,
                 onShowHelp = { title, summary -> activeHelpDialog = title to summary },
             )
         }
 
-        if (category == 1) item {
+        if (category == 1 && ruleResourcesOnly == false) item {
             SettingsTunnelSection(mainViewModel = mainViewModel)
             SettingsLanSection(mainViewModel = mainViewModel,
                 onShowHelp = { title, summary -> activeHelpDialog = title to summary })
         }
 
-        if (category == 2) item {
+        if (category == 2 && ruleResourcesOnly == false) item {
             SettingsInboundSection(
                 mainViewModel = mainViewModel,
                 onShowHelp = { title, summary -> activeHelpDialog = title to summary },
             )
         }
 
-        if (category == 3) item {
+        if (ruleResourcesOnly) item {
             SettingsRuleFilesSection(
                 mainViewModel = mainViewModel,
                 geoipProgress = geoipProgress,
@@ -327,106 +295,34 @@ fun SettingsScreen(
             )
         }
 
-        if (category == 4) item {
-            SettingsGlobalConfigSection(mainViewModel = mainViewModel)
+        if (category == 4 && ruleResourcesOnly == false) item {
+            SettingsGlobalConfigSection()
         }
 
-        if (category == 5) item {
+        if (category == 5 && ruleResourcesOnly == false) item {
             SettingsClashApiSection(mainViewModel = mainViewModel)
         }
 
-        if (category == 6) item {
-            SettingsNetworkSection(
-                mainViewModel = mainViewModel,
-                onShowHelp = { title, summary -> activeHelpDialog = title to summary },
-            )
-        }
-
-        if (category == 7) item {
+        if (category == 6 && ruleResourcesOnly == false) item {
             SettingsAboutSection(mainViewModel)
         }
     }
 }
 }
 
-
-
-/**
- * Renders the third-party dat file rows. Kept as a separate composable so that
- * list-size changes (a download in progress adds/removes entries) are isolated
- * from the sibling ArrowPreference rows that follow in the settings card —
- * otherwise Compose slot movement can leak into those groups and crash with
- * "Boolean cannot be cast to ComposableLambdaImpl".
- */
 @Composable
-private fun CustomDatFilesSection(
+private fun SettingsCategorySelector(
     mainViewModel: MainViewModel,
-    prefs: com.simplexray.re.prefs.Preferences,
-    customDatProgress: Map<String, String?>,
-    customDatPickerLauncher: androidx.activity.result.ActivityResultLauncher<Array<String>>,
-    onEditUrl: (datName: String, url: String) -> Unit,
+    categories: List<String>,
+    selectedIndex: Int,
 ) {
-    val context = LocalContext.current
-    val customDatVersion by mainViewModel.customDatVersion.collectAsStateWithLifecycle()
-    val customDatFiles = remember(customDatVersion, customDatProgress) {
-        val names = LinkedHashSet<String>()
-        context.filesDir.listFiles { file ->
-            file.isFile &&
-                file.name.lowercase().endsWith(".dat") &&
-                !file.name.equals("geoip.dat", ignoreCase = true) &&
-                !file.name.equals("geosite.dat", ignoreCase = true) &&
-                !file.name.lowercase().startsWith("profileinstaller_")
-        }?.forEach { names.add(it.name) }
-        // Include files that are still downloading (may not exist on disk yet).
-        names.addAll(customDatProgress.keys)
-        names.toList()
-    }
-
-    customDatFiles.forEach { datName ->
-        val customUrl = prefs.customDatUrls[datName] ?: ""
-        val isDownloading = customDatProgress[datName] != null
-        key(datName) {
-            BasicComponent(
-                title = datName,
-                summary = customDatProgress[datName] ?: mainViewModel.getCustomDatSummary(datName),
-                endActions = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (isDownloading) {
-                            IconButton(onClick = { mainViewModel.cancelDownload(datName) }) {
-                                Icon(
-                                    painter = painterResource(id = R.drawable.cancel),
-                                    contentDescription = stringResource(R.string.cancel)
-                                )
-                            }
-                        } else {
-                            IconButton(onClick = { onEditUrl(datName, customUrl) }) {
-                                Icon(
-                                    painter = painterResource(id = R.drawable.cloud_download),
-                                    contentDescription = stringResource(R.string.rule_file_update_url)
-                                )
-                            }
-                            IconButton(onClick = {
-                                if (customUrl.isNotEmpty()) {
-                                    mainViewModel.downloadRuleFile(customUrl, datName)
-                                } else {
-                                    customDatPickerLauncher.launch(arrayOf("*/*"))
-                                }
-                            }) {
-                                Icon(
-                                    painter = painterResource(id = R.drawable.upload_file),
-                                    contentDescription = stringResource(R.string.import_file)
-                                )
-                            }
-                            IconButton(onClick = { mainViewModel.deleteCustomDatFile(datName) }) {
-                                Icon(
-                                    painter = painterResource(id = R.drawable.delete),
-                                    contentDescription = stringResource(R.string.delete_config)
-                                )
-                            }
-                        }
-                    }
-                }
-            )
-        }
+    Card {
+        OverlayDropdownPreference(
+            title = "设置分类",
+            items = categories,
+            selectedIndex = selectedIndex,
+            onSelectedIndexChange = { mainViewModel.settingsCategory = it },
+        )
     }
 }
+

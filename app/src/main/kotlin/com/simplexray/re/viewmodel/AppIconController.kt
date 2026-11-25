@@ -15,7 +15,7 @@ private const val TAG = "AppIconController"
 private const val APP_ICON_DEFAULT = "lineal"
 private val APP_ICON_OPTIONS = listOf("flat", "lineal", "lineal_color")
 // Manifest aliases resolve against the source namespace; the installed package
-// uses com.fallback.xm in both build variants.
+// uses com.LucX in both build variants.
 private val APP_ICON_ALIASES = listOf(
     "flat" to "com.simplexray.re.MainActivityFlat",
     "lineal" to "com.simplexray.re.MainActivityLineal",

@@ -1,17 +1,7 @@
 package com.simplexray.re.common.config
 
 import android.content.Context
-import android.content.SharedPreferences
 import android.util.Log
-import androidx.core.content.edit
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.flow.conflate
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.flow.map
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -36,31 +26,6 @@ class GroupProfileStore(context: Context) {
             return reconcile(profile, nodeTags)
         }
         return emptyProfile()
-    }
-
-    fun save(path: String, profile: GroupProfile) {
-        val file = File(path)
-        if (file.isFile) {
-            sp.edit { putString(file.absolutePath, encode(profile)) }
-        }
-    }
-
-    fun observe(path: String, nodeTags: List<String>): Flow<GroupProfile> {
-        val key = File(path).absolutePath
-        return callbackFlow {
-            val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, changedKey ->
-                if (changedKey == key || changedKey == null) {
-                    trySend(Unit)
-                }
-            }
-            sp.registerOnSharedPreferenceChangeListener(listener)
-            trySend(Unit)
-            awaitClose { sp.unregisterOnSharedPreferenceChangeListener(listener) }
-        }
-            .conflate()
-            .map { load(path, nodeTags) }
-            .distinctUntilChanged()
-            .flowOn(Dispatchers.IO)
     }
 
     private fun emptyProfile() = GroupProfile(
@@ -106,29 +71,6 @@ class GroupProfileStore(context: Context) {
             targetStrategies = profile.targetStrategies.filterKeys { it in nodes },
         )
     }
-
-    private fun encode(profile: GroupProfile): String {
-        val groups = JSONArray()
-        profile.groups.forEach { group ->
-            groups.put(
-                JSONObject()
-                    .put("tag", group.tag)
-                    .put("primary", encodeTarget(group.primary))
-                    .put("fallbacks", JSONArray(group.fallbacks.map { encodeTarget(it) }))
-                    .put("intervalSeconds", group.intervalSeconds)
-                    .put("trustSeconds", group.trustSeconds)
-                    .put("recoveryIntervalSeconds", group.recoveryIntervalSeconds)
-            )
-        }
-        return JSONObject()
-            .put("groups", groups)
-            .put("targetStrategies", JSONObject(profile.targetStrategies))
-            .toString()
-    }
-
-    private fun encodeTarget(target: GroupTarget): JSONObject = JSONObject()
-        .put("tag", target.tag)
-        .put("isGroup", target.isGroup)
 
     private fun decode(content: String): GroupProfile {
         val root = JSONObject(content)

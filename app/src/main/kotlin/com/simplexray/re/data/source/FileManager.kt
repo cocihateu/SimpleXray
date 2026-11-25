@@ -2,36 +2,13 @@ package com.simplexray.re.data.source
 
 import android.app.Application
 import android.content.Context
-import android.content.res.AssetManager
 import android.net.Uri
 import com.simplexray.re.prefs.Preferences
 import java.io.File
 import java.io.InputStream
 
 class FileManager(application: Application, prefs: Preferences) {
-    private val configFileStore = ConfigFileStore(application, prefs)
     private val ruleFileStore = RuleFileStore(application, prefs)
-
-    suspend fun createConfigFile(assets: AssetManager): String? =
-        configFileStore.createConfigFile(assets)
-
-    suspend fun importConfigFromClipboard(): String? =
-        configFileStore.importConfigFromClipboard()
-
-    suspend fun importConfigFromContent(content: String): String? =
-        configFileStore.importConfigFromContent(content)
-
-    suspend fun deleteConfigFile(fileToDelete: File): Boolean =
-        configFileStore.deleteConfigFile(fileToDelete)
-
-    suspend fun renameConfigFile(oldFile: File, newFile: File, newContent: String): Boolean =
-        configFileStore.renameConfigFile(oldFile, newFile, newContent)
-
-    suspend fun importConfigFileFromUri(context: Context, uri: Uri): String? =
-        configFileStore.importConfigFileFromUri(context, uri)
-
-    suspend fun replaceConfigFileFromUri(context: Context, uri: Uri, targetFile: File): Boolean =
-        configFileStore.replaceConfigFileFromUri(context, uri, targetFile)
 
     fun extractAssetsIfNeeded() =
         ruleFileStore.extractAssetsIfNeeded()
@@ -67,20 +44,8 @@ class FileManager(application: Application, prefs: Preferences) {
     fun getDatFileNameFromUri(context: Context, uri: Uri): String? =
         FileUriHelper.getDatFileNameFromUri(context, uri)
 
-    suspend fun importLuaFileFromUri(context: Context, uri: Uri, targetFileName: String? = null): String? =
-        ruleFileStore.importLuaFileFromUri(context, uri, targetFileName)
-
-    fun getLuaFileNameFromUri(context: Context, uri: Uri): String? =
-        FileUriHelper.getLuaFileNameFromUri(context, uri)
-
-    fun getLuaFileSummary(filename: String): String =
-        ruleFileStore.getLuaFileSummary(filename)
-
     companion object {
         fun isStandardGeoDat(fileName: String): Boolean =
             FileUriHelper.isStandardGeoDat(fileName)
-
-        fun isLuaFileName(fileName: String): Boolean =
-            FileUriHelper.isLuaFileName(fileName)
     }
 }

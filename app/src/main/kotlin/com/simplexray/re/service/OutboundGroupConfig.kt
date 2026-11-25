@@ -6,7 +6,6 @@ import com.simplexray.re.common.config.ManagedDnsConfig
 import com.simplexray.re.common.config.TrafficRule
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
 import java.util.UUID
 
 /** Business routes enter the shared connection model; internal measurements select physical nodes. */
@@ -20,7 +19,6 @@ internal class OutboundGroupConfig(
     val password = UUID.randomUUID().toString()
     val physicalNodes = workspace.allNodes().map { it.tag }
     val allLeafTargets = (physicalNodes + BUILTIN_GROUP_TARGET_TAGS).distinct()
-    val routingBindings = workspace.effectiveRoutingBindings()
     val users = allLeafTargets.mapIndexed { index, tag -> tag to "node-$index" }.toMap()
     val exitInfoUser = "exit-info"
     private val targets = workspace.groups.map { it.tag } + allLeafTargets.map(::physicalTarget)
@@ -64,7 +62,7 @@ internal class OutboundGroupConfig(
     }.replace(nodeEntryInbound, "node-entry").replace(healthInbound, "health-check")
         .replace(managedDns.outboundTag, "DNS")
 
-    fun inject(root: JSONObject, filesDir: File, cacheDir: File, rules: List<TrafficRule>) {
+    fun inject(root: JSONObject, rules: List<TrafficRule>) {
         val outbounds = root.array("outbounds")
         val chainOutbounds = mutableListOf<JSONObject>()
         for (index in 0 until outbounds.length()) {
@@ -195,7 +193,7 @@ internal class OutboundGroupConfig(
             "DIRECT" -> physicalTarget("direct")
             "REJECT" -> physicalTarget("block")
             "direct", "block" -> physicalTarget(requested)
-            else -> current.effectiveRoutingBindings()[requested] ?: physicalTarget(requested)
+            else -> current.groupByTag(requested)?.tag ?: physicalTarget(requested)
         }
         return fallbackRelaySpecs.firstOrNull { it.groupTag == target }
     }

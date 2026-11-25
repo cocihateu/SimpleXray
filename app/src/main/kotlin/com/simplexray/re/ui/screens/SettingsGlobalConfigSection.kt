@@ -22,7 +22,6 @@ import com.simplexray.re.R
 import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.prefs.Preferences
 import com.simplexray.re.ui.scaffold.LocalLayerBackdrop
-import com.simplexray.re.viewmodel.MainViewModel
 import org.json.JSONArray
 import org.json.JSONObject
 import top.yukonga.miuix.kmp.basic.Button
@@ -39,7 +38,7 @@ import top.yukonga.miuix.kmp.preference.SwitchPreference
 private val dnsStrategies = listOf("UseIP", "UseIPv4", "UseIPv6")
 
 @Composable
-internal fun SettingsGlobalConfigSection(mainViewModel: MainViewModel) {
+internal fun SettingsGlobalConfigSection() {
     val context = LocalContext.current
     val store = remember(context) { GlobalConfigStore(context) }
     val prefs = remember(context) { Preferences(context) }
@@ -48,7 +47,12 @@ internal fun SettingsGlobalConfigSection(mainViewModel: MainViewModel) {
     val servers = dns.optJSONArray("servers") ?: JSONArray()
     val hosts = dns.optJSONObject("hosts") ?: JSONObject()
     val bootstrapDns = remember(version) { prefs.dohBootstrapDns }
+    val globalServerIndices = (0 until servers.length()).filter { index ->
+        (servers.optJSONObject(index)?.optJSONArray("domains")?.length() ?: 0) == 0
+    }
     var editBootstrapDns by remember { mutableStateOf(false) }
+    var showGlobalDns by remember { mutableStateOf(false) }
+    var editingGlobalServer by remember { mutableStateOf(false) }
     var serverIndex by remember { mutableStateOf<Int?>(null) }
     var hostName by remember { mutableStateOf<String?>(null) }
     SmallTitle("DNS")
@@ -58,18 +62,24 @@ internal fun SettingsGlobalConfigSection(mainViewModel: MainViewModel) {
             onSelectedIndexChange = { index -> store.updateDns { it.put("queryStrategy", dnsStrategies[index]) } })
         ArrowPreference(title = "DoH 引导 DNS", summary = bootstrapDns,
             onClick = { editBootstrapDns = true })
+        ArrowPreference(title = "全局 DNS",
+            summary = globalServerIndices.joinToString(" · ") { index ->
+                servers.optJSONObject(index)?.optString("address") ?: servers.getString(index)
+            }.ifBlank { "设置默认解析服务器" },
+            onClick = { showGlobalDns = true })
     }
-    SmallTitle("服务器 · servers")
+    SmallTitle("分流 DNS 服务器")
     Card(Modifier.fillMaxWidth()) {
         for (index in 0 until servers.length()) {
+            if (index in globalServerIndices) continue
             val value = servers.get(index)
             val server = value as? JSONObject
             ArrowPreference(title = server?.optString("address") ?: value.toString(),
-                summary = server?.optString("queryStrategy")?.ifBlank { "跟随全局解析策略" }
-                    ?: "跟随全局解析策略",
-                onClick = { serverIndex = index })
+                summary = dnsLines(server?.opt("domains")).replace("\n", " · "),
+                onClick = { editingGlobalServer = false; serverIndex = index })
         }
-        ArrowPreference(title = "添加 DNS 服务器", onClick = { serverIndex = servers.length() })
+        ArrowPreference(title = "添加分流 DNS 服务器",
+            onClick = { editingGlobalServer = false; serverIndex = servers.length() })
     }
     SmallTitle("静态映射 · hosts")
     Card(Modifier.fillMaxWidth()) {
@@ -79,8 +89,13 @@ internal fun SettingsGlobalConfigSection(mainViewModel: MainViewModel) {
         }
         ArrowPreference(title = "添加 hosts 映射", onClick = { hostName = "" })
     }
+    if (showGlobalDns) {
+        GlobalDnsSheet(servers, globalServerIndices,
+            onEdit = { index -> editingGlobalServer = true; serverIndex = index },
+            onDismiss = { showGlobalDns = false })
+    }
     serverIndex?.let { index ->
-        DnsServerSheet(servers.opt(index), onSave = { value ->
+        DnsServerSheet(servers.opt(index), globalDns = editingGlobalServer, onSave = { value ->
             store.updateDns { current ->
                 val entries = current.optJSONArray("servers") ?: JSONArray()
                 entries.put(index, value)
@@ -110,6 +125,39 @@ internal fun SettingsGlobalConfigSection(mainViewModel: MainViewModel) {
 }
 
 @Composable
+private fun GlobalDnsSheet(
+    servers: JSONArray,
+    indices: List<Int>,
+    onEdit: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var visible by remember { mutableStateOf(true) }
+    var selectedIndex by remember { mutableStateOf<Int?>(null) }
+    GlassBottomSheet(show = visible, backdrop = LocalLayerBackdrop.current, title = "全局 DNS",
+        onDismissRequest = { visible = false }, onDismissFinished = {
+            onDismiss()
+            selectedIndex?.let(onEdit)
+        }) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("用于默认解析；按域名分流请配置分流 DNS 服务器")
+            Card(Modifier.fillMaxWidth()) {
+                indices.forEach { index ->
+                    val server = servers.optJSONObject(index)
+                    ArrowPreference(
+                        title = server?.optString("address") ?: servers.getString(index),
+                        summary = server?.optString("queryStrategy")?.ifBlank { "跟随全局解析策略" }
+                            ?: "跟随全局解析策略",
+                        onClick = { selectedIndex = index; visible = false })
+                }
+                ArrowPreference(title = "添加全局 DNS",
+                    onClick = { selectedIndex = servers.length(); visible = false })
+            }
+        }
+    }
+}
+
+@Composable
 private fun DnsBootstrapSheet(
     original: String,
     onSave: (String) -> Unit,
@@ -120,7 +168,7 @@ private fun DnsBootstrapSheet(
     GlassBottomSheet(show = visible, backdrop = LocalLayerBackdrop.current, title = "DoH 引导 DNS",
         onDismissRequest = { visible = false }, onDismissFinished = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("用于解析 DoH 服务器域名，默认 223.5.5.5。保存后应用到运行中的核心。")
+            Text("解析 DoH 服务器域名，默认 223.5.5.5；保存后自动重启运行中的内核")
             TextField(address, { address = it }, label = "DNS IP 地址", modifier = Modifier.fillMaxWidth())
             Button(onClick = { onSave(address.trim()); visible = false }, enabled = address.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColorsPrimary()) { Text("保存") }
@@ -131,6 +179,7 @@ private fun DnsBootstrapSheet(
 @Composable
 private fun DnsServerSheet(
     original: Any?,
+    globalDns: Boolean,
     onSave: (Any) -> Unit,
     onDelete: (() -> Unit)?,
     onDismiss: () -> Unit,
@@ -145,7 +194,8 @@ private fun DnsServerSheet(
     var skipFallback by remember { mutableStateOf(originalObject?.optBoolean("skipFallback") == true) }
     var visible by remember { mutableStateOf(true) }
     val strategies = listOf("") + dnsStrategies
-    GlassBottomSheet(show = visible, backdrop = LocalLayerBackdrop.current, title = "DNS 服务器",
+    GlassBottomSheet(show = visible, backdrop = LocalLayerBackdrop.current,
+        title = if (globalDns) "全局 DNS" else "分流 DNS 服务器",
         onDismissRequest = { visible = false }, onDismissFinished = onDismiss) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -156,10 +206,14 @@ private fun DnsServerSheet(
                 OverlayDropdownPreference(title = "解析策略", items = strategies.map { it.ifBlank { "跟随全局" } },
                     selectedIndex = strategies.indexOf(strategy).coerceAtLeast(0),
                     onSelectedIndexChange = { strategy = strategies[it] })
-                SwitchPreference(title = "仅处理匹配域名", summary = stringResource(R.string.dns_skip_fallback_summary),
-                    checked = skipFallback, onCheckedChange = { skipFallback = it })
+                if (globalDns == false) {
+                    SwitchPreference(title = "仅处理匹配域名", summary = stringResource(R.string.dns_skip_fallback_summary),
+                        checked = skipFallback, onCheckedChange = { skipFallback = it })
+                }
             }
-            TextField(domains, { domains = it }, label = "匹配域名 · 每行一条", modifier = Modifier.fillMaxWidth())
+            if (globalDns == false) {
+                TextField(domains, { domains = it }, label = "匹配域名 · 每行一条", modifier = Modifier.fillMaxWidth())
+            }
             TextField(expectIPs, { expectIPs = it }, label = "期望 IP · 每行一条", modifier = Modifier.fillMaxWidth())
             TextField(clientIp, { clientIp = it }, label = "客户端 IP · 可留空", modifier = Modifier.fillMaxWidth())
             Button(onClick = {

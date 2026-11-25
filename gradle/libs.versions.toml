@@ -7,24 +7,17 @@ gradleVersionsPlugin = "0.67.0"
 protoc = "4.36.2"
 grpc = "1.85.1"
 grpcGenJava = "1.85.1"
-grpcKotlin = "1.5.0"
 material = "1.14.0"
-datastorePreferences = "1.3.0"
 coreKtx = "1.19.1"
 composeBom = "2026.09.00"
 navigationCompose = "2.10.2"
 navigationevent = "1.2.0"
-lazyColumnScrollbar = "3.0.0"
-reorderable = "3.1.0"
 okhttp = "5.5.1"
 junit = "4.13.2"
 orgJson = "20231013"
 work = "2.12.0"
 
 [libraries]
-# Plugins for buildscript
-android-gradle-plugin = { module = "com.android.tools.build:gradle", version.ref = "agp" }
-kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
 
 # Protobuf & gRPC
@@ -34,11 +27,9 @@ grpc-gen-java = { module = "io.grpc:protoc-gen-grpc-java", version.ref = "grpcGe
 grpc-okhttp = { module = "io.grpc:grpc-okhttp", version.ref = "grpc" }
 grpc-protobuf = { module = "io.grpc:grpc-protobuf", version.ref = "grpc" }
 grpc-stub = { module = "io.grpc:grpc-stub", version.ref = "grpc" }
-grpc-kotlin-stub = { module = "io.grpc:grpc-kotlin-stub", version.ref = "grpcKotlin" }
 
 # AndroidX & Material
 material = { module = "com.google.android.material:material", version.ref = "material" }
-androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastorePreferences" }
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
 androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 
@@ -48,7 +39,6 @@ androidx-compose-ui = { module = "androidx.compose.ui:ui" }
 androidx-compose-ui-graphics = { module = "androidx.compose.ui:ui-graphics" }
 androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
 androidx-compose-material-icons-core = { module = "androidx.compose.material:material-icons-core" }
-androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview-android" }
 androidx-compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
 androidx-compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
 androidx-test-ext-junit = { module = "androidx.test.ext:junit", version = "1.3.0" }
@@ -58,8 +48,6 @@ androidx-navigation-compose = { module = "androidx.navigation:navigation-compose
 androidx-navigationevent = { module = "androidx.navigationevent:navigationevent-compose", version.ref = "navigationevent" }
 
 # UI Components & Networking
-lazycolumnscrollbar = { module = "com.github.nanihadesuka.LazyColumnScrollbar:lazycolumnscrollbar-android", version.ref = "lazyColumnScrollbar" }
-reorderable = { module = "sh.calvin.reorderable:reorderable", version.ref = "reorderable" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 yaml = { module = "org.yaml:snakeyaml", version = "2.7" }
 junit = { module = "junit:junit", version.ref = "junit" }
@@ -71,11 +59,8 @@ miuix-preference = { module = "top.yukonga.miuix.kmp:miuix-preference" }
 miuix-blur = { module = "top.yukonga.miuix.kmp:miuix-blur" }
 miuix-squircle = { module = "top.yukonga.miuix.kmp:miuix-squircle" }
 miuix-icons = { module = "top.yukonga.miuix.kmp:miuix-icons" }
-miuix-nav = { module = "top.yukonga.miuix.kmp:miuix-nav" }
 miuix-material = { module = "top.yukonga.miuix.kmp:miuix-material" }
 miuix-glass = { module = "top.yukonga.miuix.kmp:miuix-glass" }
-miuix-glass-icons = { module = "top.yukonga.miuix.kmp:miuix-glass-icons" }
-scripta-editor = { module = "top.yukonga.scripta:editor" }
 
 
 [plugins]

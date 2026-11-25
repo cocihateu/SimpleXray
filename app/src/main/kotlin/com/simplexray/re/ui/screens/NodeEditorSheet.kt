@@ -99,13 +99,13 @@ internal fun NodeConfigSheet(
                         } else if (advanced) {
                             runCatching { JSONObject(jsonText) }
                                 .onSuccess { outbound = it; advanced = false; error = null }
-                                .onFailure { error = "请先完成 Xray 出站 JSON 编辑" }
+                                .onFailure { error = "请先修正 JSON 格式" }
                         }
                     },
                 )
             }
             if (advanced) {
-                Text("编辑完整 Xray 出站配置。表单配置保留额外字段、服务器、用户及高级参数。",
+                Text("编辑完整 Xray 出站 JSON；表单仅修改对应字段，保留其他参数",
                     style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                 TextField(
                     value = jsonText,
@@ -120,7 +120,7 @@ internal fun NodeConfigSheet(
                     NodeEditorTransport(outbound, edit)
                     NodeEditorSecurity(outbound, edit)
                 } else {
-                    Text("此协议的完整参数通过高级 JSON 编辑。", style = MiuixTheme.textStyles.body2,
+                    Text("请在高级 JSON 中编辑此协议参数", style = MiuixTheme.textStyles.body2,
                         color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                 }
             }

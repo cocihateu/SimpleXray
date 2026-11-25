@@ -53,7 +53,16 @@ internal object VpnBuilderFactory {
             if (prefs.httpProxyEnabled) {
                 val proxyHost = httpProxyEndpoint?.first ?: "127.0.0.1"
                 val proxyPort = httpProxyEndpoint?.second ?: prefs.httpPort
-                setHttpProxy(ProxyInfo.buildDirectProxy(proxyHost, proxyPort))
+                val exclusions = if (prefs.bypassLan) {
+                    buildList {
+                        add("10.*")
+                        add("192.168.*")
+                        add("169.254.*")
+                        (16..31).forEach { add("172.$it.*") }
+                        (64..127).forEach { add("100.$it.*") }
+                    }
+                } else emptyList()
+                setHttpProxy(ProxyInfo.buildDirectProxy(proxyHost, proxyPort, exclusions))
             }
             if (prefs.ipv4) {
                 addAddress(prefs.tunnelIpv4Address, prefs.tunnelIpv4Prefix)

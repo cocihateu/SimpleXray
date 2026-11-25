@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="lan_bypass_routing_help">局域网 IP 流量绕过 VPN，系统 HTTP 代理也排除内网 IPv4；重新连接 VPN 生效，自设代理的应用需单独配置</string>
+</resources>

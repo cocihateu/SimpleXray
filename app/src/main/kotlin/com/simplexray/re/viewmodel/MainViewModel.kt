@@ -14,13 +14,9 @@ import androidx.lifecycle.application
 import androidx.lifecycle.viewModelScope
 import com.simplexray.re.R
 import com.simplexray.re.common.ColorMode
-import com.simplexray.re.common.ConfigUtils
 import com.simplexray.re.common.SocksAuthenticatorInstaller
 import com.simplexray.re.common.ROUTE_APP_LIST
 import com.simplexray.re.common.ThemeMode
-import com.simplexray.re.common.config.GroupProfile
-import com.simplexray.re.common.config.GlobalConfigStore
-import com.simplexray.re.common.config.GlobalConfigSummary
 import com.simplexray.re.common.config.GroupMemberRef
 import com.simplexray.re.common.config.GroupWorkspace
 import com.simplexray.re.common.config.ProxyGroup
@@ -31,19 +27,11 @@ import com.simplexray.re.service.FallbackRuntimeInfo
 import com.simplexray.re.service.VpnRunningState
 import com.simplexray.re.service.VpnStateHub
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
-import java.io.File
-import kotlin.coroutines.cancellation.CancellationException
 
 private const val TAG = "MainViewModel"
 
@@ -51,7 +39,6 @@ sealed class MainViewUiEvent {
     data class ShowSnackbar(val message: String) : MainViewUiEvent()
     data class ShareLauncher(val intent: Intent) : MainViewUiEvent()
     data class StartService(val intent: Intent) : MainViewUiEvent()
-    data object RefreshConfigList : MainViewUiEvent()
     data class Navigate(val route: String) : MainViewUiEvent()
 }
 
@@ -59,17 +46,6 @@ class MainViewModel(application: Application) :
     AndroidViewModel(application) {
     val prefs: Preferences = Preferences(application)
     private val fileManager: FileManager = FileManager(application, prefs)
-
-    private val configFileController: ConfigFileController = ConfigFileController(
-        application,
-        prefs,
-        fileManager,
-        viewModelScope,
-        { isVpnEnabled() },
-        { _uiEvent.trySend(it) },
-        { file -> settingsController.syncSocksCredentialsFromConfig(file?.absolutePath) },
-        { dashboardController.refreshConfig() },
-    )
 
     private val settingsController by lazy {
         SettingsController(
@@ -79,21 +55,6 @@ class MainViewModel(application: Application) :
             viewModelScope,
             { isVpnEnabled() },
             { message -> showSnackbar(message) },
-        )
-    }
-
-    private val mihomoSubscriptionController by lazy {
-        MihomoSubscriptionController(
-            application,
-            prefs,
-            fileManager,
-            viewModelScope,
-            configFileController.selectedConfigFile,
-            { isVpnEnabled() },
-            { file ->
-                configFileController.updateSelectedConfigFile(file)
-                configFileController.refreshConfigFileList()
-            },
         )
     }
 
@@ -128,7 +89,6 @@ class MainViewModel(application: Application) :
         application,
         prefs,
         viewModelScope,
-        configFileController.selectedConfigFile,
         { isVpnEnabled() },
     )
     private val exitInfoController = ExitInfoController(viewModelScope)
@@ -139,7 +99,6 @@ class MainViewModel(application: Application) :
         application = application,
         scope = viewModelScope,
         onGlobalConfigUpdated = { path -> settingsController.syncSocksCredentialsFromConfig(path) },
-        onEditFile = { path -> configFileController.editConfig(path) },
         showMessage = { message -> showSnackbar(message) },
     )
 
@@ -148,36 +107,17 @@ class MainViewModel(application: Application) :
             application,
             prefs,
             viewModelScope,
-            configFileController.selectedConfigFile,
             { _uiEvent.trySend(it) },
         )
     }
 
     private fun isVpnEnabled(): Boolean = vpnServiceController.isServiceEnabled.value
 
-    var editingFilePath: String?
-        get() = configFileController.editingFilePath
-        set(value) {
-            configFileController.editingFilePath = value
-        }
-
     val settingsState: StateFlow<SettingsState>
         get() = settingsController.settingsState
 
     val coreStatsState: StateFlow<CoreStatsState>
         get() = dashboardController.coreStatsState
-
-    val outboundNodes: StateFlow<List<ConfigUtils.OutboundInfo>>
-        get() = dashboardController.outboundNodes
-
-    val outboundLoadError: StateFlow<String?>
-        get() = dashboardController.outboundLoadError
-
-    val outboundLatency: StateFlow<Map<String, OutboundLatency>>
-        get() = dashboardController.outboundLatency
-
-    val groupProfile: StateFlow<GroupProfile>
-        get() = dashboardController.groupProfile
 
     val activeGroupNodes: StateFlow<Map<String, String>>
         get() = dashboardController.activeGroupNodes
@@ -187,6 +127,9 @@ class MainViewModel(application: Application) :
 
     var settingsCategory by mutableStateOf(0)
     var selectedProxyGroupTag by mutableStateOf("")
+    var selectedConfigurationGroupTag by mutableStateOf(prefs.selectedConfigurationGroupTag)
+        private set
+    var configurationPageAction by mutableStateOf<String?>(null)
     var proxyPageAction by mutableStateOf<String?>(null)
     var createGroupRequested by mutableStateOf(false)
     val proxyLatency get() = dashboardController.proxyLatency
@@ -200,13 +143,9 @@ class MainViewModel(application: Application) :
     fun deleteTrafficRule(id: String) { trafficRulesController.delete(id) }
     fun moveTrafficRule(id: String, delta: Int) { trafficRulesController.move(id, delta) }
     val ruleTransferMessage get() = trafficRulesController.message
-    fun clearRuleTransferMessage() { trafficRulesController.clearMessage() }
     fun importTrafficRules(uri: Uri) { trafficRulesController.importRules(uri) }
     fun exportTrafficRules(uri: Uri) { trafficRulesController.exportRules(uri) }
     fun reorderTrafficRules(ids: List<String>) { trafficRulesController.reorderRules(ids) }
-
-    val globalConfigSummary: StateFlow<GlobalConfigSummary>
-        get() = workspaceController.globalSummary
 
     val fallbackRuntimeStates: StateFlow<Map<String, FallbackRuntimeInfo>>
         get() = workspaceController.fallbackStates
@@ -229,15 +168,6 @@ class MainViewModel(application: Application) :
     fun showSnackbar(message: String) {
         _uiEvent.trySend(MainViewUiEvent.ShowSnackbar(message))
     }
-
-    val configFiles: StateFlow<List<File>>
-        get() = configFileController.configFiles
-
-    val selectedConfigFile: StateFlow<File?>
-        get() = configFileController.selectedConfigFile
-
-    val mihomoSubscriptionState: StateFlow<MihomoSubscriptionState>
-        get() = mihomoSubscriptionController.state
 
     val geoipDownloadProgress: StateFlow<String?>
         get() = ruleFileController.geoipDownloadProgress
@@ -306,7 +236,6 @@ class MainViewModel(application: Application) :
                 }
                 launch {
                     updateSettingsState()
-                    refreshConfigFileList()
                     loadKernelVersion()
                 }
             }
@@ -335,53 +264,53 @@ class MainViewModel(application: Application) :
 
 
 
-    suspend fun createConfigFile(): String? = configFileController.createConfigFile()
-
     suspend fun updateCoreStats() = dashboardController.updateCoreStats()
 
-    /**
-     * Refreshes the outbound node list from the currently selected config file.
-     * Works whether or not the service is running.
-     */
-    suspend fun refreshOutboundNodes() = dashboardController.refreshOutboundNodes()
+    fun saveWorkspaceGroup(originalTag: String?, group: ProxyGroup): String? {
+        val error = workspaceController.saveGroup(originalTag, group)
+        if (error == null && originalTag == selectedConfigurationGroupTag) {
+            selectConfigurationGroup(group.tag)
+        }
+        return error
+    }
 
-    fun saveGroupProfile(profile: GroupProfile) = dashboardController.saveGroupProfile(profile)
+    fun selectConfigurationGroup(tag: String) {
+        selectedConfigurationGroupTag = tag
+        prefs.selectedConfigurationGroupTag = tag
+    }
 
-    fun saveWorkspaceGroup(originalTag: String?, group: ProxyGroup): String? =
-        workspaceController.saveGroup(originalTag, group)
+    fun configurationImportTarget(): String =
+        workspaceController.resolveConfigurationImportGroup(selectedConfigurationGroupTag).also(::selectConfigurationGroup)
 
-    fun deleteWorkspaceGroup(tag: String) = workspaceController.deleteGroup(tag)
+    fun moveConfigurationGroup(tag: String, delta: Int) = workspaceController.moveConfigurationGroup(tag, delta)
+
+    fun deleteWorkspaceGroup(tag: String) {
+        if (selectedConfigurationGroupTag == tag) {
+            selectConfigurationGroup(groupWorkspace.value.groups.firstOrNull { it.tag != tag }?.tag.orEmpty())
+        }
+        workspaceController.deleteGroup(tag)
+    }
 
     fun setDefaultWorkspaceGroup(tag: String) = workspaceController.setDefaultGroup(tag)
 
     fun setRoutingMode(mode: String) = workspaceController.setRoutingMode(mode)
 
-    fun importFromClipboardToGroup(groupTag: String) = workspaceController.importFromClipboardToGroup(groupTag)
+    fun importFromClipboardToGroup(groupTag: String) {
+        val target = workspaceController.resolveConfigurationImportGroup(groupTag)
+        selectConfigurationGroup(target)
+        workspaceController.importFromClipboardToGroup(target)
+    }
 
-    fun importFromUriToGroup(groupTag: String, uri: Uri) = workspaceController.importFromUriToGroup(groupTag, uri)
+    fun importFromUriToGroup(groupTag: String, uri: Uri) {
+        val target = workspaceController.resolveConfigurationImportGroup(groupTag)
+        selectConfigurationGroup(target)
+        workspaceController.importFromUriToGroup(target, uri)
+    }
 
     fun refreshSubscriptionGroup(groupTag: String) = workspaceController.refreshSubscriptionGroup(groupTag)
 
-    fun importGlobalConfigFromUri(uri: Uri) = workspaceController.importGlobalConfigFromUri(uri)
-
-    fun openGlobalConfigEditor() = workspaceController.openGlobalConfigEditor()
-
-    fun openLuaScriptEditor(fileName: String) = workspaceController.openLuaScriptEditor(fileName)
-
     fun selectGroupMember(groupTag: String, member: GroupMemberRef) =
         workspaceController.selectGroupMember(groupTag, member)
-
-    fun removeMemberFromGroup(groupTag: String, member: GroupMemberRef) =
-        workspaceController.removeMemberFromGroup(groupTag, member)
-
-    fun moveMemberInGroup(groupTag: String, index: Int, delta: Int) =
-        workspaceController.moveMemberInGroup(groupTag, index, delta)
-
-    fun addMemberRefToGroup(groupTag: String, member: GroupMemberRef): String? =
-        workspaceController.addMemberRefToGroup(groupTag, member)
-
-    fun updateNodeTargetStrategy(nodeTag: String, strategy: String) =
-        workspaceController.updateNodeTargetStrategy(nodeTag, strategy)
 
     fun updateNodeJson(nodeTag: String, rawJson: String, udpOverTcpVersion: Int? = null,
         obfsMode: String? = null, obfsHost: String? = null): String? =
@@ -391,25 +320,6 @@ class MainViewModel(application: Application) :
         workspaceController.addNodeToGroup(groupTag, rawJson)
 
     fun deleteWorkspaceNode(nodeTag: String) = workspaceController.deleteNode(nodeTag)
-
-    /**
-     * Latency-tests every TCP-capable outbound endpoint (1-RTT TCP connect,
-     * independent of the core). Called when the dashboard is shown and on
-     * manual refresh. UDP-only protocols (wireguard/hysteria2) and QUIC
-     * transports are skipped and keep showing no data.
-     */
-    suspend fun testOutboundLatency() = dashboardController.testOutboundLatency()
-
-    /** Non-suspend wrapper for UI callbacks (e.g. the dashboard refresh button). */
-    fun refreshLatency() = dashboardController.refreshLatency()
-
-    suspend fun importConfigFromClipboard(): String? = configFileController.importConfigFromClipboard()
-
-    fun importMihomoSubscriptionUrl(url: String) = mihomoSubscriptionController.importUrl(url)
-
-    fun importMihomoSubscriptionFile(uri: Uri) = mihomoSubscriptionController.importFile(uri)
-
-    fun deleteConfigFile(file: File) = configFileController.deleteConfigFile(file)
 
     fun extractAssetsIfNeeded() = ruleFileController.extractAssetsIfNeeded()
 
@@ -459,9 +369,15 @@ class MainViewModel(application: Application) :
 
     fun startTProxyService(action: String) = vpnServiceController.startTProxyService(action)
 
-    fun editConfig(filePath: String) = configFileController.editConfig(filePath)
-
-    fun shareIntent(chooserIntent: Intent, packageManager: PackageManager) = configFileController.shareIntent(chooserIntent, packageManager)
+    fun shareIntent(chooserIntent: Intent, packageManager: PackageManager) {
+        viewModelScope.launch {
+            if (chooserIntent.resolveActivity(packageManager) != null) {
+                _uiEvent.trySend(MainViewUiEvent.ShareLauncher(chooserIntent))
+            } else {
+                showSnackbar(application.getString(R.string.no_app_for_export))
+            }
+        }
+    }
 
     fun stopTProxyService() = vpnServiceController.stopTProxyService()
 
@@ -472,30 +388,6 @@ class MainViewModel(application: Application) :
             _uiEvent.trySend(MainViewUiEvent.Navigate(ROUTE_APP_LIST))
         }
     }
-
-    fun moveConfigFile(fromIndex: Int, toIndex: Int) = configFileController.moveConfigFile(fromIndex, toIndex)
-
-    fun persistConfigFilesOrder() = configFileController.persistConfigFilesOrder()
-
-
-
-    fun importConfigFromFile(uri: android.net.Uri) = configFileController.importConfigFromFile(uri)
-
-    fun replaceConfigFile(uri: android.net.Uri, targetFile: java.io.File) = configFileController.replaceConfigFile(uri, targetFile)
-
-    fun refreshConfigFileList() = configFileController.refreshConfigFileList()
-
-    fun onConfigEditFinished(savedSelectedConfig: Boolean) {
-        refreshConfigFileList()
-        refreshLuaScriptFiles()
-        settingsController.syncSocksCredentialsFromConfig(GlobalConfigStore(application).file().absolutePath)
-        if (savedSelectedConfig && isVpnEnabled()) {
-            startTProxyService(com.simplexray.re.service.TProxyService.ACTION_RELOAD_CONFIG)
-            showSnackbar(application.getString(R.string.config_edited_service_running))
-        }
-    }
-
-    fun updateSelectedConfigFile(file: File?) = configFileController.updateSelectedConfigFile(file)
 
     fun restoreDefaultGeoip(callback: () -> Unit) = ruleFileController.restoreDefaultGeoip(callback)
 
@@ -524,18 +416,6 @@ class MainViewModel(application: Application) :
     fun deleteCustomDatFile(fileName: String) = ruleFileController.deleteCustomDatFile(fileName)
 
     fun updateCustomDatUrl(fileName: String, url: String) = ruleFileController.updateCustomDatUrl(fileName, url)
-
-    val luaScriptVersion: StateFlow<Long>
-        get() = ruleFileController.luaScriptVersion
-
-    fun refreshLuaScriptFiles() = ruleFileController.refreshLuaScriptFiles()
-
-    fun importLuaFile(uri: android.net.Uri, targetFileName: String? = null) =
-        ruleFileController.importLuaFile(uri, targetFileName)
-
-    fun getLuaFileSummary(fileName: String): String = ruleFileController.getLuaFileSummary(fileName)
-
-    fun deleteLuaFile(fileName: String) = ruleFileController.deleteLuaFile(fileName)
 
     fun checkForUpdates() = updateController.checkForUpdates()
 

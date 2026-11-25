@@ -1,22 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Non-translatable Base Configurations -->
-    <string name="app_name" translatable="false">SimpleXray Groups</string>
+    <string name="app_name" translatable="false">LucX</string>
     <string name="source_url" translatable="false">https://github.com/ReRokutosei/SimpleXray</string>
     <string name="geoip_url" translatable="false">https://github.com/XTLS/Xray-rules-dat/releases/latest/download/geoip-lite.dat.gz</string>
     <string name="geosite_url" translatable="false">https://github.com/XTLS/Xray-rules-dat/releases/latest/download/geosite.dat.gz</string>
 
     <!-- SOCKS Local Inbound Settings -->
     <string name="socks_address">SOCKS Inbound Address</string>
-    <string name="socks_address_summary">Listening IP address for Xray\'s local SOCKS5 proxy</string>
-    <string name="socks_address_summary_socks_tunnel">Listening IP address for TUN forwarding and Xray\'s local SOCKS5 proxy</string>
+    <string name="socks_address_summary">Local SOCKS5 listening IP; loopback addresses only</string>
+    <string name="socks_address_summary_socks_tunnel">Local SOCKS5 listening IP used by TUN forwarding; loopback only</string>
     <string name="socks_port">SOCKS Inbound Port</string>
-    <string name="socks_port_summary">Listening port for Xray\'s local SOCKS5 proxy (automatically synchronized with the Xray configuration)</string>
-    <string name="socks_port_summary_socks_tunnel">Listening port for TUN forwarding and Xray\'s local SOCKS5 proxy (automatically synchronized with the Xray configuration)</string>
+    <string name="socks_port_summary">Local SOCKS5 listening port: 1025–65535</string>
+    <string name="socks_port_summary_socks_tunnel">Local SOCKS5 port used by TUN forwarding: 1025–65535</string>
     <string name="socks_user">SOCKS Username</string>
-    <string name="socks_user_summary">Optional username required for local SOCKS5 authentication</string>
+    <string name="socks_user_summary">Local SOCKS5 username; set with the password or leave both empty</string>
     <string name="socks_pass">SOCKS Password</string>
-    <string name="socks_pass_summary">Optional password required for local SOCKS5 authentication</string>
+    <string name="socks_pass_summary">Local SOCKS5 password; set with the username or leave both empty</string>
     <string name="socks_address_loopback_only">SOCKS inbound address must be a loopback address (127.0.0.0/8 or ::1)</string>
     <string name="socks_settings_restart_notice">SOCKS settings changed. Restart the service to apply.</string>
     <string name="socks_credentials_pair_required">Username and password must be set together or both left empty</string>
@@ -26,38 +26,29 @@
     <string name="socks_credentials_synced">Adopted SOCKS credentials from the selected config</string>
 
     <!-- TUN Network & DNS Settings -->
-    <string name="tun_dns_managed_summary">DNS queries are handled by global DNS / DoH.</string>
-    <string name="global_dns_parallel_summary">Global DNS / DoH handles system queries. Native DNS queries matching upstreams with the same policy concurrently and uses the first successful, valid response.</string>
-    <string name="global_dns_help">System DNS queries on UDP/TCP port 53 follow: app → TUN → global DNS / DoH and routing → outbound. Configure all upstreams on this page.\n\nNative Xray DNS handles A / AAAA queries; other query types receive empty responses.\n\nMatching upstreams with the same domain policy query concurrently. The first successful, valid response is used, with domain matching and expected IP policies preserved.\n\nExplicit DNS scripts retain their own dispatch.\n\nEncrypted DoH / DoT queries made by an app continue to use that app\'s chosen DNS service.</string>
     <string name="dns_skip_fallback_summary">skipFallback: On limits queries to matched domains; off also allows general queries and native parallel resolution.</string>
     <string name="ipv6">IPv6 Support</string>
-    <string name="ipv6_summary">Enable IPv6 routing and the IPv6 protocol stack for the system VPN interface</string>
+    <string name="ipv6_summary">Enable IPv6 for the VPN; applies on the next connection</string>
     <string name="disable_vpn_title">Disable VPN Interface</string>
-    <string name="disable_vpn_summary">When enabled, only the core will start; the VPN interface will not be created.</string>
+    <string name="disable_vpn_summary">Run only the core, without a VPN interface; restart the service to apply</string>
     <string name="http_proxy_title">HTTP Proxy</string>
-    <string name="http_proxy_summary">Register a system-wide HTTP proxy at 127.0.0.1:10809. Usually keep this disabled in TUN mode; enabling it may help some applications that do not support TUN.</string>
+    <string name="http_proxy_summary">Set a local HTTP proxy for VPN apps that use the system proxy; reconnect the VPN to apply</string>
     <string name="bypass_lan_title">Bypass LAN</string>
-    <string name="bypass_lan_help">When enabled, traffic destined for local private networks (e.g. 10.x, 192.168.x, router admin consoles, local NAS) bypasses the proxy for direct connection. When disabled, all LAN traffic is routed through the proxy.\n\nNote: If the active configuration uses a Lua routing script (routing.script), the app skips automatic kernel rule injection to prevent configuration conflicts.</string>
     <string name="tunnel_mode_title">TUN Transport Mode</string>
     <string name="tunnel_mode_xray_tun">Xray TUN</string>
-    <string name="tunnel_mode_xray_tun_summary">Use Xray\'s native TUN inbound to process VPN packets directly</string>
+    <string name="tunnel_mode_xray_tun_summary">Process VPN traffic directly through Xray\'s native TUN</string>
     <string name="tunnel_mode_hev_socks5">Hev TUN</string>
-    <string name="tunnel_mode_hev_socks5_summary">Use Hev SOCKS5 Tunnel to forward VPN traffic to Xray</string>
+    <string name="tunnel_mode_hev_socks5_summary">Forward VPN traffic to Xray through SOCKS5</string>
     <string name="tunnel_mode_simpletun">Simple TUN</string>
-    <string name="tunnel_mode_simpletun_summary">Use lightweight protocol shifter to forward VPN traffic to Xray</string>
+    <string name="tunnel_mode_simpletun_summary">Forward VPN traffic through SOCKS5; IPv4 only, with MTU fixed at 1500</string>
     <string name="tunnel_mtu_title">TUN Interface MTU</string>
-    <string name="tunnel_mtu_summary">Maximum transmission unit for system VPN interface. Valid range: 1280 to 9000 (default: 1500)</string>
+    <string name="tunnel_mtu_summary">VPN MTU: 1280–9000 bytes, default 1500; reconnect the VPN to apply</string>
     <string name="invalid_mtu">MTU must be an integer between 1280 and 9000</string>
 
     <!-- General Settings & Preferences -->
     <string name="general">General</string>
-    <string name="settings">Settings</string>
-    <string name="core_control">Core Control</string>
-    <string name="access_log_title">Access Log</string>
-    <string name="error_log_title">Error Log</string>
     <string name="app_log_level_title">App log saving level</string>
-    <string name="dns_log_title">DNS Log</string>
-    <string name="loglevel_summary">App level controls saving new logs. Auto follows the global configuration, defaulting to Warning; Warning saves warnings and errors, and None pauses saving. Saved logs remain available after core shutdown.\nThe dashboard chooses its display level independently. Changing either level, opening or closing the log page, and browser reconnects preserve the running core and business connections.\nThe core continuously produces detailed logs so Debug is available immediately. Warning primarily reduces file writes; detailed log generation still uses processing resources.\nAccess and DNS switches apply at the next core start. Local saving also follows the App level.</string>
+    <string name="loglevel_summary">Auto follows global settings (default Warning); Warning saves only warnings and errors; None pauses saving without deleting saved logs.\nLevel changes apply immediately and do not affect zashboard display; the core still generates detailed logs.\nAccess and DNS switches apply on the next core start; saving follows the App level.</string>
     <string name="theme_title">Theme</string>
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>
@@ -68,7 +59,7 @@
 
     <!-- App-based Proxy -->
     <string name="apps_title">App-based Proxy</string>
-    <string name="apps_summary">Select apps to be proxied, otherwise use global mode.</string>
+    <string name="apps_summary">Choose apps to proxy or bypass; no selection includes all apps; reconnect the VPN to apply</string>
     <string name="apps_not_found">No apps found</string>
     <string name="show_system_apps">Show System Apps</string>
     <string name="show_no_internet_apps">Show No-Internet Apps</string>
@@ -79,32 +70,10 @@
     <string name="app_icon">App Icon</string>
 
     <!-- Profile & File Management -->
-    <string name="configuration">Configuration</string>
-    <string name="config">Edit Configuration</string>
-    <string name="content">Content</string>
-    <string name="filename">Filename</string>
-    <string name="config_in_use">Configuration in Use</string>
-    <string name="config_import_service_running">Service is running: the configuration was imported but not switched. Stop the service or select the file manually to switch.</string>
-    <string name="replace_config">Import and Replace</string>
-    <string name="config_replaced_success">%s replaced successfully</string>
-    <string name="config_replace_failed">Failed to replace configuration file</string>
-    <string name="config_replace_service_running">Configuration replaced. Please reload or restart core to apply.</string>
-    <string name="config_edited_service_running">Current configuration changed. Please restart core to apply.</string>
-    <string name="discard_changes_title">Discard Changes</string>
-    <string name="discard_changes_message">You have unsaved changes. Are you sure you want to discard them?</string>
-    <string name="edit">Edit</string>
-    <string name="delete">Delete</string>
     <string name="delete_config">Delete Configuration</string>
     <string name="not_select_config">No configuration selected</string>
-    <string name="no_config_files">No configuration files</string>
     <string name="import_from_clipboard">Import Clipboard</string>
     <string name="import_from_file">Import File</string>
-    <string name="add_config_profile">Add Configuration</string>
-    <string name="create_new_config_title">Create New Configuration</string>
-    <string name="create_new_config_summary">Manually create a blank configuration file</string>
-    <string name="import_from_clipboard_summary">Import a complete configuration (JSON/YAML) from the clipboard</string>
-    <string name="import_from_local_file_title">Import Local File</string>
-    <string name="import_from_local_file_summary">Select a configuration file using the system file manager</string>
     <string name="import_file">Import</string>
     <string name="export">Export</string>
     <string name="export_to_clipboard">Export to Clipboard</string>
@@ -115,47 +84,27 @@
     <string name="rule_file_update_url">Update from URL</string>
     <string name="reset_file">Reset</string>
     <string name="delete_rule_file_title">Delete rule file</string>
-    <string name="delete_rule_file_message">This will restore the default rule file. Are you sure?</string>
+    <string name="delete_rule_file_message">Replace the current rule file with the bundled file, or download from the configured URL if none is bundled</string>
     <string name="restore_default_url">Restore default URL</string>
     <string name="download_from_url_import">Download and Import from URL</string>
-    <string name="standard_geo_file_rejected">This file is a standard GEO resource. Please use the dedicated area above to replace or update it.</string>
+    <string name="standard_geo_file_rejected">Replace or update this GEO file in its row above</string>
     <string name="invalid_dat_url">Unable to determine the file name from this URL</string>
     <string name="rule_file_restore_geoip_success">geoip.dat restored to default</string>
-    <string name="rule_file_restore_download_fallback">File is not bundled; downloading from the configured default URL</string>
+    <string name="rule_file_restore_download_fallback">No bundled file; downloading from the configured URL</string>
     <string name="rule_file_restore_geosite_success">geosite.dat restored to default</string>
 
-    <!-- Lua Scripts Management -->
-    <string name="lua_scripts_category_title">Lua Scripts</string>
-    <string name="delete_lua_file_title">Delete Lua script</string>
-    <string name="delete_lua_file_message">Are you sure you want to delete %1$s?</string>
 
     <string name="icon_flat">Flat</string>
     <string name="icon_lineal">Lineal</string>
     <string name="icon_lineal_color">Lineal Color</string>
 
-    <!-- Core Stats & Dashboard -->
-    <string name="core_stats_title">Dashboard</string>
-    <string name="traffic_info">Traffic Information</string>
-    <string name="outbound_nodes">Outbound Nodes</string>
-    <string name="refresh_latency">Retest Latency</string>
-    <string name="core_runtime_status">Core Runtime Status</string>
-    <string name="stats_uplink">Uplink Traffic</string>
-    <string name="stats_downlink">Downlink Traffic</string>
-    <string name="stats_num_goroutine">Number of Goroutines</string>
-    <string name="stats_num_gc">Number of Garbage Collections</string>
-    <string name="stats_alloc">Memory Allocated</string>
-    <string name="stats_uptime">Uptime</string>
 
     <!-- Common UI Actions & Labels -->
-    <string name="save">Save</string>
-    <string name="undo">Undo</string>
-    <string name="redo">Redo</string>
     <string name="search">Search</string>
     <string name="close_search">Close search</string>
     <string name="clear_search">Clear search</string>
     <string name="clear_logs">Clear Logs</string>
     <string name="logs_cleared">Logs cleared</string>
-    <string name="log">Logs</string>
     <string name="about">About</string>
     <string name="confirm">Confirm</string>
     <string name="cancel">Cancel</string>
@@ -177,25 +126,14 @@
     <string name="no_new_version_available">No new version available</string>
     <string name="failed_to_check_for_updates">Failed to check for updates</string>
     <string name="new_version_available_title">New Version Available</string>
-    <string name="new_version_available_message">A new version (%1$s) is available. Do you want to download it?</string>
+    <string name="new_version_available_message">Open the release page to download version %1$s?</string>
 
     <!-- Validation & System Toasts -->
-    <string name="invalid_config_format">Invalid configuration format</string>
-    <string name="config_save_success">Saved successfully</string>
-    <string name="save_fail">Failed to save</string>
-    <string name="delete_fail">Deletion failed</string>
-    <string name="filename_empty">Filename cannot be empty</string>
-    <string name="filename_invalid">Filename contains invalid characters</string>
-    <string name="filename_already_exists">Filename already exists</string>
-    <string name="invalid_ipv4">Please enter a valid IPv4 address</string>
-    <string name="invalid_ipv6">Please enter a valid IPv6 address</string>
     <string name="invalid_ipv4_or_ipv6">Please enter a valid IPv4/IPv6 address</string>
     <string name="invalid_port">Please enter a valid port number</string>
-    <string name="invalid_port_range">Port number must be between 1024 and 65535</string>
+    <string name="invalid_port_range">SOCKS port must be between 1025 and 65535</string>
     <string name="import_failed">Import failed: No config found on clipboard</string>
-    <string name="unsupported_config_format">Import failed: only JSON / YAML supported</string>
-    <string name="unsupported_dat_format">Import failed: only .dat rule files supported</string>
-    <string name="unsupported_lua_format">Import failed: only .lua script files supported</string>
+    <string name="unsupported_dat_format">Only .dat rule files can be imported</string>
     <string name="core_start_failed">Core failed to start, please check the logs</string>
     <string name="vpn_establish_failed">VPN interface could not be established</string>
     <string name="backend_start_failed">%1$s backend failed to start</string>
@@ -205,7 +143,6 @@
     <string name="no_log_entries">No log entries</string>
     <string name="log_disabled_none">Saving new logs is paused (None)</string>
     <string name="vpn_interface">VPN Interface</string>
-    <string name="create_config_failed">Configuration creation failed</string>
     <string name="no_app_for_export">No app available for export</string>
     <string name="export_failed">Export failed</string>
     <string name="export_success">Export successful</string>
@@ -219,109 +156,36 @@
     <string name="hide_from_recents_title">Hide from Recent Tasks</string>
     <string name="rule_file_validation_failed">Rule file validation failed or corrupted</string>
     <string name="geo_update_interval_title">Auto-update Interval</string>
-    <string name="geo_update_interval_summary">Interval in hours between automatic rule updates. Set to 0 to disable. Valid: 0 or 1–168</string>
     <string name="geo_update_disabled">Disabled</string>
     <string name="geo_last_update_format">Every %1$d hrs | Last updated: %2$s</string>
     <string name="geo_never_updated">Never</string>
-    <string name="geo_update_dialog_supporting_text">Enter 0 to disable auto-update, valid range: 1–168 hours.\nWhen the update interval is reached or when connecting to VPN after exceeding the interval, rule files will be silently downloaded and atomically replaced in the background. If the update fails, existing rule files are kept untouched.</string>
+    <string name="geo_update_dialog_supporting_text">Update rules in the background every 1–168 hours (0 disables), catching up when the VPN connects; failed updates keep existing files</string>
     <string name="geo_update_failed_title">Rule Files Auto-update Failed</string>
     <string name="geo_update_failed_body">Download or validation incomplete; existing rule files were kept.</string>
     <string name="invalid_geo_update_interval">Please enter 0 (disabled) or an integer between 1 and 168</string>
     <string name="notification_permission_title">Notification Permission</string>
-    <string name="notification_permission_summary">To ensure the VPN background service runs reliably and prevent it from being terminated by the system, notification permission is recommended.</string>
+    <string name="notification_permission_summary">Allow notifications to show VPN status and rule update failures</string>
     <string name="local_network_permission_title">Local Network Permission</string>
-    <string name="local_network_permission_summary">To access LAN devices and allow bypass LAN routing rules to function properly on Android 17 and above, local network permission is recommended.</string>
+    <string name="local_network_permission_summary">Allow local network access on Android 17 or later to use LAN devices</string>
     <string name="keep_awake_title">Keep CPU Awake</string>
-    <string name="keep_awake_summary">Acquire a partial wake lock while VPN is connected. Recommended if your device (e.g. HyperOS) freezes connections on screen-off; keep disabled on Pixel/Samsung to save battery.</string>
+    <string name="keep_awake_summary">Keep the CPU awake for up to 10 hours per service start to reduce screen-off disconnects, using more battery; restart the service to apply</string>
     <string name="inbound_settings">Local Inbound</string>
-    <string name="network_settings">Others</string>
     <string name="tunnel_mode_restart_notice">Tunnel mode changed. Please restart core to apply.</string>
     <string name="clash_api_title">Clash API</string>
     <string name="clash_api_enable">Enable Clash API</string>
-    <string name="clash_api_enable_summary">Provide external controller REST API for dashboard apps</string>
+    <string name="clash_api_enable_summary">Let dashboards view status and switch proxies through the local controller</string>
     <string name="clash_api_port">API Port</string>
-    <string name="clash_api_secret">API Secret</string>
     <string name="clash_api_generate_secret">Generate Secret</string>
     <string name="clash_api_secret_copied">Secret copied to clipboard</string>
-    <string name="workspace_routing_targets_title">Routing Rule Aliases</string>
-    <string name="workspace_routing_targets_summary">Aliases routed to this group in Lua scripts and JSON rules</string>
-    <string name="workspace_routing_target_add">Add Alias</string>
-    <string name="workspace_routing_target_hint">e.g. PROXY, OPENAI, MEDIA</string>
-    <string name="workspace_routing_bindings_title">Routing Bindings</string>
-    <string name="workspace_routing_bindings_summary">Active aliases mapped to outbound groups</string>
-    <string name="workspace_node_details">Node Details</string>
-    <string name="workspace_node_actions">Node Actions</string>
-    <string name="workspace_status_waiting_backup">On fallback · waiting for backup response</string>
-    <string name="workspace_status_recovery_countdown">On fallback · primary recovery check in %1$ds</string>
-    <string name="workspace_tunnel_backend_hev_summary">High-throughput C/lwIP tunnel with low power consumption</string>
-    <string name="workspace_active_group_leaf">Active Leaf</string>
-    <string name="workspace_quick_switch_group">Switch Default Group</string>
-    <string name="workspace_test_latencies">Test Latencies</string>
-    <string name="workspace_node_select_hint">Tap node to select</string>
-    <string name="vpn_status_connected">Connected</string>
     <string name="vpn_status_stopped">Stopped</string>
-    <string name="nav_overview">Overview</string>
-    <string name="nav_proxies">Proxies</string>
-    <string name="nav_connections">Connections</string>
-    <string name="nav_profiles">Profiles</string>
-    <string name="nav_rules">Rules</string>
-    <string name="outbound_mode_rule">Rule</string>
-    <string name="outbound_mode_global">Global</string>
-    <string name="outbound_mode_direct">Direct</string>
-    <string name="overview_service_title">Core Service</string>
-    <string name="overview_traffic_title">Traffic &amp; Speed</string>
-    <string name="overview_current_proxy">Current Proxy</string>
-    <string name="overview_active_profile">Active Profile</string>
-    <string name="traffic_uplink_rate">Up Rate</string>
-    <string name="traffic_downlink_rate">Down Rate</string>
-    <string name="traffic_total_up">Total Up</string>
-    <string name="traffic_total_down">Total Down</string>
     <string name="vpn_start">Connect</string>
     <string name="vpn_stop">Disconnect</string>
-    <string name="proxies_test_all">Test Latencies</string>
-    <string name="proxies_add_group">Add Group</string>
-    <string name="proxies_edit_group">Edit Group</string>
-    <string name="proxies_delete_group">Delete Group</string>
-    <string name="proxies_set_default">Set Default Group</string>
-    <string name="proxies_group_name">Group Name</string>
-    <string name="proxies_group_strategy">Strategy</string>
-    <string name="proxies_test_url">Test URL</string>
-    <string name="proxies_import_clipboard">Import from Clipboard</string>
-    <string name="proxies_import_file">Import from File</string>
-    <string name="proxies_refresh_subscription">Refresh Subscription</string>
-    <string name="node_detail_title">Node Details</string>
-    <string name="node_name">Node Name</string>
-    <string name="node_protocol">Protocol</string>
-    <string name="node_json_title">Raw JSON Configuration</string>
-    <string name="node_testing">Testing…</string>
-    <string name="node_timeout">Timeout</string>
-    <string name="connections_title">Connections</string>
-    <string name="connections_count">%1$d Active Connections</string>
-    <string name="connections_empty">No Active Connections</string>
-    <string name="connections_close_all">Close All</string>
-    <string name="connections_close">Close</string>
-    <string name="connections_search_hint">Search Host, IP, Port, Group…</string>
-    <string name="filter_all">All</string>
-    <string name="filter_tcp">TCP</string>
-    <string name="filter_udp">UDP</string>
-    <string name="profiles_title">Profiles</string>
-    <string name="profiles_add_url">Add Subscription</string>
-    <string name="profiles_import_file">Import File</string>
-    <string name="profiles_new_config">New Config</string>
-    <string name="profiles_edit">Edit</string>
-    <string name="profiles_share">Share</string>
-    <string name="profiles_delete">Delete</string>
-    <string name="profiles_in_use">Active</string>
-    <string name="profiles_subscription_url">Subscription URL</string>
-    <string name="profiles_url_hint">https://example.com/sub</string>
-    <string name="profiles_empty">No profiles found</string>
-    <string name="rules_title">Traffic Rules</string>
     <string name="rules_add">Add Rule</string>
     <string name="rules_edit">Edit Rule</string>
     <string name="rules_delete">Delete Rule</string>
     <string name="rules_type">Match Type</string>
     <string name="rules_payload">Payload</string>
-    <string name="rules_target">Target Group</string>
+    <string name="rules_target">Target Outbound</string>
     <string name="rules_empty">No routing rules configured</string>
     <string name="rules_move_up">Move Up</string>
     <string name="rules_move_down">Move Down</string>

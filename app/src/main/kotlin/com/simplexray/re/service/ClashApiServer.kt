@@ -15,7 +15,6 @@ import com.simplexray.re.common.subscription.SubscriptionService
 import com.simplexray.re.data.source.LogFileManager
 import com.simplexray.re.prefs.Preferences
 import com.simplexray.re.prefs.LogLevel
-import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoWSD
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,6 +47,7 @@ internal class ClashApiServer(context: Context) :
     Closeable {
 
     private val appContext: Context = context.applicationContext
+    private val dashboardAssets = ZashboardAssets { path -> appContext.assets.open(path) }
     private val apiPrefs: ClashApiPreferences = ClashApiPreferences(appContext)
     private val workspaceStore: GroupWorkspaceStore = GroupWorkspaceStore(appContext)
     private val ruleStore = RuleWorkspaceStore(appContext)
@@ -58,7 +58,6 @@ internal class ClashApiServer(context: Context) :
     private val activeSockets = CopyOnWriteArrayList<ClashWebSocket>()
 
     private enum class GatewayStatus(private val code: Int, private val label: String) : Response.IStatus {
-        BAD_GATEWAY(502, "Bad Gateway"),
         GATEWAY_TIMEOUT(504, "Gateway Timeout");
         override fun getRequestStatus() = code
         override fun getDescription() = "$code $label"
@@ -158,6 +157,9 @@ internal class ClashApiServer(context: Context) :
         if (session.method == Method.OPTIONS) {
             return buildCorsResponse(Response.Status.OK, MIME_PLAINTEXT, "OK")
         }
+
+        // NanoWSD handles upgrades before serveHttp; only static GET/HEAD bypass API auth.
+        dashboardAssets.serve(session.method, session.uri)?.let { return it }
 
         if (!checkAuthorized(session)) {
             return jsonResponse(Response.Status.UNAUTHORIZED, """{"message":"Unauthorized"}""")
@@ -542,7 +544,6 @@ internal class ClashApiServer(context: Context) :
                     .put("alive", activeTag.isNotEmpty())
                     .put("udp", true)
                     .put("activeLeaf", activeTag)
-                    .put("routingTargets", JSONArray(group.routingTargets))
             )
         }
 

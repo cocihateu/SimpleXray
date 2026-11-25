@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="lan_bypass_routing_help">LAN IP traffic bypasses the VPN; the system HTTP proxy also excludes private IPv4 addresses; reconnect the VPN to apply, and configure apps with their own proxies separately</string>
+</resources>

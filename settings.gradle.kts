@@ -11,7 +11,6 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        maven { url = uri("https://jitpack.io") }
     }
 }
 
@@ -27,15 +26,7 @@ includeBuild("third_party/miuix") {
         substitute(module("top.yukonga.miuix.kmp:miuix-material")).using(project(":miuix-material"))
         substitute(module("top.yukonga.miuix.kmp:miuix-blur")).using(project(":miuix-blur"))
         substitute(module("top.yukonga.miuix.kmp:miuix-glass")).using(project(":miuix-glass"))
-        substitute(module("top.yukonga.miuix.kmp:miuix-glass-icons")).using(project(":miuix-glass-icons"))
         substitute(module("top.yukonga.miuix.kmp:miuix-squircle")).using(project(":miuix-squircle"))
         substitute(module("top.yukonga.miuix.kmp:miuix-icons")).using(project(":miuix-icons"))
-        substitute(module("top.yukonga.miuix.kmp:miuix-nav")).using(project(":miuix-nav"))
-    }
-}
-
-includeBuild("third_party/scripta") {
-    dependencySubstitution {
-        substitute(module("top.yukonga.scripta:editor")).using(project(":editor"))
     }
 }

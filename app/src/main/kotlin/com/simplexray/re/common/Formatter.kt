@@ -10,13 +10,6 @@ fun formatBytes(bytes: Long): String {
     return "%.2f%s".format(bytes / 1024.0.pow(exp), units[exp])
 }
 
-fun formatNumber(count: Long): String {
-    if (count < 1000) return count.toString()
-    val suffix = listOf('K', 'M', 'G', 'T', 'P', 'E')
-    val exp = (ln(count.toDouble()) / ln(1000.0)).toInt().coerceAtMost(suffix.size)
-    return "%.1f%c".format(count / 1000.0.pow(exp), suffix[exp - 1])
-}
-
 fun formatUptime(seconds: Int): String = when {
     seconds < 0 -> "N/A"
     else -> {

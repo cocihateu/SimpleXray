@@ -11,43 +11,60 @@ import okhttp3.Request
 import okhttp3.Response
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 
 internal object HttpLatencyMeasurement {
-    suspend fun measure(client: OkHttpClient, url: String, timeoutMs: Int = 5_000): Long? {
+    // Redirects can be captive portals, and 407/4xx/5xx only prove a proxy or error
+    // server answered. A health endpoint must itself return a successful response.
+    internal fun isHealthyStatus(code: Int): Boolean = code in 200..299
+
+    internal fun boundedTimeoutMs(requested: Int): Long =
+        if (requested <= 0) 5_000L else requested.toLong().coerceAtMost(60_000L)
+
+    suspend fun measure(
+        client: OkHttpClient,
+        url: String,
+        timeoutMs: Int = 5_000,
+        nowElapsedRealtimeMs: () -> Long = SystemClock::elapsedRealtime,
+    ): Long? {
+        val request = try { Request.Builder().url(url).head().build() } catch (_: IllegalArgumentException) { return null }
+        val deadlineMs = boundedTimeoutMs(timeoutMs)
         val pool = ConnectionPool(1, 1, TimeUnit.SECONDS)
         try {
-            var latencyMs = 0L
+            val latencyMs = AtomicLong(-1L)
             val measurementClient = client.newBuilder()
                 .connectionPool(pool)
-                .callTimeout(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
+                .callTimeout(deadlineMs, TimeUnit.MILLISECONDS)
+                .followRedirects(false)
+                .followSslRedirects(false)
+                // Retain the caller's TLS trust manager and hostname verifier unchanged.
                 .addInterceptor { chain ->
-                    // One call retains the node-isolated connection between both HEAD exchanges.
-                    chain.proceed(chain.request()).close()
-                    chain.proceed(chain.request())
-                }
-                .addInterceptor { chain ->
-                    // Measure request writes through response headers after connection setup.
-                    val startedAt = SystemClock.elapsedRealtime()
+                    val startedAt = nowElapsedRealtimeMs()
                     val response = chain.proceed(chain.request())
-                    latencyMs = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(1L)
+                    latencyMs.set((nowElapsedRealtimeMs() - startedAt).coerceAtLeast(1L))
                     response
                 }
                 .build()
-            val request = Request.Builder().url(url).head().build()
-            val deadlineMs = if (timeoutMs == 0) Long.MAX_VALUE else timeoutMs.toLong()
             return withTimeoutOrNull(deadlineMs) {
                 suspendCancellableCoroutine<Long?> { continuation ->
                     val call = measurementClient.newCall(request)
-                    continuation.invokeOnCancellation { call.cancel() }
+                    val completed = AtomicBoolean(false)
+                    continuation.invokeOnCancellation {
+                        completed.set(true)
+                        call.cancel()
+                    }
                     call.enqueue(object : Callback {
                         override fun onFailure(call: Call, e: IOException) {
-                            continuation.resume(null)
+                            if (completed.compareAndSet(false, true)) continuation.resume(null)
                         }
 
                         override fun onResponse(call: Call, response: Response) {
                             response.use {
-                                continuation.resume(if (it.code in 200..399) latencyMs else null)
+                                val result = latencyMs.get().takeIf { it > 0L && isHealthyStatus(response.code) }
+                                // A late response is still closed, even if cancellation won.
+                                if (completed.compareAndSet(false, true)) continuation.resume(result)
                             }
                         }
                     })

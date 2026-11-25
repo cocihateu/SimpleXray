@@ -30,11 +30,6 @@ internal object ConfigCodec {
         }
     }
 
-    fun parseError(content: String): String? =
-        parseOrThrow(content).exceptionOrNull()?.let { e ->
-            e.message?.trim()?.takeIf { it.isNotEmpty() } ?: e.javaClass.simpleName
-        }
-
     private fun toJSONObject(map: Map<*, *>): JSONObject {
         val json = JSONObject()
         for ((key, value) in map) {
@@ -63,5 +58,4 @@ internal object ConfigCodec {
         }
     }
 
-    fun isValid(content: String): Boolean = parse(content) != null
 }

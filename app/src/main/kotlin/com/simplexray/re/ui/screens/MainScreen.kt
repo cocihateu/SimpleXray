@@ -6,7 +6,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -19,15 +18,10 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.application
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
-import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.simplexray.re.R
 import com.simplexray.re.common.NAVIGATION_DEBOUNCE_DELAY
 import com.simplexray.re.common.PERMISSION_ACCESS_LOCAL_NETWORK
-import com.simplexray.re.common.ROUTE_CONFIG
-import com.simplexray.re.common.ROUTE_LOG
-import com.simplexray.re.common.ROUTE_SETTINGS
-import com.simplexray.re.common.ROUTE_STATS
 import com.simplexray.re.common.rememberMainScreenCallbacks
 import com.simplexray.re.common.rememberMainScreenLaunchers
 import com.simplexray.re.ui.components.ConfirmOverlayDialog
@@ -141,10 +135,6 @@ fun MainScreen(
                     mainViewModel.application.startService(event.intent)
                 }
 
-                is MainViewUiEvent.RefreshConfigList -> {
-                    mainViewModel.refreshConfigFileList()
-                }
-
                 is MainViewUiEvent.Navigate -> {
                     val currentTime = System.currentTimeMillis()
                     if (currentTime - lastNavigationTime >= NAVIGATION_DEBOUNCE_DELAY) {
@@ -157,7 +147,6 @@ fun MainScreen(
     }
 
     val logListState = rememberLazyListState()
-    val configListState = rememberLazyListState()
     val settingsScrollState = rememberLazyListState()
 
     val notificationRationaleDialog: @Composable () -> Unit = {
@@ -223,26 +212,16 @@ fun MainScreen(
         snackbarHostState = snackbarHostState,
         mainViewModel = mainViewModel,
         logViewModel = logViewModel,
-        onCreateNewConfigFileAndEdit = callbacks.onCreateNewConfigFileAndEdit,
-        onImportConfigFromClipboard = callbacks.onImportConfigFromClipboard,
         onPerformExport = callbacks.onPerformExport,
-        onSwitchVpnService = callbacks.onSwitchVpnService,
-        logListState = logListState,
-        configListState = configListState,
-        settingsScrollState = settingsScrollState
     ) { paddingValues ->
         BottomNavHost(
             navController = bottomNavController,
             paddingValues = paddingValues,
             mainViewModel = mainViewModel,
-            onDeleteConfigClick = callbacks.onDeleteConfigClick,
-            onCreateNewConfigFileAndEdit = callbacks.onCreateNewConfigFileAndEdit,
-            onImportConfigFromClipboard = callbacks.onImportConfigFromClipboard,
             logViewModel = logViewModel,
             geoipFilePickerLauncher = launchers.geoipFilePickerLauncher,
             geositeFilePickerLauncher = launchers.geositeFilePickerLauncher,
             logListState = logListState,
-            configListState = configListState,
             settingsScrollState = settingsScrollState,
             onSwitchVpnService = callbacks.onSwitchVpnService
         )

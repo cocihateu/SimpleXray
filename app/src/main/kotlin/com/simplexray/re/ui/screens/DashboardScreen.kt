@@ -7,7 +7,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -54,6 +53,9 @@ import com.simplexray.re.common.formatUptime
 import com.simplexray.re.service.GroupRuntimeStatus
 import com.simplexray.re.service.VpnRunningState
 import com.simplexray.re.service.VpnStateHub
+import com.simplexray.re.ui.components.CardHeading
+import com.simplexray.re.ui.components.DashboardCard
+import com.simplexray.re.ui.components.StatusPill
 import com.simplexray.re.viewmodel.EXIT_INFO_HOST
 import com.simplexray.re.viewmodel.ExitInfoState
 import com.simplexray.re.viewmodel.MainViewModel
@@ -61,8 +63,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -131,28 +131,6 @@ fun DashboardScreen(
         }
         item { TrafficStatsCard(uploadSpeedRate, downloadSpeedRate, stats.uplink, stats.downlink) }
         item { MemoryStatsCard(stats.appMemoryBytes, stats.coreMemoryBytes) }
-    }
-}
-
-@Composable
-private fun DashboardCard(content: @Composable ColumnScope.() -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth().shadow(2.dp, RoundedCornerShape(30.dp)),
-        cornerRadius = 30.dp,
-        colors = CardDefaults.defaultColors(
-            color = MiuixTheme.colorScheme.background,
-            contentColor = MiuixTheme.colorScheme.onBackground,
-        ),
-        content = content,
-    )
-}
-
-@Composable
-private fun CardHeading(@DrawableRes icon: Int, title: String) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(20.dp),
-            tint = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-        Text(title, style = MiuixTheme.textStyles.title3, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -285,13 +263,6 @@ private fun StatusCard(
 }
 
 @Composable
-private fun StatusPill(text: String, modifier: Modifier = Modifier) {
-    Text(text, modifier.clip(CircleShape).background(MiuixTheme.colorScheme.surface).padding(horizontal = 10.dp, vertical = 4.dp),
-        fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-        color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-}
-
-@Composable
 private fun TrafficStatsCard(uploadRate: Long, downloadRate: Long, uplinkTotal: Long, downlinkTotal: Long) {
     DashboardCard {
         Column(Modifier.padding(horizontal = 18.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -308,14 +279,13 @@ private fun TrafficStatsCard(uploadRate: Long, downloadRate: Long, uplinkTotal: 
 
 @Composable
 private fun SpeedMetric(@DrawableRes icon: Int, label: String, rate: Long, total: Long, tint: Color, modifier: Modifier) {
-    Column(modifier.clip(RoundedCornerShape(24.dp)).background(MiuixTheme.colorScheme.surface)
-        .padding(horizontal = 16.dp, vertical = 8.dp),
+    Column(modifier.clip(RoundedCornerShape(24.dp)).background(MiuixTheme.colorScheme.surface).padding(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(18.dp), tint = tint)
             Text(label, fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
         }
-        MetricNumber(rate, rate = true)
+        MetricNumber(rate)
         val formatted = dashboardBytes(total)
         Text(stringResource(R.string.dashboard_traffic_total, "${formatted.first} ${formatted.second}"),
             fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, maxLines = 1)
@@ -327,10 +297,21 @@ private fun MemoryStatsCard(appBytes: Long?, coreBytes: Long?) {
     val total = if (appBytes != null && coreBytes != null) appBytes + coreBytes else null
     val appColor = MiuixTheme.colorScheme.primary
     val coreColor = appColor.copy(alpha = 0.4f)
+    val formattedTotal = dashboardBytes(total)
     DashboardCard {
         Column(Modifier.padding(horizontal = 18.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            CardHeading(R.drawable.dashboard_memory, stringResource(R.string.dashboard_memory))
-            MetricNumber(total)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                CardHeading(R.drawable.dashboard_memory, stringResource(R.string.dashboard_memory), Modifier.weight(1f))
+                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(formattedTotal.first, modifier = Modifier.alignByBaseline(), fontSize = 26.sp,
+                        fontWeight = FontWeight.Medium, maxLines = 1)
+                    if (formattedTotal.second.isNotEmpty()) {
+                        Text(formattedTotal.second, modifier = Modifier.alignByBaseline(), fontSize = 15.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary, maxLines = 1)
+                    }
+                }
+            }
             Row(Modifier.fillMaxWidth().height(9.dp).clip(CircleShape).background(MiuixTheme.colorScheme.surface)) {
                 if (total != null && total > 0L) {
                     if (appBytes != null && appBytes > 0L) Box(Modifier.weight((appBytes.toDouble() / total).toFloat())
@@ -358,14 +339,14 @@ private fun MemoryLegend(label: String, bytes: Long?, color: Color, modifier: Mo
 }
 
 @Composable
-private fun MetricNumber(bytes: Long?, rate: Boolean = false) {
+private fun MetricNumber(bytes: Long?) {
     val formatted = dashboardBytes(bytes)
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(formatted.first, modifier = Modifier.weight(1f, fill = false).alignByBaseline(),
-            autoSize = TextAutoSize.StepBased(minFontSize = 16.sp, maxFontSize = if (rate) 26.sp else 36.sp, stepSize = 1.sp),
+            autoSize = TextAutoSize.StepBased(minFontSize = 16.sp, maxFontSize = 26.sp, stepSize = 1.sp),
             fontWeight = FontWeight.Medium,
             maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(formatted.second + if (rate) "/s" else "", modifier = Modifier.alignByBaseline(), fontSize = 14.sp,
+        Text(formatted.second + "/s", modifier = Modifier.alignByBaseline(), fontSize = 14.sp,
             color = MiuixTheme.colorScheme.onSurfaceVariantSummary, maxLines = 1)
     }
 }

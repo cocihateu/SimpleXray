@@ -46,7 +46,7 @@ internal object StandaloneLatencySession {
                 put("log", JSONObject().put("loglevel", "warning").put("access", "none"))
             }
             try {
-                config.inject(root, context.filesDir, context.cacheDir, emptyList())
+                config.inject(root, emptyList())
                 root.remove("api")
                 root.remove("stats")
             } finally {
@@ -68,9 +68,6 @@ internal object StandaloneLatencySession {
                 probeNode = { node, targetUrl, timeoutMs ->
                     clients[node]?.let { HttpLatencyMeasurement.measure(it, targetUrl, timeoutMs) }
                 },
-                applyBalancerTarget = { _, _ -> },
-                fallbackRelayOutbounds = config.fallbackRelayOutbounds,
-                balancerTags = emptySet(),
                 publishStatus = { _, _, _ -> },
                 logEvent = {},
             )

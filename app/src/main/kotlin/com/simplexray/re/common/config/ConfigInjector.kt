@@ -26,11 +26,6 @@ internal object ConfigInjector {
         return null
     }
 
-    fun injectStatsService(prefs: Preferences, configContent: String): String {
-        val sanitized = ConfigSanitizer.sanitize(configContent, prefs)
-        return injectStatsServiceIntoSanitized(prefs, sanitized)
-    }
-
     /**
      * Injects stats/API fields into an already sanitized configuration.
      *
@@ -193,7 +188,4 @@ internal object ConfigInjector {
         }
     }
 
-    fun buildInjectedConfig(content: String, isYaml: Boolean, prefs: Preferences): String {
-        return injectStatsService(prefs, content)
-    }
 }

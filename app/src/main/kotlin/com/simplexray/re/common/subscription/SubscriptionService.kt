@@ -19,18 +19,11 @@ import java.net.InetSocketAddress
 import java.net.Proxy
 import java.util.concurrent.TimeUnit
 
-enum class SubscriptionDownloadPolicy {
-    AUTO,
-    DIRECT,
-    PROXY,
-}
-
 enum class SubscriptionErrorCategory {
     NETWORK_OR_HTTP,
     NO_SUPPORTED_NODES,
     GROUP_MISSING,
     INVALID_URL,
-    STORAGE_ERROR,
 }
 
 class SubscriptionException(
@@ -62,7 +55,6 @@ class SubscriptionService(context: Context) {
 
     suspend fun refresh(
         groupTag: String,
-        downloadPolicy: SubscriptionDownloadPolicy = SubscriptionDownloadPolicy.AUTO,
     ): SubscriptionRefreshResult = withContext(Dispatchers.IO) {
         val ws = workspaceStore.load()
         val group = ws.groupByTag(groupTag)
@@ -81,7 +73,7 @@ class SubscriptionService(context: Context) {
             )
         }
 
-        val body = downloadContent(url, downloadPolicy)
+        val body = downloadContent(url)
         val parsed = NodeImportConverter.parse(body)
         if (parsed.nodes.isEmpty()) {
             val reasonsSummary = parsed.skippedReasons.distinct().take(5).joinToString("; ")
@@ -176,7 +168,6 @@ class SubscriptionService(context: Context) {
 
     suspend fun downloadContent(
         url: String,
-        policy: SubscriptionDownloadPolicy = SubscriptionDownloadPolicy.AUTO,
     ): String = withContext(Dispatchers.IO) {
         val sanitized = sanitizeUrl(url)
         val isVpnConnected = VpnStateHub.state.value == VpnRunningState.Connected
@@ -209,74 +200,38 @@ class SubscriptionService(context: Context) {
             }
         }
 
-        when (policy) {
-            SubscriptionDownloadPolicy.DIRECT -> {
+        if (isVpnConnected) {
+            try {
+                executeCall(buildClient(true))
+            } catch (e: Exception) {
+                Log.w(TAG, "Proxy fetch failed for $sanitized, falling back to direct: ${e.message}")
                 try {
                     executeCall(buildClient(false))
-                } catch (e: SubscriptionException) {
-                    throw e
-                } catch (e: Exception) {
-                    Log.w(TAG, "Direct download failed for $sanitized: ${e.message}")
+                } catch (e2: SubscriptionException) {
+                    throw e2
+                } catch (e2: Exception) {
+                    Log.w(TAG, "Direct fallback failed for $sanitized: ${e2.message}")
                     throw SubscriptionException(
                         code = 502,
                         category = SubscriptionErrorCategory.NETWORK_OR_HTTP,
-                        message = "直连拉取失败：${e.message ?: e.javaClass.simpleName}",
-                        cause = e,
+                        message = "代理及直连重试均失败：${e2.message ?: e2.javaClass.simpleName}",
+                        cause = e2,
                     )
                 }
             }
-
-            SubscriptionDownloadPolicy.PROXY -> {
-                try {
-                    executeCall(buildClient(true))
-                } catch (e: SubscriptionException) {
-                    throw e
-                } catch (e: Exception) {
-                    Log.w(TAG, "Proxy download failed for $sanitized: ${e.message}")
-                    throw SubscriptionException(
-                        code = 502,
-                        category = SubscriptionErrorCategory.NETWORK_OR_HTTP,
-                        message = "代理拉取失败：${e.message ?: e.javaClass.simpleName}",
-                        cause = e,
-                    )
-                }
-            }
-
-            SubscriptionDownloadPolicy.AUTO -> {
-                if (isVpnConnected) {
-                    try {
-                        executeCall(buildClient(true))
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Proxy fetch failed for $sanitized, falling back to direct: ${e.message}")
-                        try {
-                            executeCall(buildClient(false))
-                        } catch (e2: SubscriptionException) {
-                            throw e2
-                        } catch (e2: Exception) {
-                            Log.w(TAG, "Direct fallback failed for $sanitized: ${e2.message}")
-                            throw SubscriptionException(
-                                code = 502,
-                                category = SubscriptionErrorCategory.NETWORK_OR_HTTP,
-                                message = "代理及直连重试均失败：${e2.message ?: e2.javaClass.simpleName}",
-                                cause = e2,
-                            )
-                        }
-                    }
-                } else {
-                    try {
-                        executeCall(buildClient(false))
-                    } catch (e: SubscriptionException) {
-                        throw e
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Direct fetch failed for $sanitized: ${e.message}")
-                        throw SubscriptionException(
-                            code = 502,
-                            category = SubscriptionErrorCategory.NETWORK_OR_HTTP,
-                            message = "直连拉取失败：${e.message ?: e.javaClass.simpleName}",
-                            cause = e,
-                        )
-                    }
-                }
+        } else {
+            try {
+                executeCall(buildClient(false))
+            } catch (e: SubscriptionException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Direct fetch failed for $sanitized: ${e.message}")
+                throw SubscriptionException(
+                    code = 502,
+                    category = SubscriptionErrorCategory.NETWORK_OR_HTTP,
+                    message = "直连拉取失败：${e.message ?: e.javaClass.simpleName}",
+                    cause = e,
+                )
             }
         }
     }

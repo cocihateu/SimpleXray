@@ -3,14 +3,9 @@ package com.simplexray.re.service
 import com.simplexray.re.common.config.GlobalConfigStore
 import com.simplexray.re.common.config.GroupMemberRef
 import com.simplexray.re.common.config.GroupWorkspace
-import com.simplexray.re.common.config.GroupStrategy
 import com.simplexray.re.common.config.GroupWorkspaceStore
 import com.simplexray.re.common.config.RuleWorkspaceStore
 import com.simplexray.re.common.config.TrafficRule
-import com.simplexray.re.common.config.GroupWorkspace
-import com.xray.app.router.command.OverrideBalancerTargetRequest
-import com.xray.app.router.command.RoutingServiceGrpc
-import io.grpc.ManagedChannelBuilder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -105,7 +100,7 @@ internal object GroupRuntimeStatus {
 internal class GroupCoreSession(
     private val store: GroupWorkspaceStore,
     private val config: OutboundGroupConfig,
-    private val apiPort: Int,
+    @Suppress("UNUSED_PARAMETER") apiPort: Int,
     private val ruleStore: RuleWorkspaceStore,
     private val initialRules: List<TrafficRule>,
     private val routingEditor: XrayRoutingEditor,
@@ -117,13 +112,9 @@ internal class GroupCoreSession(
     private var obfsRelay: SimpleObfsRelay? = null
     private val standbyReady = CompletableDeferred<Unit>()
     @Volatile private var measureNode: (suspend (String, String, Int) -> Long?)? = null
-    @Volatile private var applyTarget: (suspend (String, String) -> Unit)? = null
     @Volatile private var controller: GroupRuntimeController? = GroupRuntimeController(
         initialWorkspace = config.workspace,
         probeNode = { node, url, timeoutMs -> measureNode?.invoke(node, url, timeoutMs) },
-        applyBalancerTarget = { group, target -> applyTarget?.invoke(group, target) },
-        fallbackRelayOutbounds = config.fallbackRelayOutbounds,
-        balancerTags = config.balancers.keys,
         publishStatus = { active, fallback, latency ->
             GroupRuntimeStatus.publish(this, active, fallback, latency)
         },
@@ -179,8 +170,6 @@ internal class GroupCoreSession(
         GroupRuntimeStatus.start(this, config.workspace, initialRules)
         startRelayBeforeCore(scope)
         job = scope.launch(Dispatchers.IO) {
-            val channel = ManagedChannelBuilder.forAddress("127.0.0.1", apiPort).usePlaintext().build()
-            val stub = RoutingServiceGrpc.newBlockingStub(channel)
             val base = OkHttpClient.Builder()
                 .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", config.healthPort)))
                 .callTimeout(5, TimeUnit.SECONDS)
@@ -204,15 +193,6 @@ internal class GroupCoreSession(
                     latency
                 }
             measureNode = measurement
-            applyTarget = apply@{ group, target ->
-                    val balancerTag = config.balancers[group] ?: return@apply
-                    stub.withDeadlineAfter(2, TimeUnit.SECONDS).overrideBalancerTarget(
-                        OverrideBalancerTargetRequest.newBuilder()
-                            .setBalancerTag(balancerTag)
-                            .setTarget(target)
-                            .build()
-                    )
-                }
             val runtimeController = controller ?: return@launch
 
             try {
@@ -220,9 +200,6 @@ internal class GroupCoreSession(
                 launch {
                     runtimeController.start(this)
                     standbyReady.complete(Unit)
-                }
-                config.routingBindings.forEach { (target, group) ->
-                    logEvent("[Info] Routing target '$target' uses group '$group'.")
                 }
                 launch {
                     GlobalConfigStore.version.collect { version ->
@@ -234,25 +211,21 @@ internal class GroupCoreSession(
                 }
                 val initialNodes = config.workspace.allNodes()
                 val initialRelayGroups = config.fallbackRelayOutbounds.keys
-                val initialBalancerGroups = config.balancers.keys
                 var previousWorkspace = config.workspace
                 var previousRules = initialRules
                 combine(store.observe(), ruleStore.observe()) { workspace, rules -> workspace to rules }.collect { (updated, rules) ->
                     val newRelayGroups = (updated.groups.map { it.tag } +
                         (updated.allNodes().map { it.tag } + com.simplexray.re.common.config.BUILTIN_GROUP_TARGET_TAGS)
                             .map(OutboundGroupConfig::physicalTarget)).toSet()
-                    val newBalancerGroups = emptySet<String>()
                     if (updated.allNodes() != initialNodes ||
                         updated.groups.map { it.tag to it.frontProxy } != config.workspace.groups.map { it.tag to it.frontProxy } ||
-                        newRelayGroups != initialRelayGroups ||
-                        newBalancerGroups != initialBalancerGroups
+                        newRelayGroups != initialRelayGroups
                     ) {
                         reload()
                         throw CancellationException("Applying updated group topology")
                     }
                     runtimeController.updateWorkspace(updated, startHealthChecks = standbyReady.isCompleted)
                     if (rules != previousRules ||
-                        updated.effectiveRoutingBindings() != previousWorkspace.effectiveRoutingBindings() ||
                         updated.effectiveDefaultGroupTag() != previousWorkspace.effectiveDefaultGroupTag() ||
                         updated.routingMode != previousWorkspace.routingMode
                     ) {
@@ -275,8 +248,6 @@ internal class GroupCoreSession(
                 runtimeController.stop()
                 if (controller === runtimeController) controller = null
                 measureNode = null
-                applyTarget = null
-                channel.shutdownNow()
                 GroupRuntimeStatus.stop(this@GroupCoreSession)
             }
         }

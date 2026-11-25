@@ -7,7 +7,6 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
-import android.graphics.drawable.Drawable
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -62,7 +61,6 @@ class AppListViewModel(application: Application) : AndroidViewModel(application)
     val prefs = Preferences(getApplication<Application>().applicationContext)
 
     private val _packageList = MutableStateFlow<List<Package>>(emptyList())
-    val packageList: StateFlow<List<Package>> = _packageList.asStateFlow()
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -70,10 +68,10 @@ class AppListViewModel(application: Application) : AndroidViewModel(application)
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
-    private val _showSystemApps = MutableStateFlow(true)
+    private val _showSystemApps = MutableStateFlow(prefs.showSystemApps)
     val showSystemApps: StateFlow<Boolean> = _showSystemApps.asStateFlow()
 
-    private val _showNoInternetApps = MutableStateFlow(false)
+    private val _showNoInternetApps = MutableStateFlow(prefs.showNoInternetApps)
     val showNoInternetApps: StateFlow<Boolean> = _showNoInternetApps.asStateFlow()
 
     private val _bypassSelectedApps = MutableStateFlow(prefs.bypassSelectedApps)
@@ -165,10 +163,12 @@ class AppListViewModel(application: Application) : AndroidViewModel(application)
 
     fun onShowSystemAppsChange(show: Boolean) {
         _showSystemApps.value = show
+        prefs.showSystemApps = show
     }
 
     fun onShowNoInternetAppsChange(show: Boolean) {
         _showNoInternetApps.value = show
+        prefs.showNoInternetApps = show
     }
 
     fun onBypassSelectedAppsChange(bypass: Boolean) {
@@ -241,21 +241,30 @@ class AppListViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun selectAll() {
-        _packageList.value = _packageList.value.map { pkg ->
-            if (!pkg.selected) {
-                isChanged = true
-                pkg.copy(selected = true)
-            } else {
-                pkg
-            }
-        }
-        saveChanges()
+        updateVisibleSelection { true }
     }
 
     fun inverseSelection() {
+        updateVisibleSelection { !it }
+    }
+
+    private fun updateVisibleSelection(selection: (Boolean) -> Boolean) {
+        val visiblePackageNames = filterPackages(
+            _packageList.value,
+            _searchQuery.value,
+            _showSystemApps.value,
+            _showNoInternetApps.value
+        ).map { it.packageName }.toSet()
         _packageList.value = _packageList.value.map { pkg ->
-            isChanged = true
-            pkg.copy(selected = !pkg.selected)
+            if (pkg.packageName in visiblePackageNames) {
+                val selected = selection(pkg.selected)
+                if (selected != pkg.selected) {
+                    isChanged = true
+                }
+                pkg.copy(selected = selected)
+            } else {
+                pkg
+            }
         }
         saveChanges()
     }

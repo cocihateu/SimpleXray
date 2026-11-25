@@ -26,8 +26,9 @@ public class RuleWorkspaceStore(context: Context) {
         private set
 
     fun load(): List<TrafficRule> {
-        ensureInitialized()
         synchronized(lock) {
+            GroupWorkspaceStore(appContext).load()
+            ensureInitialized()
             val raw = runCatching { file.readText() }.getOrNull() ?: return emptyList()
             val (rules, notice) = runCatching { decode(raw) }.getOrElse { e ->
                 Log.e(TAG, "Error decoding rules workspace", e)
@@ -40,27 +41,37 @@ public class RuleWorkspaceStore(context: Context) {
 
     fun save(rules: List<TrafficRule>) {
         synchronized(lock) {
+            GroupWorkspaceStore(appContext).load()
+            WorkspaceFiles.requireWritable(file, SCHEMA_VERSION)
             writeAtomic(encode(rules, migrationNotice))
-            _version.value = System.currentTimeMillis()
+            _version.value++
         }
     }
 
-    fun importFromXrayRouting(root: JSONObject) {
-        val routing = root.optJSONObject("routing") ?: return
-        val script = routing.optString("script")
-        val lua = script.takeIf { it.isNotBlank() }?.let(::findLuaScriptFile)
-        if (lua?.isFile == true) {
-            val result = LegacyLuaRuleImporter.importFromLua(lua.readText())
-            migrationNotice = result.migrationNotice
-            save(result.rules)
-        } else {
-            routing.optJSONArray("rules")?.let { save(parseXrayRulesArray(it)) }
+    /**
+     * One-time step of the routing-alias removal, called by [GroupWorkspaceStore] before it drops the
+     * stored aliases: points every rule that targets an alias at the owning group and stamps schema 2.
+     * A file already at schema 2 is left alone, so an interrupted migration is never applied twice.
+     */
+    internal fun migrateRoutingTargets(targets: Map<String, String>) {
+        synchronized(lock) {
+            // Do not discard the alias map when reading or decoding rules fails. Propagate the
+            // error so GroupWorkspaceStore keeps the old group file intact and can retry later.
+            val raw = if (file.exists()) file.readText() else null
+            if (raw != null && raw.trimStart().startsWith("{") &&
+                JSONObject(raw).optInt("version") >= SCHEMA_VERSION
+            ) return
+            val (rules, notice) = if (raw == null) migrateRules() else decode(raw)
+            migrationNotice = notice
+            writeAtomic(encode(rules.map { rule ->
+                targets[rule.target]?.let { rule.copy(target = it) } ?: rule
+            }, notice))
+            _version.value++
         }
     }
 
     fun update(transform: (List<TrafficRule>) -> List<TrafficRule>): List<TrafficRule> {
         synchronized(lock) {
-            ensureInitialized()
             val current = load()
             val updated = transform(current)
             save(updated)
@@ -73,21 +84,6 @@ public class RuleWorkspaceStore(context: Context) {
         .distinctUntilChanged()
         .flowOn(Dispatchers.IO)
 
-    fun clearMigrationNotice() {
-        synchronized(lock) {
-            migrationNotice = null
-            save(load())
-        }
-    }
-
-    fun activeRules(): List<TrafficRule> = load().filter { it.enabled }
-
-    fun ruleById(id: String): TrafficRule? = load().firstOrNull { it.id == id }
-
-    fun rulesByTarget(target: String): List<TrafficRule> = load().filter { it.target == target }
-
-    fun rulesByType(type: String): List<TrafficRule> = load().filter { it.type == type }
-
     private fun ensureInitialized() {
         if (file.isFile && file.length() > 0L) return
         synchronized(lock) {
@@ -95,7 +91,7 @@ public class RuleWorkspaceStore(context: Context) {
             val (migratedRules, notice) = migrateRules()
             migrationNotice = notice
             writeAtomic(encode(migratedRules, notice))
-            _version.value = System.currentTimeMillis()
+            _version.value++
         }
     }
 
@@ -210,20 +206,13 @@ public class RuleWorkspaceStore(context: Context) {
         return rules
     }
 
-    private fun writeAtomic(content: String) {
-        synchronized(lock) {
-            val tmp = File(file.parentFile, "${file.name}.tmp")
-            tmp.writeText(content)
-            if (!tmp.renameTo(file)) {
-                file.writeText(content)
-                tmp.delete()
-            }
-        }
+    private fun writeAtomic(content: String) = synchronized(lock) {
+        WorkspaceFiles.write(file, content)
     }
 
     private fun encode(rules: List<TrafficRule>, notice: String?): String {
         val root = JSONObject()
-        root.put("version", 1)
+        root.put("version", SCHEMA_VERSION)
         if (!notice.isNullOrBlank()) {
             root.put("migrationNotice", notice)
         }
@@ -259,7 +248,8 @@ public class RuleWorkspaceStore(context: Context) {
 
     companion object {
         const val WORKSPACE_FILENAME = "rules_workspace.json"
-        private val lock = Any()
+        private const val SCHEMA_VERSION = 2
+        private val lock = GroupWorkspaceStore.lock
         private val _version = MutableStateFlow(0L)
         val version: StateFlow<Long> = _version.asStateFlow()
     }

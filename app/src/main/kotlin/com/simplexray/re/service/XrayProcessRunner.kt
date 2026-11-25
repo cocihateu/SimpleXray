@@ -28,8 +28,6 @@ import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.BufferedReader
-import java.io.File
-import java.io.IOException
 import java.io.InputStreamReader
 import java.io.InterruptedIOException
 import java.net.ServerSocket
@@ -199,7 +197,7 @@ internal class XrayProcessRunner(
             RuntimeLogSettings(application).applyTo(runtimeConfig)
             if (workspace.groups.isNotEmpty()) {
                 val groups = OutboundGroupConfig(workspace, allocatePort(), allocatePort(), ::allocatePort)
-                groups.inject(runtimeConfig, application.filesDir, application.cacheDir, trafficRules)
+                groups.inject(runtimeConfig, trafficRules)
                 session = GroupCoreSession(
                     store = workspaceStore,
                     config = groups,

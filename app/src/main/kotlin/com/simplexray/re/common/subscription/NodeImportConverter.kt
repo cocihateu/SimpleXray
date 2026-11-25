@@ -422,7 +422,7 @@ internal object NodeImportConverter {
         }
         outbound.put("settings", settings)
 
-        val stream = buildMihomoStreamSettings(src, protocol, server, null)
+        val stream = buildMihomoStreamSettings(src, protocol, server)
         if (stream.length() > 0) {
             outbound.put("streamSettings", stream)
         }
@@ -499,7 +499,6 @@ internal object NodeImportConverter {
         src: JSONObject,
         protocol: String,
         server: String,
-        ssHttpObfsHost: String?,
     ): JSONObject {
         val stream = JSONObject()
         val rawNet = src.optString("network").trim().lowercase().ifEmpty { "tcp" }
@@ -573,9 +572,6 @@ internal object NodeImportConverter {
 
             else -> {
                 stream.put("network", "tcp")
-                if (ssHttpObfsHost != null) {
-                    stream.put("tcpSettings", buildHttpObfsTcpSettings(ssHttpObfsHost))
-                }
             }
         }
 
@@ -869,13 +865,7 @@ internal object NodeImportConverter {
             lower.startsWith("ss://") -> parseShadowsocksLink(line, reasons)
             lower.startsWith("socks://") || lower.startsWith("socks5://") -> parseSocksOrHttpLink(line, "socks")
             lower.startsWith("http://") || lower.startsWith("https://") -> parseSocksOrHttpLink(line, "http")
-            else -> {
-                val scheme = line.substringBefore("://", "")
-                if (scheme.isNotBlank()) {
-                    reasons?.add("分享链接协议暂缺少原生 Xray 支持：$scheme")
-                }
-                null
-            }
+            else -> null
         }
     }
 

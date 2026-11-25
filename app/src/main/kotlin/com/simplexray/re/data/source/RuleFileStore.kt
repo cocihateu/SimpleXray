@@ -154,7 +154,7 @@ internal class RuleFileStore(
                         }
                     }
                 }
-                if (com.simplexray.re.common.GeoDataValidator.validateDatFile(application, tempFile, filename)) {
+                if (com.simplexray.re.common.GeoDataValidator.validateDatFile(tempFile, filename)) {
                     if (tempFile.renameTo(targetFile)) {
                         when (filename) {
                             "geoip.dat" -> prefs.customGeoipImported = true
@@ -198,7 +198,7 @@ internal class RuleFileStore(
                     }
                 }
 
-                if (com.simplexray.re.common.GeoDataValidator.validateDatFile(application, tempFile, filename)) {
+                if (com.simplexray.re.common.GeoDataValidator.validateDatFile(tempFile, filename)) {
                     if (tempFile.renameTo(targetFile)) {
                         when (filename) {
                             "geoip.dat" -> prefs.customGeoipImported = true
@@ -223,7 +223,7 @@ internal class RuleFileStore(
         return withContext(Dispatchers.IO) {
             val targetFile = File(application.filesDir, filename)
             try {
-                if (!com.simplexray.re.common.GeoDataValidator.validateDatFile(application, tempFile, filename)) {
+                if (!com.simplexray.re.common.GeoDataValidator.validateDatFile(tempFile, filename)) {
                     Log.e(TAG, "saveRuleFileFromTemp: validation failed for $filename")
                     tempFile.delete()
                     return@withContext false
@@ -333,7 +333,7 @@ internal class RuleFileStore(
                         inputStream.copyTo(outputStream)
                     }
                 }
-                if (com.simplexray.re.common.GeoDataValidator.validateDatFile(application, tempFile, fileName)) {
+                if (com.simplexray.re.common.GeoDataValidator.validateDatFile(tempFile, fileName)) {
                     if (tempFile.renameTo(targetFile)) {
                         return@withContext fileName
                     }
@@ -347,41 +347,4 @@ internal class RuleFileStore(
         }
     }
 
-    suspend fun importLuaFileFromUri(context: Context, uri: Uri, targetFileName: String? = null): String? {
-        return withContext(Dispatchers.IO) {
-            try {
-                val candidateName = FileUriHelper.getLuaFileNameFromUri(context, uri) ?: return@withContext null
-                val finalName = if (!targetFileName.isNullOrBlank() && FileUriHelper.isLuaFileName(targetFileName)) {
-                    targetFileName
-                } else {
-                    candidateName
-                }
-                val targetFile = File(application.filesDir, finalName)
-                val tempFile = File(application.filesDir, "$finalName.tmp")
-                context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                    FileOutputStream(tempFile).use { outputStream ->
-                        inputStream.copyTo(outputStream)
-                    }
-                }
-                if (tempFile.renameTo(targetFile)) {
-                    finalName
-                } else {
-                    tempFile.delete()
-                    null
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error importing lua file from URI", e)
-                null
-            }
-        }
-    }
-
-    fun getLuaFileSummary(filename: String): String {
-        val file = File(application.filesDir, filename)
-        return if (file.exists()) {
-            formatRuleFileSummary(file) ?: ""
-        } else {
-            ""
-        }
-    }
 }

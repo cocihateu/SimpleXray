@@ -1,6 +1,10 @@
 package com.simplexray.re.data.source
 
+import android.content.Context
 import android.content.ContextWrapper
+import android.content.SharedPreferences
+import com.simplexray.re.prefs.FakeSharedPreferences
+import com.simplexray.re.prefs.Preferences
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -19,7 +23,15 @@ class LogFileManagerTest {
 
     private fun createFakeContext(): ContextWrapper {
         val dir = tempFolder.newFolder()
+        val preferences = FakeSharedPreferences().apply {
+            // These tests exercise storage, not the production default Warning filter.
+            map[Preferences.LOG_LEVEL] = "debug"
+            map[Preferences.GEOIP_URL] = "https://example.com/geoip.dat"
+            map[Preferences.GEOSITE_URL] = "https://example.com/geosite.dat"
+        }
         return object : ContextWrapper(null) {
+            override fun getApplicationContext(): Context = this
+            override fun getSharedPreferences(name: String?, mode: Int): SharedPreferences = preferences
             override fun getFilesDir(): File = dir
         }
     }

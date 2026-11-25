@@ -52,8 +52,4 @@ object VpnStateHub {
     fun emitSavedLog(line: String) {
         _savedLogFlow.tryEmit(line)
     }
-
-    fun notifyLogsCleared() {
-        _clearLogsFlow.tryEmit(Unit)
-    }
 }

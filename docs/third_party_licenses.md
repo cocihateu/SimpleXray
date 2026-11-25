@@ -1,19 +1,27 @@
 # Third-Party Open Source Licenses
 
-SimpleXray relies on the following open source libraries and components.
-We gratefully acknowledge the contributions of these projects.
+LucX (the SimpleXray source tree) uses the components below. Retain their applicable licenses and notices when distributing the app or source.
 
-## Core & Native Components
+## Core, Native and Bundled Web Components
 
 - [Xray-core](https://github.com/XTLS/Xray-core) v26.11.9 | Under Mozilla Public License 2.0
-- [mihomo](https://github.com/MetaCubeX/mihomo/tree/v1.19.34) v1.19.34 | Under GNU General Public License 3.0
-  - The official Android ARM64 executable is packaged as `libmihomo.so`. APK assets in `licenses/mihomo/` include the GPL text, provenance/source notice, and matching tagged source archive; the workflow also publishes the `mihomo-v1.19.34-source` artifact.
-  - [Official release](https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.34) · [Matching source archive](https://github.com/MetaCubeX/mihomo/archive/refs/tags/v1.19.34.tar.gz) · [Bundled notice](../app/src/main/assets/licenses/mihomo/NOTICE.txt)
+  - The Android ARM64 executable is supplied at `third_party/xray-prebuilt/arm64-v8a/libxray.so`; version/commit/ZIP hash pins are in `version.properties`. See the [build guide](./building.md) for preparation and CI verification limits.
 - [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) 2.20.0 (75dbc1e) | Under MIT License
 - [compose-miuix-ui](https://github.com/compose-miuix-ui/miuix) | Under Apache License 2.0
-- [scripta](https://github.com/YuKongA/scripta) | Under Apache License 2.0
+- [zashboard](https://github.com/Zephyruso/zashboard) v3.30.0 | Under MIT License | Copyright 2024 Zephyruso
+  - Bundled as static files in `assets/zashboard/` for the local controller. Preserve the complete bundle, its `THIRD_PARTY_NOTICES.md`, and `assets/licenses/zashboard/LICENSE` in the APK.
+  - `tools/fetch-zashboard.ps1` verifies the pinned distribution SHA-256 `1f91c014e61e768240a86ad0a9bd565b247ec5a0e26b125fb5d19076682905b7`; it does not regenerate these licenses.
+  - [Official release](https://github.com/Zephyruso/zashboard/releases/tag/v3.30.0) · [Bundled license](../app/src/main/assets/licenses/zashboard/LICENSE)
+
+## Retained Source and Historical Notices
+
+- [scripta](https://github.com/YuKongA/scripta) | Under Apache License 2.0. The source remains in `third_party/scripta/`, but is not included by the current Gradle app build; its full-config/Lua editor UI was removed.
+- [mihomo](https://github.com/MetaCubeX/mihomo/tree/v1.19.34) v1.19.34 | Under GNU General Public License 3.0. Historical license/notice files remain under `app/src/main/assets/licenses/mihomo/`. The current app **does not package `libmihomo.so`**; supported simple-obfs/UDP-over-TCP adaptations use Kotlin relays, and YAML import is node conversion, not a Mihomo runtime.
+  - The retained [notice](../app/src/main/assets/licenses/mihomo/NOTICE.txt) records attribution and source references without claiming that a binary or source archive ships in the APK. Preserve applicable upstream notices and source obligations for any Mihomo binaries you redistribute.
 
 ## Android & Kotlin Libraries
+
+The list below is the retained dependency-license export, not a freshly resolved inventory of the current APK. Dependencies changed when the old editor was removed. `tools/update_licenses.py` still uses an older header/component template and omits the zashboard section; regenerate and reconcile the export/template before treating this page as a complete release inventory. Actual packaged licenses and the zashboard bundle's own notices remain authoritative for their components.
 
 - [Activity](https://developer.android.com/jetpack/androidx/releases/activity#1.13.0) 1.13.0 | Under Apache License 2.0
 - [Activity Compose](https://developer.android.com/jetpack/androidx/releases/activity#1.13.0) 1.13.0 | Under Apache License 2.0

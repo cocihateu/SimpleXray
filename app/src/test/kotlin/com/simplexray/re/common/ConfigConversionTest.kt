@@ -4,7 +4,6 @@ import com.simplexray.re.prefs.FakeContext
 import com.simplexray.re.prefs.LogLevel
 import com.simplexray.re.prefs.Preferences
 import com.simplexray.re.prefs.TunnelMode
-import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -24,217 +23,11 @@ class ConfigConversionTest {
         fakeContext = FakeContext()
         fakeContext.sharedPrefs.map[Preferences.GEOIP_URL] = "https://example.com/geoip.dat"
         fakeContext.sharedPrefs.map[Preferences.GEOSITE_URL] = "https://example.com/geosite.dat"
-        prefs = Preferences(fakeContext)
-    }
-
-    @Test
-    fun testExtractOutboundEndpointsForVariousProtocols() {
-        val config = """
-        {
-          "outbounds": [
-            {
-              "tag": "vless-node",
-              "protocol": "vless",
-              "settings": {
-                "vnext": [{ "address": "vless.server.com", "port": 443 }]
-              }
-            },
-            {
-              "tag": "vmess-node",
-              "protocol": "vmess",
-              "settings": {
-                "vnext": [{ "address": "vmess.server.com", "port": 10086 }]
-              }
-            },
-            {
-              "tag": "trojan-node",
-              "protocol": "trojan",
-              "settings": {
-                "servers": [{ "address": "trojan.server.com", "port": 8443 }]
-              }
-            },
-            {
-              "tag": "ss-node",
-              "protocol": "shadowsocks",
-              "settings": {
-                "servers": [{ "address": "ss.server.com", "port": 8388 }]
-              }
-            },
-            {
-              "tag": "socks-node",
-              "protocol": "socks",
-              "settings": {
-                "servers": [{ "address": "socks.server.com", "port": 1080 }]
-              }
-            },
-            {
-              "tag": "http-node",
-              "protocol": "http",
-              "settings": {
-                "servers": [{ "address": "http.server.com", "port": 8080 }]
-              }
-            }
-          ]
+        prefs = Preferences(fakeContext).apply {
+            tunnelMode = TunnelMode.HevSocks5Tunnel
+            logLevel = LogLevel.Auto
+            bypassLan = false
         }
-        """.trimIndent()
-
-        val endpoints = ConfigUtils.extractOutboundEndpoints(config)
-        assertEquals(6, endpoints.size)
-
-        assertEquals("vless-node", endpoints[0].tag)
-        assertEquals("vless", endpoints[0].protocol)
-        assertEquals("vless.server.com", endpoints[0].host)
-        assertEquals(443, endpoints[0].port)
-
-        assertEquals("vmess-node", endpoints[1].tag)
-        assertEquals("vmess", endpoints[1].protocol)
-        assertEquals("vmess.server.com", endpoints[1].host)
-        assertEquals(10086, endpoints[1].port)
-
-        assertEquals("trojan-node", endpoints[2].tag)
-        assertEquals("trojan", endpoints[2].protocol)
-        assertEquals("trojan.server.com", endpoints[2].host)
-        assertEquals(8443, endpoints[2].port)
-
-        assertEquals("ss-node", endpoints[3].tag)
-        assertEquals("shadowsocks", endpoints[3].protocol)
-        assertEquals("ss.server.com", endpoints[3].host)
-        assertEquals(8388, endpoints[3].port)
-
-        assertEquals("socks-node", endpoints[4].tag)
-        assertEquals("socks", endpoints[4].protocol)
-        assertEquals("socks.server.com", endpoints[4].host)
-        assertEquals(1080, endpoints[4].port)
-
-        assertEquals("http-node", endpoints[5].tag)
-        assertEquals("http", endpoints[5].protocol)
-        assertEquals("http.server.com", endpoints[5].host)
-        assertEquals(8080, endpoints[5].port)
-    }
-
-    @Test
-    fun testExtractOutboundEndpointsExcludesUnprobeableProtocols() {
-        val config = """
-        {
-          "outbounds": [
-            {
-              "tag": "wg-out",
-              "protocol": "wireguard",
-              "settings": {
-                "servers": [{ "address": "wg.server.com", "port": 51820 }]
-              }
-            },
-            {
-              "tag": "hy2-out",
-              "protocol": "hysteria2",
-              "settings": {
-                "servers": [{ "address": "hy2.server.com", "port": 443 }]
-              }
-            },
-            {
-              "tag": "quic-out",
-              "protocol": "vless",
-              "settings": {
-                "vnext": [{ "address": "quic.server.com", "port": 443 }]
-              },
-              "streamSettings": {
-                "network": "quic"
-              }
-            },
-            {
-              "tag": "direct-out",
-              "protocol": "freedom"
-            },
-            {
-              "tag": "block-out",
-              "protocol": "blackhole"
-            },
-            {
-              "tag": "dns-out",
-              "protocol": "dns"
-            },
-            {
-              "tag": "tcp-valid",
-              "protocol": "vless",
-              "settings": {
-                "vnext": [{ "address": "tcp.server.com", "port": 443 }]
-              },
-              "streamSettings": {
-                "network": "tcp"
-              }
-            }
-          ]
-        }
-        """.trimIndent()
-
-        val endpoints = ConfigUtils.extractOutboundEndpoints(config)
-        assertEquals(1, endpoints.size)
-        assertEquals("tcp-valid", endpoints[0].tag)
-    }
-
-    @Test
-    fun testSsrfProtectionRejectsPrivateAndLoopbackHosts() {
-        val config = """
-        {
-          "outbounds": [
-            {
-              "tag": "loopback-v4",
-              "protocol": "vless",
-              "settings": { "vnext": [{ "address": "127.0.0.1", "port": 443 }] }
-            },
-            {
-              "tag": "private-10",
-              "protocol": "vless",
-              "settings": { "vnext": [{ "address": "10.1.2.3", "port": 443 }] }
-            },
-            {
-              "tag": "private-172",
-              "protocol": "vless",
-              "settings": { "vnext": [{ "address": "172.20.0.1", "port": 443 }] }
-            },
-            {
-              "tag": "private-192",
-              "protocol": "vless",
-              "settings": { "vnext": [{ "address": "192.168.1.1", "port": 443 }] }
-            },
-            {
-              "tag": "link-local",
-              "protocol": "vless",
-              "settings": { "vnext": [{ "address": "169.254.1.1", "port": 443 }] }
-            },
-            {
-              "tag": "loopback-v6",
-              "protocol": "vless",
-              "settings": { "vnext": [{ "address": "::1", "port": 443 }] }
-            },
-            {
-              "tag": "ula-v6",
-              "protocol": "vless",
-              "settings": { "vnext": [{ "address": "fc00::1", "port": 443 }] }
-            },
-            {
-              "tag": "octal-short",
-              "protocol": "vless",
-              "settings": { "vnext": [{ "address": "127.1", "port": 443 }] }
-            },
-            {
-              "tag": "public-ip",
-              "protocol": "vless",
-              "settings": { "vnext": [{ "address": "1.1.1.1", "port": 443 }] }
-            },
-            {
-              "tag": "domain-name",
-              "protocol": "vless",
-              "settings": { "vnext": [{ "address": "node.cloudflare.com", "port": 443 }] }
-            }
-          ]
-        }
-        """.trimIndent()
-
-        val endpoints = ConfigUtils.extractOutboundEndpoints(config)
-        assertEquals(2, endpoints.size)
-        assertEquals("public-ip", endpoints[0].tag)
-        assertEquals("domain-name", endpoints[1].tag)
     }
 
     @Test
@@ -256,9 +49,9 @@ class ConfigConversionTest {
                   port: 443
         """.trimIndent()
 
-        assertTrue(ConfigUtils.isValidConfigContent(yamlContent))
+        assertNotNull(com.simplexray.re.common.config.ConfigCodec.parse(yamlContent))
 
-        val formattedJson = ConfigUtils.formatConfigContent(yamlContent)
+        val formattedJson = ConfigUtils.sanitizeConfig(yamlContent, prefs)
         val json = JSONObject(formattedJson)
 
         assertEquals("debug", json.getJSONObject("log").getString("loglevel"))
@@ -266,15 +59,11 @@ class ConfigConversionTest {
         assertEquals(1, inbounds.length())
         assertEquals("socks", inbounds.getJSONObject(0).getString("protocol"))
 
-        val outbounds = ConfigUtils.extractOutbounds(yamlContent)
-        assertEquals(1, outbounds.size)
-        assertEquals("proxy-yaml", outbounds[0].tag)
-        assertEquals("vless", outbounds[0].protocol)
+        val outbounds = json.getJSONArray("outbounds")
+        assertEquals(1, outbounds.length())
+        assertEquals("proxy-yaml", outbounds.getJSONObject(0).getString("tag"))
+        assertEquals("vless", outbounds.getJSONObject(0).getString("protocol"))
 
-        val endpoints = ConfigUtils.extractOutboundEndpoints(yamlContent)
-        assertEquals(1, endpoints.size)
-        assertEquals("yaml.server.net", endpoints[0].host)
-        assertEquals(443, endpoints[0].port)
     }
 
     @Test
@@ -295,7 +84,7 @@ class ConfigConversionTest {
         }
         """.trimIndent()
 
-        val injected = ConfigUtils.injectStatsService(prefs, baseConfig)
+        val injected = ConfigUtils.injectStatsServiceIntoSanitized(prefs, ConfigUtils.sanitizeConfig(baseConfig, prefs))
         val json = JSONObject(injected)
 
         // Verify API object
@@ -426,7 +215,7 @@ class ConfigConversionTest {
         }
         """.trimIndent()
 
-        val sanitized = ConfigUtils.sanitizeConfig(rawConfig, null)
+        val sanitized = ConfigUtils.sanitizeConfig(rawConfig, prefs)
         val json = JSONObject(sanitized)
 
         // domainMatcher upgraded to hybrid

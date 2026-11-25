@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -27,8 +26,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -50,7 +47,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -67,15 +63,12 @@ import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.glass.GlassBottomSheet
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import java.util.UUID
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
@@ -95,8 +88,9 @@ private val SUPPORTED_RULE_TYPES = listOf(
 @Composable
 fun RulesScreen(
     mainViewModel: MainViewModel,
-    onBackClick: () -> Unit = {},
-    paddingValues: PaddingValues = PaddingValues()
+    onOpenRuleResources: () -> Unit,
+    paddingValues: PaddingValues = PaddingValues(),
+    categoryHeader: (@Composable () -> Unit)? = null,
 ) {
     val rules by mainViewModel.trafficRules.collectAsStateWithLifecycle()
     val workspace by mainViewModel.groupWorkspace.collectAsStateWithLifecycle()
@@ -140,7 +134,7 @@ fun RulesScreen(
             delay(16)
         }
     }
-    val groupTargets = remember(workspace) { workspace.effectiveRoutingBindings().keys + TrafficRule.TARGET_GLOBAL }
+    val groupTargets = remember(workspace.groups) { workspace.groups.map { it.tag }.toSet() + TrafficRule.TARGET_GLOBAL }
 
     val availableTargets = remember(workspace.groups) {
         listOf(TrafficRule.TARGET_GLOBAL, TrafficRule.TARGET_DIRECT, TrafficRule.TARGET_BLOCK) +
@@ -176,6 +170,9 @@ fun RulesScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            if (categoryHeader != null) {
+                item { categoryHeader() }
+            }
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -187,21 +184,31 @@ fun RulesScreen(
                             isCreatingNew = true
                         },
                         modifier = Modifier.weight(1f),
+                        insideMargin = PaddingValues(horizontal = 10.dp, vertical = 13.dp),
                         colors = ButtonDefaults.buttonColorsPrimary()
                     ) {
                         Text(stringResource(R.string.rules_add))
                     }
                     Button(
                         onClick = { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) },
+                        insideMargin = PaddingValues(horizontal = 10.dp, vertical = 13.dp),
                         colors = ButtonDefaults.buttonColors()
                     ) {
                         Text("导入")
                     }
                     Button(
                         onClick = { exportLauncher.launch("simplexray_rules.json") },
+                        insideMargin = PaddingValues(horizontal = 10.dp, vertical = 13.dp),
                         colors = ButtonDefaults.buttonColors()
                     ) {
                         Text("导出")
+                    }
+                    Button(
+                        onClick = onOpenRuleResources,
+                        insideMargin = PaddingValues(horizontal = 10.dp, vertical = 13.dp),
+                        colors = ButtonDefaults.buttonColors()
+                    ) {
+                        Text("规则资源")
                     }
                 }
                 val applyMessage by mainViewModel.ruleApplyMessage.collectAsStateWithLifecycle()
@@ -254,7 +261,7 @@ fun RulesScreen(
                             val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == rule.id }
                             dragCenterY = info?.let { it.offset + it.size / 2f } ?: 0f
                         },
-                        onDragDelta = { deltaY, _ ->
+                        onDragDelta = { deltaY ->
                             dragCenterY += deltaY
                             moveDraggedRow()
                         },
@@ -316,7 +323,7 @@ private fun RuleItemCard(
     canMoveDown: Boolean,
     onTargetChange: (String) -> Unit,
     onDragStart: () -> Unit,
-    onDragDelta: (Float, Float) -> Unit,
+    onDragDelta: (Float) -> Unit,
     onDragDrop: () -> Unit,
     onToggleEnabled: (Boolean) -> Unit,
     onMoveUp: () -> Unit,
@@ -324,7 +331,6 @@ private fun RuleItemCard(
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
-    var cardHeightPx by remember { mutableFloatStateOf(0f) }
     var targetDropdownExpanded by remember { mutableStateOf(false) }
     val startDrag by rememberUpdatedState(onDragStart)
     val dragDelta by rememberUpdatedState(onDragDelta)
@@ -338,13 +344,12 @@ private fun RuleItemCard(
                 translationY = if (isDragging) dragOffsetY else 0f
                 shadowElevation = if (isDragging) 16f else 0f
             }
-            .onSizeChanged { cardHeightPx = it.height.toFloat() }
             .pointerInput(rule.id) {
                 detectDragGesturesAfterLongPress(
                     onDragStart = { startDrag() },
                     onDrag = { change, dragAmount ->
                         change.consume()
-                        dragDelta(dragAmount.y, cardHeightPx)
+                        dragDelta(dragAmount.y)
                     },
                     onDragEnd = { dropDrag() },
                     onDragCancel = { dropDrag() }

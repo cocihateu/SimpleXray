@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -36,11 +35,11 @@ import com.simplexray.re.common.ROUTE_OVERVIEW
 import com.simplexray.re.common.ROUTE_PROXIES
 import com.simplexray.re.common.ROUTE_GROUPS
 import com.simplexray.re.common.ROUTE_GROUP_SETTINGS
-import com.simplexray.re.common.ROUTE_GROUP_NODES
 import com.simplexray.re.common.ROUTE_CONFIG
 import com.simplexray.re.common.ROUTE_LOG
-import com.simplexray.re.common.ROUTE_RULES
+import com.simplexray.re.common.ROUTE_RULE_RESOURCES
 import com.simplexray.re.common.ROUTE_SETTINGS
+import com.simplexray.re.common.config.GroupSourceType
 import com.simplexray.re.viewmodel.LogViewModel
 import com.simplexray.re.viewmodel.MainViewModel
 import top.yukonga.miuix.kmp.basic.Scaffold
@@ -70,23 +69,20 @@ fun AppScaffold(
     snackbarHostState: SnackbarHostState,
     mainViewModel: MainViewModel,
     logViewModel: LogViewModel,
-    onCreateNewConfigFileAndEdit: () -> Unit,
-    onImportConfigFromClipboard: () -> Unit,
     onPerformExport: () -> Unit,
-    onSwitchVpnService: () -> Unit,
-    logListState: LazyListState,
-    configListState: LazyListState,
-    settingsScrollState: LazyListState,
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val entry by navController.currentBackStackEntryAsState()
     val managingGroups = entry?.destination?.route == ROUTE_GROUPS
     val groupSettings = entry?.destination?.route == ROUTE_GROUP_SETTINGS
-    val groupNodes = entry?.destination?.route == ROUTE_GROUP_NODES
-    val editingRules = entry?.destination?.route == ROUTE_RULES
-    val configChild = managingGroups || groupSettings || groupNodes || editingRules
-    val selected = if (configChild) routes.indexOf(ROUTE_CONFIG)
+    val ruleResources = entry?.destination?.route == ROUTE_RULE_RESOURCES
+    val configChild = managingGroups
+    val selected = if (groupSettings) routes.indexOf(ROUTE_PROXIES)
+        else if (configChild) routes.indexOf(ROUTE_CONFIG)
+        else if (ruleResources) routes.indexOf(ROUTE_SETTINGS)
         else routes.indexOf(entry?.destination?.route).coerceAtLeast(0)
+    val workspace by mainViewModel.groupWorkspace.collectAsStateWithLifecycle()
+    val configurationGroup = workspace.groupByTag(mainViewModel.selectedConfigurationGroupTag)
     var isLogSearching by remember { mutableStateOf(false) }
     val searchingLogs = routes[selected] == ROUTE_LOG && isLogSearching
     val logSearchQuery by logViewModel.searchQuery.collectAsStateWithLifecycle()
@@ -111,9 +107,8 @@ fun AppScaffold(
                 GlassTopAppBar(title = when {
                     searchingLogs -> ""
                     managingGroups -> "分组管理"
-                    groupSettings -> "分组设置"
-                    groupNodes -> "节点配置"
-                    editingRules -> "规则管理"
+                    groupSettings -> "代理组设置"
+                    ruleResources -> "规则资源"
                     else -> titles[selected]
                 },
                     expandable = false, backdrop = backdrop, navigationIcon = {
@@ -124,9 +119,8 @@ fun AppScaffold(
                             }) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.close_search))
                             }
-                        } else if (configChild) IconButton(onClick = {
-                            if (groupSettings) navController.popBackStack(ROUTE_CONFIG, false)
-                            else navController.popBackStack()
+                        } else if (configChild || groupSettings || ruleResources) IconButton(onClick = {
+                            navController.popBackStack()
                         }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                         }
@@ -146,16 +140,39 @@ fun AppScaffold(
                                 Icon(Icons.Default.Clear, contentDescription = stringResource(R.string.clear_search))
                             }
                         }
-                    } else if (managingGroups || (routes[selected] == ROUTE_CONFIG && configChild == false)) {
+                    } else if (managingGroups) {
                         IconButton(onClick = { mainViewModel.createGroupRequested = true }) {
                             Icon(Icons.Default.Add, contentDescription = "新建分组")
                         }
-                    } else if (routes[selected] == ROUTE_PROXIES) {
+                    } else if (routes[selected] == ROUTE_CONFIG && configChild == false) {
+                        IconButton(onClick = { mainViewModel.configurationPageAction = "search" }) {
+                            Icon(painterResource(R.drawable.search), contentDescription = "搜索节点")
+                        }
+                        OverlayIconDropdownMenu(entry = DropdownEntry(listOf(
+                            DropdownItem("从剪贴板导入", onClick = { mainViewModel.configurationPageAction = "import-clipboard" }),
+                            DropdownItem("从文件导入", onClick = { mainViewModel.configurationPageAction = "import-file" }),
+                            DropdownItem("手动添加节点", onClick = { mainViewModel.configurationPageAction = "add-node" }),
+                            DropdownItem("新建分组", onClick = { mainViewModel.createGroupRequested = true }),
+                        ))) {
+                            Icon(Icons.Default.Add, contentDescription = "添加节点或分组")
+                        }
+                        OverlayIconDropdownMenu(entry = DropdownEntry(buildList {
+                            add(DropdownItem("分组管理", onClick = { navController.navigate(ROUTE_GROUPS) }))
+                            configurationGroup?.let { group ->
+                                val editTitle = if (group.sourceType == GroupSourceType.SUBSCRIPTION) "订阅设置" else "重命名分组"
+                                add(DropdownItem(editTitle, onClick = { mainViewModel.configurationPageAction = "edit-group" }))
+                            }
+                            if (workspace.groups.any { it.sourceType == GroupSourceType.SUBSCRIPTION }) {
+                                add(DropdownItem("更新全部订阅", onClick = { mainViewModel.configurationPageAction = "refresh-subscriptions" }))
+                            }
+                        })) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "配置操作")
+                        }
+                    } else if (routes[selected] == ROUTE_PROXIES && groupSettings == false) {
                         IconButton(onClick = { mainViewModel.proxyPageAction = "search" }) {
                             Icon(painterResource(R.drawable.search), contentDescription = "搜索代理")
                         }
                         OverlayIconDropdownMenu(entry = DropdownEntry(listOf(
-                            DropdownItem("测量当前组延迟", onClick = { mainViewModel.proxyPageAction = "measure" }),
                             DropdownItem("展开全部", onClick = { mainViewModel.proxyPageAction = "expand" }),
                             DropdownItem("收起全部", onClick = { mainViewModel.proxyPageAction = "collapse" }),
                         ))) {

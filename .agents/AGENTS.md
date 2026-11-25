@@ -1,128 +1,106 @@
 ---
-description: General instructions and context for developing the SimpleXray project.
+description: Architecture and development context for LucX in the SimpleXray source tree.
 ---
 
-# SimpleXray Project Context
+# LucX Project Context
 
-This file provides the necessary context and constraints for AI agents interacting with the SimpleXray project. SimpleXray is an Android application acting as a VPN client/proxy tool using Xray-core, hev-socks5-tunnel, and SimpleTUN.
+LucX is an Android VPN/proxy client using one Xray core with Hev, SimpleTUN, or Xray TUN. The installed name is **LucX**, application ID is **`com.LucX`** (including debug builds), and Kotlin/JNI namespace is **`com.simplexray.re`**. The Gradle root project and repository retain the SimpleXray name. All paths below are relative to this source root, not its parent directory.
 
-## Tech Stack
-- **OS Target**: Android (minSdk 34, targetSdk 37, compileSdk 37)
-- **Language**: Kotlin (for Android app) and C/C++ (for JNI / native tunnels).
-- **UI Framework**: Jetpack Compose using the `miuix` component library.
-- **Architecture**: MVVM with Android ViewModels.
-- **Data Persistence**: Direct Android `SharedPreferences`.
-- **Communication/RPC**: gRPC with Protocol Buffers (protobuf) to query Xray core status and traffic statistics through a dynamically allocated `127.0.0.1` TCP port. Service status and process logs are communicated reactively via in-memory `VpnStateHub` (`StateFlow` and `SharedFlow`).
-- **Native Components & TUN Backends**: Uses CMake to build `hev-socks5-tunnel` (C/lwIP) and dependencies as native JNI libraries, and integrates the in-tree `simpletun` Zig engine (custom Zig 0-heap lightweight TUN-to-SOCKS5 protocol shifter, built with `zig build android`). Supports 3 primary TUN backends: Hev (default, C/lwIP for optimal throughput and low power consumption), SimpleTUN (custom Zig 0-heap lightweight engine), and native Xray TUN (Go/gVisor). In native Xray TUN mode, a JNI launcher passes the Android VPN file descriptor to the Xray child process. In Hev and SimpleTUN modes, the tunnel forwards traffic to Xray through its local SOCKS5 inbound.
+## Stack and Data Model
 
-## Project Structure
-- `app/src/main/kotlin/com/simplexray/re/`:
-  - `ui/`: Jetpack Compose screens, navigation, scaffolds, theme, and components. `ui/screens/SettingsScreen.kt` is the settings shell (global dialogs, overlay sheets, `LazyColumn`); its content lives in `SettingsGeneralSection.kt`, `SettingsTunnelSection.kt`, `SettingsInboundSection.kt`, `SettingsRuleFilesSection.kt`, `SettingsLuaScriptsSection.kt`, `SettingsNetworkSection.kt`, and `SettingsAboutSection.kt`, with shared helpers in `SettingsComponents.kt`. Each section collects `settingsState` independently.
-  - `viewmodel/`: MVVM state and use cases. `MainViewModel.kt` is the UI-facing facade/initializer; feature logic lives in `ConfigFileController`, `SettingsController`, `AppIconController`, `RuleFileController`, `UpdateController`, `DashboardController`, and `VpnServiceController`, with shared OkHttp helpers in `OkHttpExt.kt`.
-  - `service/`: Android services and VPN data plane. `TProxyService` owns the `VpnService`, TUN fd, JNI declarations, and start/stop orchestration; `XrayProcessRunner` owns the Xray child process, stdin/stdout, startup probe, and retry/exit; `TunnelBackendController` owns Hev/SimpleTUN backend lifecycle; `SocksHealthMonitor`, `GeoUpdateScheduler`, `VpnNotificationHelper`, `VpnWakeLock`, and `TproxyConfigBuilder` cover their named concerns.
-  - `common/`: Shared utilities and callbacks. `ConfigUtils.kt` is a facade over `common/config/` (`ConfigCodec`, `ConfigSanitizer`, `ConfigInjector`, `OutboundCatalog`).
-  - `data/`: Data models and networking/storage logic. `data/source/FileManager.kt` is a facade over `ConfigFileStore`, `RuleFileStore`, and `FileUriHelper` (handling config, geo DAT assets, and `.lua` scripts); `LogFileManager` remains standalone.
-  - `prefs/`: Preference contract, provider, and `SharedPreferences` access wrapper.
-  - `activity/`: Android Activity classes (primarily `MainActivity` hosting Compose).
-- `app/src/main/cpp/`: C/C++ source code for native tunnels built via CMake (`CMakeLists.txt`, `xray_exec.c`).
-- `app/src/main/proto/`: Protobuf definitions for gRPC.
-- `third_party/simpletun/`: In-tree Zig SimpleTUN engine, Android JNI bridge (`android/bridge.c`), architecture spec/tests, and host test harnesses. It is not a Git submodule; build it with `zig build android` (and `zig build test`) before Gradle native builds.
-- `third_party/hev-socks5-tunnel/`, `third_party/miuix/`, and `third_party/scripta/`: Git submodules for the Hev C/lwIP tunnel, the Miuix UI component library, and the Scripta virtualized code editor. See `third_party/miuix/AGENTS.md` for specific UI constraints.
-- `docs/benchmark/`: Per-device benchmark reports (`docs/benchmark/<profile>/report/benchmark_report.md`), datasets (`docs/benchmark/<profile>/data/`), and generated chart dashboards (`docs/benchmark/<profile>/charts/`).
-- `docs/images/`: Standardized 16:9 light-theme WebP dashboards, master infographic (`mega_benchmark_infographic.webp`), and architectural diagrams.
-- `version.properties`: Root version and release contract tracking `XRAY_CORE_VERSION`, `XRAY_CORE_COMMIT`, `XRAY_CORE_ZIP_SHA256`, `HEV_TUN_VERSION`, `GO_VERSION`, and `NDK_VERSION`. SimpleTUN is in-tree and is not hash-pinned there. Geo rule assets are rolling upstream `latest` downloads and are intentionally not hash-pinned. Release builds use the official prebuilt `Xray-android-arm64-v8a.zip`; the workflow verifies the release tag commit and the archive SHA-256 before the APK build.
-- `tools/`: Automated benchmarking tools & modular pipeline:
-  - `benchmark.py`: Unified master CLI runner orchestrating throughput, idle memory, bufferbloat, stability, weaknet, and CPS suites. Supports `--preset light` and `--preset full`.
-  - `presets.py`: Formal benchmark contract definitions (`light` vs `full`).
-  - `generate_charts.py`: Unified publication dashboard generator producing standardized 16:9 WebP charts (Wi-Fi, Bufferbloat, Stability, Idle Memory, CPS, Weaknet, Scheme 2 Memory Attribution).
-  - `generate_mega_dashboard.py`: 8-archetype 3-row master infographic generator.
-  - `common/`: Core shared libraries (`adb.py`, `device.py`, `iperf.py`, `dataset.py`, `theme.py`, `netem.py`, `logging.py`).
-  - `suites/`: High-cohesion benchmark suites (`throughput.py`, `idle_memory.py`, `bufferbloat.py`, `stability.py`, `weaknet.py`, `cps.py`).
-  - `update_benchmark_doc.py`: Legacy in-place synchronizer written for the older Chinese-format Section 3.1 report layout; current English `benchmark_report.md` tables are maintained manually.
-  - `sync_versions.py`: Automated submodule and go.mod dependency inspector and `version.properties` synchronizer.
-  - `idle_bench/`: Low-overhead Go connection retention and PSS memory sampling probe (cross-compiled for `amd64` and `arm64`).
-  - `microbench/`: Standalone Linux user-namespace microbench harness (`unshare -r -n`) testing pure user-space TUN stacks in isolation (Scheme 2).
-  - `tests/`: Python `unittest` coverage for benchmark preset parsing and version-file validation (`python3 -m unittest discover -s tools/tests -v`).
+- Android **minSdk 34**, **targetSdk 37**, compile platform **37.2** (`android-37.2`); `arm64-v8a` only.
+- Kotlin, Compose/Miuix, ViewModels/controllers, coroutines and flows; C/JNI for Hev and process launching, Zig for SimpleTUN.
+- Preferences use Android `SharedPreferences`; global configuration, groups/nodes and rules use JSON files in the app's private files directory. These are separate stores, not one editable full configuration.
+- UI and `TProxyService` share a process. `VpnStateHub` publishes state/logs in memory; Xray runs as a child process. Status, statistics and routing updates use plaintext gRPC on a dynamically allocated loopback port.
+- Xray owns proxy protocols/routing. Per-node UDP-over-TCP and simple-obfs adaptations use Kotlin relays; there is no second Mihomo core, and Gradle excludes `libmihomo.so`.
 
-## Build and Execution
-- **Build System**: Gradle with Kotlin DSL/Groovy.
-- **Native Build**: NDK via CMake (`externalNativeBuild`).
-- **Standalone TUN CLI**: SimpleTUN's standalone CLI and unit tests are built with `cd third_party/simpletun && zig build` / `zig build test`.
-- **SimpleTUN Native Prerequisite**: Gradle's CMake configure requires `third_party/simpletun/zig-out/android/prebuilt/arm64-v8a/libsimpletun.a`. Run `cd third_party/simpletun && zig build android` (and `zig build test` for host tests) before invoking Gradle; CMake fails fast with a clear error when the archive is missing.
-- **Local Verification**: Run `./gradlew :app:testDebugUnitTest :app:assembleDebug` for the JVM unit tests and debug APK, and `python3 -m unittest discover -s tools/tests -v` for the Python benchmark/version tooling.
-- **Version Verification**: Run `python3 tools/sync_versions.py --check` before committing to verify that `version.properties` matches all submodules and `go.mod` dependency hashes.
-- **Headless Benchmark Service**: `BenchmarkService` operates headlessly via `am start-foreground-service` intents (`--es cmd start/stop --es backend ... --ei mtu ...`), validated by active `tun0` hardware interface polling.
+## Active UI and Source Map
 
-## Coding Guidelines for AI Agents
-1. **Jetpack Compose**: Follow standard Compose best practices (state hoisting, `remember` for complex derived states, non-blocking composition).
-2. **Miuix Integration**: Use `miuix` components instead of standard Material components when possible, matching the library's design language. Do NOT use hardcoded colors; use `MiuixTheme`.
-3. **Coroutines**: Use Kotlin Coroutines and Flows for all asynchronous operations.
-4. **Service Lifecycle**: When modifying `VpnService` or background tasks, respect Android's strict background execution limits and ensure proper foreground service notifications.
-5. **Protobuf/gRPC**: If data models change, ensure corresponding `.proto` files are updated and Gradle is synced to regenerate Java/Kotlin stubs.
-6. **Native Code**: App native code lives in `app/src/main/cpp/`; the SimpleTUN engine is Zig under `third_party/simpletun/`. Changes require understanding of POSIX sockets, TCP/UDP state machines, and lwIP/hev architecture where applicable, plus the SimpleTUN spec (`docs/simpletun_spec.md`). Ensure ABI compatibility (`arm64-v8a` is the only target).
-7. **Respect Decomposition Boundaries**: Put new config logic in `common/config/`, file I/O in the `data/source/` stores, service lifecycle logic in `service/` helpers, ViewModel feature logic in controllers, and settings UI in `Settings*Section.kt` files. Keep the JNI `external` declarations on `TProxyService` because native symbol names are bound to that class; inject JNI lambdas into helper classes instead. Keep public facades (`TProxyService`, `MainViewModel`, `ConfigUtils`, `FileManager`, `SettingsScreen`) thin; do not re-inflate them as catch-all files.
+Android source paths in this section start at `app/src/main/kotlin/com/simplexray/re/`.
 
-## Key Constraints
-- NEVER break the `VpnService` transparent proxy behavior. Testing native traffic routing is critical.
-- Keep the UI responsive and aesthetic, prioritizing the `miuix` design system.
-- **SimpleTUN Scope (current)**: IPv4-only, dotted-decimal no-auth SOCKS5 inbound, MTU fixed at 1500, and no IPv6 route/address. Authenticated SOCKS5, IPv6, and IP fragment reassembly are out of scope until the 2027 IPv6 work; do not change these paths without explicit request.
-- **Xray Config Source**: The runtime always feeds the final config through stdin and must pass `-config stdin:` to both the `ProcessBuilder` path (`XrayProcessRunner.getProcessBuilder`) and the native launcher (`xray_exec.c` argv). Without the explicit flag, a same-named `config.json` in the working directory can shadow the sanitized stdin config. Do not remove the flag; filenames such as `config.json` are otherwise treated as ordinary configuration files.
-- **Runtime Sanitization Pipeline**: Runtime startup must sanitize the raw config exactly once with a real `Preferences` instance and then call `ConfigUtils.injectStatsServiceIntoSanitized`; never pre-sanitize with `prefs = null`, because that strips the existing TUN inbound before the prefs-aware pass can preserve it. The editor's `formatConfigContent` remains the null-prefs one-way sanitizer and is intentionally only used on save.
-- **Local SOCKS Inbound**: The app-managed SOCKS listen address is loopback-only (`127.0.0.0/8` or `::1`). `SocksHealthMonitor` and the HTTP update/rule-download clients hardcode `127.0.0.1`, so non-loopback binds would create a restart loop unless those clients are updated together. Username/password must be both set or both empty; config-side auth is auto-adopted once when app credentials are empty. SimpleTUN strips primary SOCKS auth and ignores app-side credentials instead of failing startup.
-- **Doze-Aware Health Checks and Startup Timeout**: `SocksHealthMonitor` must
-  not issue SOCKS probes while the screen is non-interactive and the app does
-  not hold its partial wake lock; Doze wake-ups can otherwise make loopback
-  probes time out and restart a healthy Xray core. Startup readiness deadlines
-  must use `StartupProbeDeadline` (`SystemClock.uptimeMillis()`, which excludes
-  suspended time), never `System.currentTimeMillis()`; otherwise a restart
-  during deep sleep fails the 15s startup probe as soon as the device wakes.
-- **Bundled GEO Assets & Fallback**: Missing bundled GEO assets are handled gracefully as a valid runtime state. `RuleFileStore.extractAssetsIfNeeded` skips absent assets without throwing, Settings displays missing rule-file states, and restoring a missing rule file falls back to downloading from the configured default URL.
-- **Start/Stop and Config Feeding**: All start actions go through the unified `startXray` entry and respect `disableVpn`; do not reintroduce a separate ACTION_START core-only branch. `XrayProcessRunner` must write the final config on a separate IO job while the main run coroutine drains stdout; never restore the synchronous write-then-read sequence, which can deadlock on large configs.
-- **Android 14+ Foreground Service Limits**: Calling `ContextCompat.startForegroundService()` from background components (such as `BroadcastReceiver`) will throw `ForegroundServiceStartNotAllowedException` on Android 14+ unless an activity is brought to the foreground first (e.g. `startActivity` with `FLAG_ACTIVITY_NEW_TASK`).
-- **Rule File Background Updates**: Rule files (geoip/geosite) default to GitHub URLs. In mainland network environments, downloading from GitHub requires an active proxy; additionally, Chinese OEM ROMs (e.g. HyperOS/MIUI) restrict background WorkManager execution. Retain the foreground-service periodic check launched by `GeoUpdateScheduler.start()` from the Xray core-ready callback in `TProxyService`—it executes while the VPN is active with guaranteed local proxy availability.
+| Area | Entry points and responsibility |
+| --- | --- |
+| Navigation | `ui/scaffold/AppScaffold.kt`, `ui/navigation/BottomNavGraph.kt`, `ui/screens/MainScreen.kt`: five bottom tabs, **Dashboard / Proxies / Configuration / Logs / Settings**. Wide layouts keep the bottom bar; no navigation rail. |
+| Dashboard | `ui/screens/DashboardScreen.kt`; `viewmodel/DashboardController.kt` handles status/measurements, `ExitInfoController.kt` handles exit IP/location. Dashboard refresh is an exit lookup, not node latency. |
+| Shared cards | `ui/components/DashboardComponents.kt`: `DashboardCard` uses 30 dp corners, a 2 dp shadow and theme colors; shared by Dashboard, Proxies and Configuration. |
+| Proxy behavior | `ui/screens/ProxiesScreen.kt`; `GroupSettingsScreen` in `ui/screens/GroupManagementScreen.kt`: selection strategy, ordered members, failover/recovery, test URL, front proxy, default group. These routes keep Proxies selected. |
+| Sources and nodes | `ui/screens/WorkspaceConfigScreen.kt`, `NodeConfigurationScreen.kt`, `GroupSourceEditorSheet.kt`, `NodeEditorSheet.kt`; group management is in `GroupManagementScreen.kt`. Local/subscription sources, imports, refresh and node editing belong under Configuration. |
+| Settings | `ui/screens/SettingsScreen.kt`: General, TUN, Inbounds, Rules, DNS, Panel, About. Content lives in the corresponding `Settings*Section.kt` files. `SettingsGlobalConfigSection.kt` is the DNS form; `SettingsNetworkSection.kt` contains LAN controls under TUN. |
+| Rules/resources | `ui/screens/RulesScreen.kt`, `SettingsRuleFilesSection.kt`; `viewmodel/TrafficRulesController.kt`, `RuleFileController.kt`. Settings → Rules → Rule resources opens the DAT manager and keeps Settings selected. |
+| Controllers | `viewmodel/MainViewModel.kt` is the facade; feature work belongs in `GroupWorkspaceController`, `TrafficRulesController`, `SettingsController`, `DashboardController`, `ExitInfoController`, `RuleFileController`, `VpnServiceController`, `AppIconController`, or `UpdateController`. |
+| Files/preferences | `data/source/FileManager.kt` delegates DAT work to `RuleFileStore`/`FileUriHelper`; `LogFileManager` handles saved logs. `prefs/Preferences.kt` owns preference access. |
+| Subscriptions | `common/subscription/NodeImportConverter.kt` parses supported share links, base64 subscriptions, Xray/sing-box outbounds and Mihomo YAML nodes; `SubscriptionService.kt` refreshes subscription groups. Unsupported combinations produce reasons rather than a second-core fallback. |
 
-## Benchmark Visualization & Chart Design Guidelines
-1. **Visual Encoding & Cognitive Load**:
-   - **Zero-Legend Overhead when Self-Describing (Context-Aware)**: For categorical horizontal bar charts where category names, brand colors, and flow directions are embedded directly on the Y-axis or adjacent to bars, omit top legends entirely. For continuous line charts (e.g. `sustained_stability.webp`, `idle_memory.webp`, `weaknet_throughput.webp`) where multiple backend curves share the same coordinate space, retain a clean, centered top legend using strictly standard brand colors.
-   - **Brand Color Binding**: Always bind backend labels and elements strictly to project brand colors:
-     - `Hev`: `#555555`
-     - `SingTUN`: `#00ADD8`
-     - `SimpleTUN`: `#10B981`
-   - **Y-Axis Hierarchy & Symmetry**: For multi-panel comparisons (e.g. 1×2 layouts), render Y-axis ticks and category labels on the left panel only; omit redundant labels and ticks on the right panel. Category headers (e.g. Backend name) should be vertically centered across their sub-items (e.g. between 4W and 8W).
-   - **Natural Ordering**: Order concurrent workloads progressively (e.g. top-to-bottom: 4 Workers before 8 Workers).
-   - **No Meaningless Spacers**: If a backend is not applicable to a workload (e.g. Hev exceeding PCB limits on 5,000 CPS), do not allocate empty bar rows that break layout continuity; annotate via a concise, centered bottom footnote instead.
-   - **Title Conventions**: Do NOT use ` · ` in chart titles or subtitles. Always suffix metrics with direction indicators where appropriate: `(Higher is Better)` or `(Lower is Better)`.
-   - **Typography**: Strictly use JetBrains Mono via `prop_regular`, `prop_bold`, `prop_medium`.
+There is no active full-configuration editor/import screen, Lua editor/import sheet, or separate Mihomo import sheet. Node import extracts nodes; it does not install the source document's global DNS/inbounds/rules. Advanced node JSON edits one outbound. Node forms preserve unrelated fields and additional server/user entries.
 
-## Benchmark Technical Report Guidelines
-1. **Engineering Neutrality & Factuality**:
-   - Write in an objective, factual, reproducible, and neutral tone.
-   - Avoid subjective or promotional superlatives (e.g. `excellent`, `superior`, `best`, `amazing`). Prefer descriptive measurements: `achieved`, `recorded`, `measured`, `decreased to`, `exceeded`.
-   - Differentiate strictly between **measured facts** and **hypothesized mechanisms**. Do not state correlation as causation without profiling proof.
-2. **Structure & Density (High Signal-to-Noise Ratio)**:
-   - Follow standard technical paper structure: `Test Environment -> Methodology -> Results -> Discussion -> Limitations -> Summary`.
-   - **Privacy & Noise Filtering**: In environment tables, omit private or redundant local network noise (e.g. SSIDs, internal LAN IPs, retail branding suffixes, full kernel hashes). Keep only essential technical variables: SoC platform/cores, OS version, kernel release, network band/type, baseline RTT.
-   - **Results Writing**: Charts and tables present the raw data; body text should summarize key findings, trends, and relative ratios using concise bullet points (`-`). Do NOT mechanically recite every cell of the tables in prose.
-   - **Limitations & Scope**: Always state the hardware, network, and software boundaries. Avoid extrapolating single-device lab findings into universal conclusions.
+## Stores and Live One-Time Migrations
 
-## Device Testing and Commits
-- For Android/VPN/TUN or other device-dependent changes, do not create a commit until the user confirms that the change has passed real-device testing.
-- Keep such changes uncommitted in the working tree while waiting for real-device verification.
-- Prior benchmark runs or long-run stability results do not waive real-device verification for a new behavioral change. Verify the current change on-device before committing.
-- **Commit Message Conventions**:
-  - Format: `<type>(<scope>): <concise subject>` in English without trailing period, single-line (no body unless documenting breaking changes via `BREAKING CHANGE:`).
-  - Scope and Release Notes Classification:
-    - `chore(deps): bump (xray-core|hev-socks5-tunnel|go ...)` -> Classified into **Core Updates** (prominently uncollapsed in release notes).
-    - `feat(...)`, `ui(...)` -> Classified into **Features & Improvements** (use `feat(rules):` instead of `build(rules):` for user-facing rule feature changes).
-    - `perf(...)` -> Classified into **Performance**.
-    - `fix(...)` -> Classified into **Bug Fixes** (tooling/CI scopes like `fix(ci):`, `fix(lint):` are routed to Maintenance).
-    - `refactor(...)`, `build(...)`, `ci(...)`, `docs(...)`, `test(...)`, `style(...)` -> Classified into **Maintenance**.
-    - `(fix|chore)(deps):` -> Classified into **Dependencies** (automated Renovate / library bumps; collapsed along with Maintenance when total technical items >= 4).
+These compatibility readers remain live even though the old editors were removed. Do not delete them solely because there is no editor UI.
 
-## Repository Operating Policy
-- This repository is maintained as a personal experimental project. It is public for reference, but it is not operated as a community-maintained product.
-- Backward compatibility, public API stability, external user expectations, and open-source etiquette are not first-class constraints when they conflict with the author's maintenance needs.
-- Destructive Git operations such as force-push, rebase, amend, and full history rewrite are acceptable when they simplify maintenance or remove sensitive information.
-- GitHub immutable releases/tags cannot be rewritten by a normal force-push. Older objects reachable through those tags remain unless the releases/tags themselves are handled separately.
-- Release tags may live on a pre-rewrite history and therefore need not be ancestors of `main`. Do not use `git describe` or `git merge-base` to infer release lineage; compare tree contents or release contracts instead.
-- `feat/simpletun` is a historical development branch whose SimpleTUN source is already reflected in `main`. Base new work on `main`, not on that branch.
+- `common/config/GlobalConfigStore.kt` owns `global_config.json` and seeds missing/empty global data from an existing selected or discovered configuration, otherwise defaults.
+- `common/config/GroupWorkspace.kt` defines groups, members and nodes; `GroupWorkspaceStore.kt` owns `groups_workspace.json`. When absent, it extracts existing full-config outbounds and uses `GroupProfileStore.kt`/`GroupProfile.kt` to translate old per-config group profiles.
+- `common/config/RuleWorkspaceStore.kt` owns `rules_workspace.json`. Initial migration reads existing global/legacy routing rules or supported Lua patterns through `LegacyLuaRuleImporter.kt`, otherwise defaults. This is limited pattern translation, not arbitrary Lua execution. Preserve migration notices and review migrated rules.
+- Runtime targets are `GLOBAL`, `direct`, `block`, or real group/node names. Routing aliases are not a runtime feature. Group schema 0 → 1 rewrites old alias targets to their owning groups before discarding aliases; rule schema 2 marks the rewrite as complete so interrupted migration is not applied twice. The two stores share a lock.
+- `common/ConfigUtils.kt` delegates Android sanitization, statistics injection and inbound extraction to `common/config/ConfigSanitizer.kt` and `ConfigInjector.kt`; `ConfigCodec.kt` parses saved JSON/YAML for runtime and migration. `WorkspaceFiles.kt` protects versioned workspace writes and atomically replaces files.
+
+## Runtime Boundaries and Contracts
+
+- `service/TProxyService.kt` owns the VPN descriptor, foreground lifecycle and JNI entry points. `XrayProcessRunner.kt` assembles global settings/workspace/rules, sanitizes once with real `Preferences`, injects statistics/group plumbing, and starts Xray. Keep `-config stdin:` in both `ProcessBuilder` and `app/src/main/cpp/xray_exec.c`; otherwise a working-directory `config.json` can shadow the intended configuration.
+- Feed stdin on a separate IO job while draining stdout. A synchronous write-then-read sequence can deadlock on large configurations. All start actions use the unified start path and respect `disableVpn`.
+- `service/OutboundGroupConfig.kt` maps nodes/groups into Xray configuration. `GroupCoreSession.kt` owns the live session; `GroupRuntimeController.kt` owns member selection/health, `FallbackRelayServer.kt` handles relayed connections, and `XrayRoutingEditor.kt` applies routing changes. `SimpleObfsRelay.kt` and `RelayDatagramTransport.kt` implement the supported per-node adaptations.
+- **Fallback contract**: no routine primary probes while healthy; real connection failures/response stalls need corroboration before switching; the recovery timer starts only after backup upstream data; scheduled recovery affects new streams, not established TLS sessions. URL-test groups have independent measurement schedules. Do not document unverified timing internals as guarantees.
+- `service/HttpLatencyMeasurement.kt` is shared by native UI and panel: one HEAD request, request-write-to-response-headers RTT; the overall timeout also includes setup. A successful health URL cannot prove every destination works.
+- `TunnelBackendController.kt` manages Hev/SimpleTUN; `VpnBuilderFactory.kt` builds Android routes; `SocksHealthMonitor.kt`, `VpnNetworkMonitor.kt`, `GeoUpdateScheduler.kt`, `VpnNotificationHelper.kt`/`VpnNotificationUpdater.kt`, and `VpnWakeLock.kt` retain their focused lifecycle roles.
+- **SimpleTUN scope**: IPv4-only, dotted-decimal no-auth SOCKS5, fixed MTU 1500, no IPv6 route/address or IP fragment reassembly. Hev/Xray TUN retain the IPv6 option. See `docs/simpletun_spec.md` before changing native paths.
+- App-managed SOCKS binds must stay loopback-only; health/update clients use `127.0.0.1`. Credentials must be both set or both empty; existing config-side credentials can be adopted once. SimpleTUN strips primary SOCKS auth and ignores app-side credentials.
+- Health checks must respect non-interactive/Doze state without the partial wake lock. Startup deadlines use `StartupProbeDeadline`/`SystemClock.uptimeMillis()`, excluding suspended time, not wall time.
+- Missing bundled GEO files are a supported runtime state: `RuleFileStore.extractAssetsIfNeeded` skips them, the UI shows missing resources, and restore can download the configured URL. Keep the active-service `GeoUpdateScheduler` in addition to WorkManager; background scheduling can be restricted and GitHub downloads may need the proxy.
+- App log saving and panel display independently filter the same Debug-level core stream without restarting it. Access/DNS logging switches apply on the next core start. Lower saved-log levels reduce writes, not all logging work.
+
+## Embedded Panel
+
+`service/ClashApiServer.kt` serves the Clash-compatible API and bundled **zashboard v3.30.0** on one `127.0.0.1` listener. `ClashApiPreferences.kt` defaults to disabled, port **9090**, with an automatically generated secret. `service/ZashboardAssets.kt` serves public static GET/HEAD requests under `/ui/`; `/` and `/ui` redirect there. API and WebSocket requests still require the secret.
+
+`common/ZashboardLauncher.kt` supplies controller host/port/secret via a `/setup` URL fragment; opening `/ui/` manually instead requires the first API connection to be configured with the secret from Settings → Panel. Treat both the launch URL and copied secret as credentials. Service/controller must be running. Enable/port/secret changes restart only the listener while starting/connected, or are saved for the next service start.
+
+`tools/fetch-zashboard.ps1` installs the hash-pinned distribution into `app/src/main/assets/zashboard/`. Keep its `THIRD_PARTY_NOTICES.md` and `app/src/main/assets/licenses/zashboard/LICENSE` in the APK. Offline assets eliminate the external frontend dependency, not network requirements for traffic or optional panel downloads.
+
+## Native Inputs, Build and Verification
+
+- `app/src/main/cpp/CMakeLists.txt` builds Hev and JNI; `app/src/main/proto/` contains gRPC definitions. Keep JNI names bound to their declaring service classes and inject lifecycle callbacks into helpers.
+- `third_party/hev-socks5-tunnel/` and `third_party/miuix/` supply the tunnel and UI source. Read the Miuix-scoped instructions before modifying it. `third_party/scripta/` is retained source, not an included app dependency.
+- `third_party/simpletun/` is in-tree, not a submodule. Build its Android archive with `zig build android` before Gradle. CMake imports `zig-out/android/prebuilt/arm64-v8a/libsimpletun.a` and fails if absent. Run host `zig build test` on Linux/WSL separately.
+- Supply Xray at `third_party/xray-prebuilt/arm64-v8a/libxray.so`. Gradle does not fetch/build/verify Xray, and there is no `ensureXrayCore` task. Prepare GEO and zashboard assets explicitly too.
+- `version.properties` records Xray tag/commit/ZIP SHA-256, Hev version, Go and NDK versions. GEO uses rolling upstream `latest`. `tools/sync_versions.py --check` validates property shapes, Hev version/revision and the QUIC Go minimum; it does not download/hash-check Xray or validate all dependencies.
+- See `docs/building.md` / `docs/building_CN.md` for JDK 25 + 21, Gradle 9.9.1, Android 37.2/NDK, CMake 3.22.1, Zig 0.16.0, input preparation and private signing. The Windows helper is `tools/build-groups-apk.ps1`; it requires the prepared local toolchain/signing material and only assembles debug. Output: `app/build/outputs/apk/debug/LucX-arm64-v8a.apk`.
+- Run `gradlew.bat :app:testDebugUnitTest :app:assembleDebug` (Windows) or `./gradlew :app:testDebugUnitTest :app:assembleDebug` (Unix) with the documented environment. Tool checks: `python -m unittest discover -s tools/tests -v`, `python tools/sync_versions.py --check`. Do not overlap builds in the same source tree.
+- Focused existing tests include `ZashboardAssetsTest`, `ConfigConversionTest`, `ConfigSanitizerPrefsTest`, `FileManagerTest`, `SocksHealthMonitorPolicyTest`, and `StartupProbeDeadlineTest`. JVM tests do not replace device VPN/failover verification or inspecting the final APK assets/signature.
+- `groups-apk.yml` prepares inputs and assembles signed debug, but does not run tests or verify the Xray ZIP hash. `verify.yml` does not prepare Xray/GEO/zashboard. `release.yml` still expects the old APK filename and omits Xray/panel provisioning; it is not a supported LucX release path. There is no No-GEO build variant. See the build guide for details.
+
+## Coding Guidelines
+
+1. Keep Compose state hoisted and composition non-blocking; use Miuix components and `MiuixTheme` colors rather than hardcoded colors.
+2. Keep `MainViewModel`, `TProxyService`, `ConfigUtils`, `FileManager` and `SettingsScreen` as facades. Config transforms belong in `common/config/`, file I/O in stores, lifecycle work in service helpers, feature actions in controllers and settings content in section files.
+3. Use coroutines/flows for asynchronous work. Preserve the foreground-service notification and Android background-start restrictions; headless starts may require bringing the activity forward first.
+4. Preserve protobuf compatibility and regenerate stubs when definitions change. Native edits require ABI, POSIX socket/TCP/UDP and backend-specific understanding.
+5. Keep VPN behavior and responsiveness intact. Do not infer real-device success from builds, unit tests or historical benchmarks.
+
+## Benchmark Tools and Preserved Results
+
+- `tools/benchmark.py`/`presets.py`: throughput, idle memory, bufferbloat, 60s stability, weaknet, CPS and QUIC smoke. Light uses Hev/SimpleTUN on Wi-Fi MTU 1500 without baseline; full includes Hev/Xray/SimpleTUN, physical baseline, Wi-Fi/USB/loopback and applicable MTU 9000 cases.
+- `tools/common/` handles ADB, device paths, iPerf, datasets, themes and netem; `tools/suites/` implements the suites; `idle_bench/`, `microbench/`, and `quic/` provide probes. `BenchmarkService` is exported in debug only. The ADB helper still targets the old `com.simplexray.re.debug` package/launcher and needs alignment before driving LucX; see `tools/README.md`.
+- `docs/benchmark/<profile>/{data,charts,report}/` preserves the `778g` and `8-elite-gen-5` datasets. `generate_charts.py` and `generate_mega_dashboard.py` create charts. `update_benchmark_doc.py` targets an older Chinese Section 3.1 format; current English device reports are maintained manually.
+- Preserve historical SingTUN labels/results as historical measurements, not a current backend or evidence that a new build passed. Keep reports objective, distinguish measurements from hypotheses, state hardware/network/software limits, and omit private local network identifiers.
+
+### Visualization and Report Conventions
+
+- Use the backend palette in `tools/common/theme.py`: Hev `#555555`, historical SingTUN `#00ADD8`, Xray TUN `#e11d48`, SimpleTUN `#10B981`; JetBrains Mono (`prop_regular`, `prop_bold`, `prop_medium`).
+- Self-labeled categorical bars need no redundant legend; shared-axis multi-series lines retain a centered legend. Avoid duplicate Y-axis labels in paired panels, order workloads naturally, and explain inapplicable cases instead of empty spacer rows.
+- Avoid ` · ` in titles; add `(Higher is Better)` / `(Lower is Better)` where applicable. Reports follow environment → methodology → results → discussion → limitations → summary. Summarize trends rather than repeating every table cell.
+
+## Device Testing, Commits and Repository Policy
+
+- For Android/VPN/TUN changes, keep work uncommitted until the user confirms current real-device testing. Prior benchmark runs do not waive this requirement. Commit/push only when requested.
+- Commit format: `<type>(<scope>): <concise English subject>`, no trailing period; single line unless documenting `BREAKING CHANGE:`. Core dependency bumps use `chore(deps): bump ...`; user-visible features use `feat(...)`/`ui(...)`; performance uses `perf(...)`; fixes use `fix(...)`; refactors/build/CI/docs/tests/style are Maintenance. Tooling/CI/lint fixes are Maintenance; other dependency bumps are Dependencies.
+- This is a personal experimental project, not a supported community product. Compatibility and public API stability are not overriding maintenance requirements.
+- Immutable releases/tags may retain older history. Do not use `git describe` or `merge-base` to infer release ancestry; compare trees/contracts. `feat/simpletun` is historical and its source is already reflected in `main`.

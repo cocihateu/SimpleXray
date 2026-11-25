@@ -1,5 +1,4 @@
 import java.util.Properties
-import com.google.protobuf.gradle.proto
 
 plugins {
     alias(libs.plugins.android.application)
@@ -88,7 +87,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.fallback.xm"
+        applicationId = "com.LucX"
         versionCode = appVersionCode
         versionName = appVersionName
         targetSdk = 37
@@ -209,7 +208,7 @@ android {
     androidComponents {
         onVariants(selector().all()) { variant ->
             variant.outputs.forEach { output ->
-                (output as com.android.build.api.variant.VariantOutput).outputFileName.set("SimpleXray-Groups-arm64-v8a.apk")
+                (output as com.android.build.api.variant.VariantOutput).outputFileName.set("LucX-arm64-v8a.apk")
             }
         }
     }
@@ -225,11 +224,9 @@ android {
             jniLibs.srcDir(rootProject.file("third_party/xray-prebuilt"))
             java {
                 directories.add("src/main/java")
-                directories.add("build/generated/source/proto/main/java")
             }
             kotlin {
                 directories.add("src/main/kotlin")
-                directories.add("build/generated/source/proto/main/grpckt")
             }
             assets {
                 directories.clear()
@@ -240,16 +237,18 @@ android {
 }
 
 dependencies {
+    constraints {
+        // Preserve the tracing runtime previously selected through DataStore.
+        implementation("androidx.tracing:tracing:2.0.1")
+    }
     implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
     implementation(libs.grpc.okhttp)
     implementation(libs.grpc.protobuf)
     implementation(libs.grpc.stub)
-    implementation(libs.grpc.kotlin.stub)
     implementation(libs.protobuf.java)
 
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.material)
-    implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.work.runtime.ktx)
 
@@ -258,13 +257,10 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.core)
-    implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.navigationevent)
 
-    implementation(libs.lazycolumnscrollbar)
-    implementation(libs.reorderable)
     implementation(libs.okhttp)
     implementation(libs.yaml)
 
@@ -273,11 +269,8 @@ dependencies {
     implementation(libs.miuix.blur)
     implementation(libs.miuix.squircle)
     implementation(libs.miuix.icons)
-    implementation(libs.miuix.nav)
     implementation(libs.miuix.material)
     implementation(libs.miuix.glass)
-    implementation(libs.miuix.glass.icons)
-    implementation(libs.scripta.editor)
     testImplementation(libs.junit)
     testImplementation(libs.org.json)
     androidTestImplementation(platform(libs.androidx.compose.bom))
@@ -291,15 +284,6 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
     }
-}
-
-val ensureXrayCore = tasks.register("ensureXrayCore") {
-    group = "build"
-    description = "Xray is supplied by the Windows toolchain in third_party/xray-prebuilt"
-}
-
-tasks.named("preBuild").configure {
-    dependsOn(ensureXrayCore)
 }
 
 if (project.hasProperty("exportLicenses")) {

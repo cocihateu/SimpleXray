@@ -22,8 +22,7 @@ internal object ClashPresentation {
         "direct", "DIRECT" -> "DIRECT"
         "block", "REJECT" -> "REJECT"
         "GLOBAL" -> "GLOBAL"
-        else -> workspace.effectiveRoutingBindings()[name]?.let { mapper.toApiName(true, it) }
-            ?: mapper.toApiName(false, name)
+        else -> mapper.toApiName(workspace.groupByTag(name) != null, name)
     }
 
     fun rule(rule: TrafficRule, index: Int, workspace: GroupWorkspace, mapper: ClashTagMapper): JSONObject =

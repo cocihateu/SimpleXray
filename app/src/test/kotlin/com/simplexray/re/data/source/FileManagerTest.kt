@@ -32,17 +32,4 @@ class FileManagerTest {
         org.junit.Assert.assertEquals("fallback", FileUriHelper.sanitizeFileName("", "fallback"))
     }
 
-    @Test
-    fun testIsLuaFileName() {
-        assertTrue(FileManager.isLuaFileName("routing.lua"))
-        assertTrue(FileManager.isLuaFileName("dns.lua"))
-        assertTrue(FileManager.isLuaFileName("custom_rule.LUA"))
-        assertTrue(FileManager.isLuaFileName("my.routing.lua"))
-
-        assertFalse(FileManager.isLuaFileName(".lua"))
-        assertFalse(FileManager.isLuaFileName("routing.lua.txt"))
-        assertFalse(FileManager.isLuaFileName("routing.lu"))
-        assertFalse(FileManager.isLuaFileName("geoip.dat"))
-        assertFalse(FileManager.isLuaFileName(""))
-    }
 }

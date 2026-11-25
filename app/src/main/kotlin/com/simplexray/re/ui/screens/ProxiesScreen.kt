@@ -38,31 +38,30 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.simplexray.re.R
 import com.simplexray.re.common.config.GroupMemberRef
 import com.simplexray.re.common.config.GroupStrategy
 import com.simplexray.re.common.config.GroupWorkspace
 import com.simplexray.re.common.config.ProxyGroup
 import com.simplexray.re.service.FallbackRuntimeInfo
 import com.simplexray.re.service.GroupRuntimeStatus
-import com.simplexray.re.ui.scaffold.LocalLayerBackdrop
+import com.simplexray.re.ui.components.CardHeading
+import com.simplexray.re.ui.components.DashboardCard
+import com.simplexray.re.ui.components.StatusPill
 import com.simplexray.re.viewmodel.MainViewModel
-import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.glass.GlassBottomSheet
-import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @Composable
 fun ProxiesScreen(
     mainViewModel: MainViewModel,
     paddingValues: PaddingValues,
+    onOpenGroupSettings: (String) -> Unit,
 ) {
     val workspace by mainViewModel.groupWorkspace.collectAsStateWithLifecycle()
     val active by mainViewModel.activeGroupNodes.collectAsStateWithLifecycle()
@@ -91,15 +90,6 @@ fun ProxiesScreen(
             }
             "expand" -> expandedGroups = workspace.groups.map { it.tag }
             "collapse" -> expandedGroups = emptyList()
-            "measure" -> {
-                if (measuringTargets.isEmpty()) {
-                    val target = workspace.groupByTag(mainViewModel.selectedProxyGroupTag)
-                        ?: workspace.groups.firstOrNull()
-                    target?.let { mainViewModel.measureGroupLatency(it.tag) }
-                } else {
-                    mainViewModel.showSnackbar("正在测量，请等待本组完成")
-                }
-            }
         }
         mainViewModel.proxyPageAction = null
     }
@@ -113,8 +103,8 @@ fun ProxiesScreen(
         state = listState,
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp,
             top = paddingValues.calculateTopPadding() + 12.dp,
-            bottom = paddingValues.calculateBottomPadding() + 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+            bottom = paddingValues.calculateBottomPadding() + 16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (searching) item {
             LaunchedEffect(Unit) { searchFocus.requestFocus() }
@@ -130,11 +120,15 @@ fun ProxiesScreen(
                 })
         }
         if (workspace.groups.isEmpty()) item {
-            Text("在配置页添加分组后，这里显示运行代理。", modifier = Modifier.padding(vertical = 24.dp),
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            DashboardCard {
+                Text("请先在配置页添加分组", modifier = Modifier.padding(18.dp), fontSize = 14.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            }
         } else if (visibleGroups.isEmpty()) item {
-            Text("搜索结果为空", modifier = Modifier.padding(vertical = 24.dp),
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            DashboardCard {
+                Text("搜索结果为空", modifier = Modifier.padding(18.dp), fontSize = 14.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            }
         }
         items(visibleGroups, key = { it.tag }) { group ->
             val members = group.effectiveMembers()
@@ -150,26 +144,31 @@ fun ProxiesScreen(
             val visibleMembers = if (query.isEmpty() || group.tag.contains(query, ignoreCase = true)) {
                 members
             } else members.filter { proxyMemberMatches(workspace, it, query) }
-            Card(Modifier.fillMaxWidth(), cornerRadius = 30.dp,
-                colors = CardDefaults.defaultColors(
-                    color = MiuixTheme.colorScheme.background,
-                    contentColor = MiuixTheme.colorScheme.onBackground,
-                )) {
+            DashboardCard {
                 Row(Modifier.fillMaxWidth().clickable {
                     mainViewModel.selectedProxyGroupTag = group.tag
                     expandedGroups = if (expanded) expandedGroups - group.tag else expandedGroups + group.tag
-                }.padding(16.dp), verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(group.tag, style = MiuixTheme.textStyles.title3,
-                            fontSize = 22.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
-                            overflow = TextOverflow.Ellipsis)
-                        Text(summary, style = MiuixTheme.textStyles.body2, fontSize = 14.sp, maxLines = 1,
+                }.padding(18.dp), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CardHeading(
+                            icon = when (group.strategy) {
+                                GroupStrategy.URL_TEST -> R.drawable.dashboard_speed
+                                GroupStrategy.FALLBACK -> R.drawable.dashboard_status
+                                GroupStrategy.SELECT -> R.drawable.dashboard_global
+                            },
+                            title = group.tag,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(summary, style = MiuixTheme.textStyles.body2, fontSize = 13.sp, lineHeight = 18.sp, maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            StatusPill(strategyShortLabel(group.strategy))
+                            StatusPill("${members.size} 个成员")
+                        }
                     }
-                    Text(proxyStrategyLabel(group.strategy), style = MiuixTheme.textStyles.body2,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     Box(Modifier.size(32.dp).clip(CircleShape).background(MiuixTheme.colorScheme.surface),
                         contentAlignment = Alignment.Center) {
                         Icon(if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
@@ -178,21 +177,29 @@ fun ProxiesScreen(
                     }
                 }
                 if (expanded) {
-                    Column(Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, bottom = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically) {
-                            Text("${members.size} 个成员 · HTTP 延迟", modifier = Modifier.weight(1f),
-                                style = MiuixTheme.textStyles.body2,
+                    Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("HTTP 延迟", modifier = Modifier.weight(1f).padding(start = 6.dp),
+                                style = MiuixTheme.textStyles.body2, fontSize = 13.sp,
                                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                            TextButton(text = "组设置", onClick = { onOpenGroupSettings(group.tag) }, cornerRadius = 24.dp)
                             TextButton(text = if (members.any { it in measuringTargets }) "测量中…" else "测速",
+                                cornerRadius = 24.dp, colors = ButtonDefaults.textButtonColorsPrimary(),
                                 enabled = measuringTargets.isEmpty(), onClick = {
                                     mainViewModel.selectedProxyGroupTag = group.tag
                                     mainViewModel.measureGroupLatency(group.tag)
                                 })
                         }
-                        if (members.isEmpty()) Text("组内成员为空", modifier = Modifier.padding(8.dp),
-                            style = MiuixTheme.textStyles.body2,
+                        if (group.strategy != GroupStrategy.SELECT) {
+                            Text(if (running) "点击成员可临时切换" else "启动代理后可临时切换成员",
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+                                style = MiuixTheme.textStyles.body2, fontSize = 13.sp,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                        }
+                        if (members.isEmpty()) Text("组内成员为空", modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+                            style = MiuixTheme.textStyles.body2, fontSize = 13.sp,
                             color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                         visibleMembers.forEach { member ->
                             val node = if (member.isGroup) null else workspace.nodeByTag(member.tag)
@@ -202,7 +209,7 @@ fun ProxiesScreen(
                             val runtimeDelay = if (running) liveTag?.let { runtimeLatencies[it] } else null
                             val useLive = live != null && (measured == null || live.completedAtMs >= measured.lastTryTime)
                             val delay = when {
-                                useLive -> live?.delayMs
+                                useLive -> live.delayMs
                                 measured != null -> measured.delayMs.takeIf { measured.alive }
                                 else -> runtimeDelay
                             }
@@ -216,31 +223,31 @@ fun ProxiesScreen(
                             }
                             val selected = current == member
                             val description = if (member.isGroup) {
-                                if (running) "节点组 · ${active[member.tag] ?: "等待连接"}" else "节点组"
+                                if (running) "代理组 · ${active[member.tag] ?: "等待连接"}" else "代理组"
                             } else node?.protocol?.uppercase() ?: when (member.tag) {
                                 "direct" -> "直连"
                                 "block" -> "拒绝"
                                 else -> "节点"
                             }
-                            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                                .then(if (selected) Modifier.background(MiuixTheme.colorScheme.secondaryVariant) else Modifier)
-                                .clickable {
+                            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp))
+                                .background(if (selected) MiuixTheme.colorScheme.primary.copy(alpha = 0.12f) else MiuixTheme.colorScheme.surface)
+                                .clickable(enabled = running || group.strategy == GroupStrategy.SELECT) {
                                     mainViewModel.selectedProxyGroupTag = group.tag
                                     mainViewModel.selectGroupMember(group.tag, member)
-                                }.padding(12.dp), verticalAlignment = Alignment.CenterVertically,
+                                }.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                    Text(member.tag, style = MiuixTheme.textStyles.body1, maxLines = 2,
+                                    Text(member.tag, style = MiuixTheme.textStyles.body1, fontSize = 15.sp, maxLines = 2,
                                         overflow = TextOverflow.Ellipsis)
                                     val position = members.indexOf(member)
                                     val role = if (group.strategy == GroupStrategy.FALLBACK) {
                                         if (position == 0) " · 主节点" else " · 备用 $position"
                                     } else ""
-                                    Text(description + role, style = MiuixTheme.textStyles.body2, maxLines = 2,
+                                    Text(description + role, style = MiuixTheme.textStyles.body2, fontSize = 12.sp, maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
                                         color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                                 }
-                                Text(delayText, style = MiuixTheme.textStyles.body2,
+                                Text(delayText, style = MiuixTheme.textStyles.body2, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                                     color = when {
                                         measuring -> MiuixTheme.colorScheme.onSurfaceVariantSummary
                                         delay != null -> MiuixTheme.colorScheme.primary
@@ -257,12 +264,6 @@ fun ProxiesScreen(
             }
         }
     }
-}
-
-private fun proxyStrategyLabel(strategy: GroupStrategy): String = when (strategy) {
-    GroupStrategy.SELECT -> "Selector"
-    GroupStrategy.FALLBACK -> "Fallback"
-    GroupStrategy.URL_TEST -> "URLTest"
 }
 
 private fun proxyMemberMatches(workspace: GroupWorkspace, member: GroupMemberRef, query: String): Boolean =
@@ -294,31 +295,8 @@ private fun proxyMemberContainsLeaf(workspace: GroupWorkspace, member: GroupMemb
     else member.tag == leaf
 
 @Composable
-internal fun GroupChainSheet(
-    workspace: GroupWorkspace,
-    group: ProxyGroup,
-    onSave: (String?, ProxyGroup) -> String?,
-    onDismiss: () -> Unit,
-) {
-    val choices = listOf<GroupMemberRef?>(null) +
-        workspace.groups.filter { it.tag != group.tag }.map { GroupMemberRef(it.tag, true) } +
-        workspace.allNodes().filter { candidate -> group.nodes.none { it.tag == candidate.tag } }.map { GroupMemberRef(it.tag) }
-    var selected by remember(group) { mutableStateOf(group.frontProxy) }
-    var error by remember { mutableStateOf<String?>(null) }
-    GlassBottomSheet(show = true, backdrop = LocalLayerBackdrop.current, title = "链式代理", onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("本机 → 前置代理 → 本组节点 → 目标", style = MiuixTheme.textStyles.body2)
-            Card {
-                OverlayDropdownPreference(title = "前置代理",
-                    items = choices.map { ref -> ref?.let { "${it.tag} · ${if (it.isGroup) "组" else "节点"}" } ?: "直接连接" },
-                    selectedIndex = choices.indexOf(selected).coerceAtLeast(0),
-                    onSelectedIndexChange = { selected = choices[it] })
-            }
-            error?.let { Text(it, color = MiuixTheme.colorScheme.error) }
-            Button(onClick = {
-                error = onSave(group.tag, group.copy(frontProxy = selected))
-                if (error == null) onDismiss()
-            }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColorsPrimary()) { Text("保存") }
-        }
-    }
+internal fun strategyShortLabel(strategy: GroupStrategy): String = when (strategy) {
+    GroupStrategy.FALLBACK -> "主备回落"
+    GroupStrategy.URL_TEST -> "自动测速"
+    GroupStrategy.SELECT -> "手动选择"
 }

@@ -12,13 +12,6 @@ import java.io.File
 
 private const val TAG = "GlobalConfigStore"
 
-data class GlobalConfigSummary(
-    val dnsServerCount: Int,
-    val inboundCount: Int,
-    val routingScript: String?,
-    val routingRuleCount: Int,
-)
-
 class GlobalConfigStore(context: Context) {
     private val appContext = context.applicationContext
     private val file = File(appContext.filesDir, GLOBAL_CONFIG_FILENAME)
@@ -43,13 +36,6 @@ class GlobalConfigStore(context: Context) {
         return fallback
     }
 
-    fun saveRaw(content: String): Boolean {
-        val parsed = ConfigCodec.parse(content) ?: return false
-        writeText(parsed.toString(2))
-        notifyModified()
-        return true
-    }
-
     fun updateDns(edit: (JSONObject) -> Unit) {
         synchronized(lock) {
             val root = loadJson()
@@ -72,21 +58,6 @@ class GlobalConfigStore(context: Context) {
         return true
     }
 
-    fun summary(): GlobalConfigSummary {
-        val root = loadJson()
-        val dnsServers = root.optJSONObject("dns")?.optJSONArray("servers")?.length() ?: 0
-        val inbounds = root.optJSONArray("inbounds")?.length() ?: 0
-        val routing = root.optJSONObject("routing")
-        val script = routing?.optString("script")?.takeIf { it.isNotBlank() }
-        val rules = routing?.optJSONArray("rules")?.length() ?: 0
-        return GlobalConfigSummary(
-            dnsServerCount = dnsServers,
-            inboundCount = inbounds,
-            routingScript = script,
-            routingRuleCount = rules,
-        )
-    }
-
     private fun ensureInitialized() {
         if (file.isFile && file.length() > 0L) return
         synchronized(lock) {
@@ -104,6 +75,7 @@ class GlobalConfigStore(context: Context) {
                 f.isFile &&
                     f.name != GLOBAL_CONFIG_FILENAME &&
                     f.name != GroupWorkspaceStore.WORKSPACE_FILENAME &&
+                    f.name != RuleWorkspaceStore.WORKSPACE_FILENAME &&
                     f.name != "extra_api.json" &&
                     (f.name.endsWith(".json", ignoreCase = true) ||
                         f.name.endsWith(".yaml", ignoreCase = true) ||

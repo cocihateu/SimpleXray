@@ -3,7 +3,6 @@ package com.simplexray.re.activity
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
-import android.content.res.Configuration
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -32,7 +31,6 @@ import com.simplexray.re.ui.navigation.AppNavHost
 import com.simplexray.re.viewmodel.MainViewModel
 import com.simplexray.re.viewmodel.MainViewModelFactory
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.ThemeController
 import top.yukonga.miuix.kmp.theme.ThemePaletteStyle
 
