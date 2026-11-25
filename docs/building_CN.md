@@ -138,10 +138,10 @@ Windows 构建辅助脚本从 `$env:LOCALAPPDATA\SimpleXrayBuild\signing` 读取
 所有依赖和资源准备完毕后执行：
 
 ```powershell
-.\tools\build-groups-apk.ps1 -BuildNumber 40
+.\tools\build-groups-apk.ps1
 ```
 
-请使用比已安装版本更新的构建号。脚本仅运行 `:app:assembleDebug`，设置 `versionName = 1.0.0-<BuildNumber>-debug`、`versionCode = 10001000 + BuildNumber`，不运行测试，也不更新原生库或资源。
+脚本运行 `:app:assembleDebug`，并与 GitHub Actions 共用 `app/build.gradle.kts` 固定定义的 **1.0.0-68 / 10001068**。原生库、资源和签名材料按上文预先准备。
 
 产物：**`app/build/outputs/apk/debug/LucX-arm64-v8a.apk`**。这是使用持久密钥签名的 **debug** APK，不是经过 R8 优化的 release 构建。
 
@@ -151,10 +151,10 @@ Windows 构建辅助脚本从 `$env:LOCALAPPDATA\SimpleXrayBuild\signing` 读取
 
 ```powershell
 .\gradlew.bat :app:testDebugUnitTest :app:assembleDebug "-Porg.gradle.java.installations.paths=$toolchainRoot\jdk-25,$toolchainRoot\jdk-21"
-.\gradlew.bat :app:assembleRelease -PappVerName=1.0.0 "-Porg.gradle.java.installations.paths=$toolchainRoot\jdk-25,$toolchainRoot\jdk-21"
+.\gradlew.bat :app:assembleRelease "-Porg.gradle.java.installations.paths=$toolchainRoot\jdk-25,$toolchainRoot\jdk-21"
 ```
 
-Linux 使用 `./gradlew`，设置相应 Java/SDK 路径，并准备相同输入。`-PappVerName` 和可选的 `-PappVerCode` 可以覆盖应用版本；不传参数时版本名为 `1.0.0`，debug 额外带 `-debug` 后缀。
+Linux 使用 `./gradlew`，设置相应 Java/SDK 路径并准备相同输入。`LucX` 分支的 debug 和 release 均使用 `app/build.gradle.kts` 固定定义的版本名 **1.0.0-68**、版本码 **10001068**。
 
 直接构建时，通过 `KEYSTORE_PATH`、`KEYSTORE_PASSWORD`、`KEY_ALIAS`、`KEY_PASSWORD` 配置私有签名，或在本地、不纳入版本控制的 `store.properties` 中设置 `storeFile`、`storePassword`、`keyAlias`、`keyPassword`；环境变量优先。两种 build type 都会在配置的 keystore 文件存在时使用该签名，否则回退到默认 debug 密钥。因此，标为 release 的 APK **不等于已正确使用发布签名**。
 
@@ -176,7 +176,7 @@ jar tf .\app\build\outputs\apk\debug\LucX-arm64-v8a.apk | Select-String 'libxray
 
 ## 6. CI 范围与不受支持的发布路径
 
-- **`groups-apk.yml`** 是当前 APK 打包路径：在 `groups-apk` 分支推送或手动触发时安装工具链、准备 Xray/GEO/zashboard、构建 SimpleTUN、加载 Groups 签名 Secrets、运行 `:app:assembleDebug` 并上传 `LucX-arm64-v8a`。该工作流不运行单元测试。它核验 zashboard ZIP 哈希，但 Xray 仅按 `XRAY_CORE_VERSION` 下载，目前不核验 `XRAY_CORE_ZIP_SHA256` 或 `XRAY_CORE_COMMIT`。
+- **`groups-apk.yml`** 是当前 APK 打包路径：在 `LucX` 分支推送或手动触发时安装工具链、准备 Xray/GEO/zashboard、构建 SimpleTUN、加载既有签名 Secrets、运行 `:app:assembleDebug`，并上传 `LucX-arm64-v8a`。版本与本地共用 `app/build.gradle.kts` 中的 **1.0.0-68 / 10001068**。
 - **`verify.yml`** 为符合条件的 `main`/`dev` 变更配置了版本检查、Go 格式检查、SimpleTUN 构建/测试与 Gradle debug 测试/打包。它不准备 Xray、GEO 或 zashboard，因此不是完整的可分发 APK 构建流程。路径过滤会跳过仅 Markdown/docs 的变更；不能从本次文档更新推断 CI 已通过。
 - **当前 `release.yml` 不是受支持的 LucX 发布路径。** 其 tag 触发流程仍复制 `simplexray-arm64-v8a.apk`，与 Gradle 生成的 `LucX-arm64-v8a.apk` 不符，也没有安装 Xray 可执行文件或面板资源。虽然流程核对 Xray tag/commit 元数据，但并未下载并核验 ZIP。不要依赖该流程发布可用版本。当前没有 No-GEO Gradle 变体或受支持的 No-GEO 发布产物。
 

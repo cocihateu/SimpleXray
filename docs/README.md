@@ -85,7 +85,7 @@ Settings → Rules → Rule resources manages the bundled `geoip.dat`/`geosite.d
 
 Manual groups retain saved selections. URL-test groups run initial measurements asynchronously after session readiness and repeat them on their configured schedule. Proxies and group-node pages provide explicit HTTP measurements; Dashboard refresh is only an exit-information lookup.
 
-Fallback uses real traffic, parallel comparative health checks and strong failures from multiple destination hosts. Three distinct stalled or failed destinations within 60 seconds can demote a member even while its health URL responds. Demotion applies a 30-second to 5-minute cooldown; strong signals arriving during a check are retained for a later check. TCP connection setup uses up to three candidates with a 1.5–3 second stagger. Selecting a backup starts the configured primary-recovery interval, and successful recovery returns new connections to the primary. See [fallback behavior](./configuration.md#fallback-and-recovery).
+Fallback uses real traffic, comparative health checks and strong failures from multiple destination hosts. Three distinct stalled or failed destinations within 60 seconds can demote a member even while its health URL responds. Demotion applies a 30-second to 5-minute cooldown; strong signals arriving during a check are retained for a later check. Local SOCKS setup follows candidate priority, while response observation leaves slow streams open for policy verification. Nested checks resolve child alternatives first. Every switch to a backup starts the configured recovery interval, including health-order changes. See [fallback behavior](./configuration.md#fallback-and-recovery).
 
 Established streams remain tied to their current transport. After demotion, a two-second received-byte observation keeps active downloads running and closes stalled connections so applications can reconnect. Initial exchanges retain bounded replay. Health-URL results and real destination outcomes jointly inform fallback decisions.
 
@@ -136,7 +136,7 @@ Before assembling, prepare `third_party/xray-prebuilt/arm64-v8a/libxray.so`, bui
 .\tools\build-groups-apk.ps1
 ```
 
-Use the helper's `-BuildNumber` parameter with an increasing number when producing updates. It assembles a signed debug APK; it does not provision the toolchain or create signing credentials. Output: **`app/build/outputs/apk/debug/LucX-arm64-v8a.apk`**. Keep signing credentials private and reuse the intended key for upgrades.
+The LucX branch builds **1.0.0-68**, version code **10001068**, as defined in `app/build.gradle.kts`. The helper produces a persistently signed debug APK at **`app/build/outputs/apk/debug/LucX-arm64-v8a.apk`**. Prepare the toolchain and private signing credentials as described in the build guide, and reuse the existing signing key for upgrades.
 
 For JVM tests and a direct Gradle build in a configured environment, use `gradlew.bat :app:testDebugUnitTest :app:assembleDebug` on Windows, or `./gradlew :app:testDebugUnitTest :app:assembleDebug` on Unix. Device-dependent VPN/fallback behavior still requires real-device verification.
 

@@ -14,9 +14,6 @@ internal object FallbackPolicy {
     const val STRONG_CHECK_GAP_MS = 3_000L
     const val WEAK_CHECK_GAP_MS = 15_000L
 
-    fun staggerDelayMs(latencyMs: Long?): Long =
-        ((latencyMs ?: 0L) * 2L).coerceIn(1_500L, 3_000L)
-
     fun stallTimeoutMs(latencyMs: Long?): Int =
         ((latencyMs ?: 0L) * 3L + 2_000L).coerceIn(4_000L, 10_000L).toInt()
 

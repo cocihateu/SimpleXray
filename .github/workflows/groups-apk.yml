@@ -2,7 +2,7 @@ name: Build LucX APK
 
 on:
   push:
-    branches: [groups-apk]
+    branches: [LucX]
   workflow_dispatch:
 
 permissions:
@@ -82,7 +82,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.GROUPS_KEYSTORE_PASSWORD }}
           KEY_ALIAS: simplexray-groups
           KEY_PASSWORD: ${{ secrets.GROUPS_KEYSTORE_PASSWORD }}
-        run: gradle :app:assembleDebug -PappVerCode=10001045 -PappVerName=1.0.0-45
+        run: gradle :app:assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

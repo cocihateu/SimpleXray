@@ -1,5 +1,3 @@
-param([int]$BuildNumber = 40)
-
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if (!(Test-Path -LiteralPath (Join-Path $projectRoot 'app\src\main\assets\zashboard\index.html') -PathType Leaf)) {
@@ -19,10 +17,8 @@ $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
 $env:PATH = "$env:JAVA_HOME\bin;$env:ANDROID_HOME\cmake\3.22.1\bin;$env:PATH"
 
 $gradlePath = Join-Path $toolchainRoot 'gradle-9.9.1\bin\gradle.bat'
-$versionCode = 10001000 + $BuildNumber
-Write-Output "Building LucX 1.0.0-$BuildNumber-debug with persistent signing alias $env:KEY_ALIAS."
+Write-Output "Building LucX 1.0.0-68 with persistent signing alias $env:KEY_ALIAS."
 & $gradlePath --project-dir $projectRoot :app:assembleDebug `
-    "-PappVerName=1.0.0-$BuildNumber" "-PappVerCode=$versionCode" `
     "-Porg.gradle.java.installations.paths=$env:JAVA_HOME,$toolchainRoot\jdk-21" `
     --console=plain --quiet
 $buildExitCode = $LASTEXITCODE

@@ -138,10 +138,10 @@ The Windows helper loads `simplexray-groups.p12` and the Windows-protected `simp
 After all prerequisites and assets are ready:
 
 ```powershell
-.\tools\build-groups-apk.ps1 -BuildNumber 40
+.\tools\build-groups-apk.ps1
 ```
 
-Choose a build number newer than the installed build. The helper runs only `:app:assembleDebug`, with `versionName = 1.0.0-<BuildNumber>-debug` and `versionCode = 10001000 + BuildNumber`. It does not run tests or refresh native libraries/assets.
+The helper runs `:app:assembleDebug` and shares the fixed **1.0.0-68 / 10001068** version from `app/build.gradle.kts` with GitHub Actions. Prepare native libraries, assets, and signing material as described above.
 
 Output: **`app/build/outputs/apk/debug/LucX-arm64-v8a.apk`**. This is a persistently signed **debug** APK, not an R8-optimized release build.
 
@@ -151,10 +151,10 @@ With the environment above, manual debug/test and release commands are:
 
 ```powershell
 .\gradlew.bat :app:testDebugUnitTest :app:assembleDebug "-Porg.gradle.java.installations.paths=$toolchainRoot\jdk-25,$toolchainRoot\jdk-21"
-.\gradlew.bat :app:assembleRelease -PappVerName=1.0.0 "-Porg.gradle.java.installations.paths=$toolchainRoot\jdk-25,$toolchainRoot\jdk-21"
+.\gradlew.bat :app:assembleRelease "-Porg.gradle.java.installations.paths=$toolchainRoot\jdk-25,$toolchainRoot\jdk-21"
 ```
 
-On Linux use `./gradlew`, set the corresponding Java/SDK paths, and prepare the same inputs. `-PappVerName` and optional `-PappVerCode` override app versioning; without overrides the version name is `1.0.0` (with `-debug` on debug builds).
+On Linux use `./gradlew`, set the Java/SDK paths, and prepare the same inputs. Both debug and release builds on `LucX` use version name **1.0.0-68** and version code **10001068**, fixed in `app/build.gradle.kts`.
 
 For direct builds, configure signing privately through `KEYSTORE_PATH`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`, or a local, untracked `store.properties` with `storeFile`, `storePassword`, `keyAlias`, `keyPassword`. Environment variables take precedence. Both build types use that signing configuration when its keystore file exists; otherwise they fall back to the default debug key. An APK labeled release is therefore **not proof of release signing**.
 
@@ -176,7 +176,7 @@ Inspect the archive for `lib/arm64-v8a/libxray.so`, both GEO files, `assets/zash
 
 ## 6. CI Scope and Unsupported Release Paths
 
-- **`groups-apk.yml`** is the current APK packaging path: on `groups-apk` pushes or manual dispatch it installs the toolchain, prepares Xray/GEO/zashboard, builds SimpleTUN, loads the Groups signing secrets, runs `:app:assembleDebug`, and uploads `LucX-arm64-v8a`. It does not run the unit-test suite. The zashboard archive is hash-checked; the Xray download currently uses `XRAY_CORE_VERSION` without checking `XRAY_CORE_ZIP_SHA256` or `XRAY_CORE_COMMIT`.
+- **`groups-apk.yml`** packages the app on `LucX` pushes or manual dispatch: it installs the toolchain, prepares Xray/GEO/zashboard, builds SimpleTUN, loads existing signing secrets, runs `:app:assembleDebug`, and uploads `LucX-arm64-v8a`. CI and local builds share **1.0.0-68 / 10001068** from `app/build.gradle.kts`.
 - **`verify.yml`** declares pin/Go-format checks, SimpleTUN build/tests and Gradle debug tests/assembly on eligible `main`/`dev` changes. It does not prepare Xray, GEO or zashboard, so it is not a complete distributable-APK recipe. Markdown/docs-only changes are excluded by its path filters; successful CI must not be inferred from this documentation update.
 - **`release.yml` is not a supported LucX release path as written.** Its tag-triggered steps still copy `simplexray-arm64-v8a.apk`, which does not match Gradle's `LucX-arm64-v8a.apk`, and do not install the Xray executable or panel bundle. Although it checks Xray tag/commit metadata, it does not download and hash-check the archive. Do not rely on it to publish a usable release. There is no current No-GEO Gradle variant or supported No-GEO release artifact.
 

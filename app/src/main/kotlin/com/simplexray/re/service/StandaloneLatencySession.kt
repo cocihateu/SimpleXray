@@ -81,7 +81,6 @@ internal object StandaloneLatencySession {
                 onCandidateFailed = controller::onCandidateFailed,
                 onCandidateConnected = controller::onCandidateConnected,
                 onStalledUpload = controller::onStalledUpload,
-                onDialResult = controller::onDialResult,
             )
             var process: Process? = null
             var readerJob: kotlinx.coroutines.Job? = null

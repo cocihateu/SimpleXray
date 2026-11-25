@@ -263,7 +263,7 @@ fun GroupSettingsScreen(
             Card {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (strategy == GroupStrategy.FALLBACK) {
-                        Text("业务停滞会触发主备对照检查；多个目标持续失败时降低节点优先级。切换备用后定时检查主节点，健康连接继续传输")
+                        Text("响应等待触发主备测活，确认降权后关闭停滞连接。健康慢请求继续等待响应，切换备用后定时检查主节点")
                         GroupSecondsField("连接建立超时 · 秒", timeout) { timeout = it }
                         GroupSecondsField("主节点恢复检查间隔 · 秒", recovery) { recovery = it }
                     } else if (strategy == GroupStrategy.URL_TEST) {
