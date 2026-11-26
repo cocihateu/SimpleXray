@@ -156,8 +156,8 @@ internal class GroupCoreSession(
             onCandidateConnected = { groupTag, leaf, owner, host ->
                 controller?.onCandidateConnected(groupTag, leaf, owner, host)
             },
-            onStalledUpload = { groupTag, leaf, owner, host, strong, responsePending, applyIfWaiting ->
-                controller?.onStalledUpload(groupTag, leaf, owner, host, strong, responsePending, applyIfWaiting) ?: false
+            onStalledUpload = { groupTag, leaf, owner, host, strong, wait, applyIfWaiting ->
+                controller?.onStalledUpload(groupTag, leaf, owner, host, strong, wait, applyIfWaiting) ?: false
             },
             awaitReady = { standbyReady.await() },
         )

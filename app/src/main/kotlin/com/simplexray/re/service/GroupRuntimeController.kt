@@ -55,22 +55,23 @@ internal class GroupRuntimeController(
     }
     private data class Destination(val member: GroupMemberRef, val leaf: String, val host: String)
     private data class DestinationFailure(val route: Route, val until: Long)
-    private data class EvidenceTime(val at: Long, val version: Long)
+    private data class EvidenceTime(val at: Long, val version: Long) {
+        // Controller measurements capture dial order; external measurements supply elapsed milliseconds.
+        fun follows(sample: Sample): Boolean = sample.dialVersion?.let { version > it } ?: (at > sample.startedAt)
+    }
     private data class Sample(
-        val route: Route, val startedAt: Long, val completedAt: Long, val delayMs: Long?, val replyVersion: Long? = null,
+        val route: Route, val startedAt: Long, val completedAt: Long, val delayMs: Long?, val dialVersion: Long? = null,
     )
     private data class RecoveryResult(val candidate: Candidate, val sample: Sample)
-    private data class Plan(
-        val tag: String, val routes: List<Route>, val generation: Long, val credit: (String) -> Unit,
-    ) : FailoverPlan.ReplyEvidence {
+    private data class Plan(val tag: String, val routes: List<Route>, val generation: Long) {
         val route: Route? get() = routes.firstOrNull()
-        override fun creditReply(leaf: String) = credit(leaf)
     }
+    private class DialAttempt(val plan: Plan, var awaitingFirstReplySince: EvidenceTime?)
 
     private class Group(val config: ProxyGroup) {
         val members = config.effectiveMembers().distinct()
         val samples = mutableMapOf<GroupMemberRef, Sample>()
-        val replies = mutableMapOf<Candidate, EvidenceTime>()
+        val answeredDials = mutableMapOf<Candidate, EvidenceTime>()
         var selected = if (config.strategy == GroupStrategy.SELECT) config.selectedMember else null
         var manual = false
         var selectionVersion = 0L
@@ -99,7 +100,7 @@ internal class GroupRuntimeController(
         val route: Route,
         val groups: Map<String, Pair<Group, Long>>,
         val startedAt: Long,
-        val replyVersion: Long,
+        val dialVersion: Long,
     )
 
     private val lock = Any()
@@ -108,7 +109,7 @@ internal class GroupRuntimeController(
     private var nodeFronts = nodeFronts(initialWorkspace)
     private val plans = mutableMapOf<String, Plan>()
     private var nextGeneration = 0L
-    private var replyVersion = 0L
+    private var dialVersion = 0L
     private var scope: CoroutineScope? = null
 
     suspend fun start(scope: CoroutineScope) {
@@ -129,7 +130,7 @@ internal class GroupRuntimeController(
             }
             previous.values.filter { groups[it.config.tag] !== it }.forEach(::stopJobs)
             groups.values.forEach { group ->
-                group.replies.keys.removeAll { !hasCurrentOwners(it.route) }
+                group.answeredDials.keys.removeAll { !hasCurrentOwners(it.route) }
                 val replaced = group.failures.filterValues { currentRoute(it.candidate.route) == null }
                 replaced.forEach { (member, state) ->
                     stopFailure(state)
@@ -156,7 +157,7 @@ internal class GroupRuntimeController(
         group.failures.values.forEach(::stopFailure)
         group.failures.clear()
         group.destinations.clear()
-        group.replies.clear()
+        group.answeredDials.clear()
         group.urlGeneration++
         group.urlJob?.cancel()
         group.urlJob = null
@@ -182,7 +183,7 @@ internal class GroupRuntimeController(
             failoverTimeoutMs = fallback?.let(::fallbackTimeout) ?: 3_000,
             watchResponse = fallback != null,
             generation = plan.generation,
-            owner = plan,
+            owner = DialAttempt(plan, EvidenceTime(now, ++dialVersion)),
             stallTimeoutMs = FallbackPolicy.stallTimeoutMs(plan.route?.let(::routeLatency)),
             stallTimeoutsMs = dialRoutes.associate { it.leaf to FallbackPolicy.stallTimeoutMs(routeLatency(it)) },
             groupPaths = dialRoutes.associate { it.leaf to it.steps.map { step -> step.owner.config.tag }.toSet() },
@@ -191,11 +192,15 @@ internal class GroupRuntimeController(
 
     fun onCandidateConnected(groupTag: String, leaf: String, owner: Any?, host: String) {
         synchronized(lock) {
-            val route = eventRoute(groupTag, owner, leaf) ?: return
+            val attempt = owner as? DialAttempt ?: return
+            val route = attempt.eventRoute(groupTag, leaf) ?: return
             val now = nowElapsedRealtimeMs()
             val key = host.lowercase()
             val members = routeMembers(route, fallbackOnly = false)
-            recordReply(members.map { (group, candidate) -> group to candidate.replyKey() }, now)
+            val healthChanged = attempt.awaitingFirstReplySince?.let { started ->
+                attempt.awaitingFirstReplySince = null
+                recordAnsweredDial(members, started)
+            } ?: false
             members.firstOrNull { it.first.config.strategy == GroupStrategy.FALLBACK }?.let { (group, candidate) ->
                 val destination = candidate.destination(key)
                 if (group.destinations[destination]?.let { currentRoute(it.route) } == candidate.route) {
@@ -215,16 +220,22 @@ internal class GroupRuntimeController(
                     state.cooldownUntil = now
                 }
             }
+            if (healthChanged) publish()
         }
     }
 
-    private fun recordReply(keys: List<Pair<Group, Candidate>>, now: Long) {
-        if (keys.isEmpty()) return
-        val reply = EvidenceTime(now, ++replyVersion)
-        for ((group, key) in keys) {
-            if (key !in group.replies) group.replies.keys.removeAll { !hasCurrentOwners(it.route) }
-            group.replies[key] = reply
+    private fun recordAnsweredDial(members: List<Pair<Group, Candidate>>, started: EvidenceTime): Boolean {
+        var healthChanged = false
+        for ((group, candidate) in members) {
+            val key = candidate.replyKey()
+            val previous = group.answeredDials[key]
+            if (previous != null && previous.version >= started.version) continue
+            if (previous == null) group.answeredDials.keys.removeAll { !hasCurrentOwners(it.route) }
+            val wasFailed = !isAlive(group, candidate)
+            group.answeredDials[key] = started
+            if (wasFailed && isAlive(group, candidate)) healthChanged = true
         }
+        return healthChanged
     }
 
     suspend fun onCandidateFailed(
@@ -236,7 +247,7 @@ internal class GroupRuntimeController(
         destinationFailure: Boolean = strong,
     ) {
         synchronized(lock) {
-            val route = eventRoute(groupTag, owner, leaf) ?: return
+            val route = (owner as? DialAttempt)?.eventRoute(groupTag, leaf) ?: return
             reportSuspect(route, host.lowercase(), strong, destinationFailure)
         }
     }
@@ -247,7 +258,7 @@ internal class GroupRuntimeController(
         owner: Any?,
         host: String,
         strong: Boolean,
-        responsePending: Boolean,
+        wait: FallbackWait,
         applyIfWaiting: (() -> Unit) -> Boolean,
     ): Boolean {
         val key = host.lowercase()
@@ -257,13 +268,15 @@ internal class GroupRuntimeController(
             synchronized(lock) {
                 var retry = false
                 val claimed = applyIfWaiting {
-                    val route = eventRoute(groupTag, owner, leaf) ?: run {
+                    val route = (owner as? DialAttempt)?.eventRoute(groupTag, leaf) ?: run {
                         checks = emptyList()
                         return@applyIfWaiting
                     }
                     val finished = completed
                     if (finished == null) {
-                        checks = reportSuspect(route, key, strong && responsePending, destinationFailure = responsePending)
+                        checks = reportSuspect(
+                            route, key, strong && wait == FallbackWait.REQUEST, destinationFailure = wait != FallbackWait.IDLE,
+                        )
                     } else if (finished.isCancelled) {
                         checks = (checks + routeMembers(route).mapNotNull { (group, candidate) ->
                             val state = group.failures[candidate.member]?.takeIf {
@@ -276,9 +289,9 @@ internal class GroupRuntimeController(
                     val current = plan(groupTag)
                     val now = nowElapsedRealtimeMs()
                     val preferred = current.route
-                    // Idle transfers follow their serving route's health; host evidence applies to pending responses.
+                    // A possible ACK steers future dials; its own stream follows the idle cleanup rule.
                     val servingImpaired = preferred != null && preferred.leaf != leaf && impaired(route, now)
-                    retry = if (responsePending) {
+                    retry = if (wait == FallbackWait.REQUEST) {
                         (servingImpaired || affected(route, key, now)) &&
                             current.hostRetryRoutes(key, now).any { it.leaf != leaf }
                     } else servingImpaired
@@ -435,7 +448,7 @@ internal class GroupRuntimeController(
         val runtimeScope = scope ?: return
         stopCheckTimer(state)
         val generation = state.checkGeneration
-        val childEvidenceSince = EvidenceTime(nowElapsedRealtimeMs(), replyVersion)
+        val childEvidenceSince = EvidenceTime(nowElapsedRealtimeMs(), dialVersion)
         lateinit var job: Job
         job = runtimeScope.launch(start = CoroutineStart.LAZY) {
             try {
@@ -481,21 +494,19 @@ internal class GroupRuntimeController(
                     }
                     val selfSample = measured.first.copy(route = active.route)
                     saveSample(group, active, selfSample)
+                    val selfFailed = group.samples[active.member] === selfSample && !isAlive(group, active)
                     val activePeer = peer?.let(::currentCandidate)
                     val peerSample = measured.second?.let { sample -> activePeer?.let { sample.copy(route = it.route) } }
                     if (activePeer != null && peerSample != null) {
                         saveSample(group, activePeer, peerSample)
-                        if (selfSample.delayMs == null && peerSample.delayMs != null &&
-                            group.samples[active.member] === selfSample && group.samples[activePeer.member] === peerSample
-                        ) {
+                        if (selfFailed && peerSample.delayMs != null && group.samples[activePeer.member] === peerSample) {
                             demote(group, state, "health URL failed while ${activePeer.displayName()} succeeded")
                         }
                     } else if (peer != null) {
                         state.pendingGapMs = FallbackPolicy.STRONG_CHECK_GAP_MS
                     }
                     publish()
-                    if (selfSample.delayMs == null && group.samples[active.member] === selfSample &&
-                        isDemoted(group, active) == false &&
+                    if (selfFailed && isDemoted(group, active) == false &&
                         group.selected?.let { it != active.member } == true
                     ) {
                         onDemoted(group.config.tag, active.member)
@@ -537,7 +548,7 @@ internal class GroupRuntimeController(
                     }
                     // This evaluation consumes completed child evidence while queued rechecks continue independently.
                     if ((sample != null && sample.completedAt >= evidenceSince.at) ||
-                        (childGroup.replies[childCandidate.replyKey()]?.version ?: 0L) > evidenceSince.version
+                        (childGroup.answeredDials[childCandidate.replyKey()]?.version ?: 0L) > evidenceSince.version
                     ) continue
                     val child = childGroup.failures[childCandidate.member]?.takeIf { ownsFailure(childGroup, it) }
                     val existing = child?.checkJob ?: child?.checkTimer
@@ -702,7 +713,7 @@ internal class GroupRuntimeController(
     }
 
     private suspend fun measure(group: Group, route: Route, timeoutMs: Int): Sample = measurementSlots.withPermit {
-        val (startedAt, version) = synchronized(lock) { nowElapsedRealtimeMs() to replyVersion }
+        val (startedAt, version) = synchronized(lock) { nowElapsedRealtimeMs() to dialVersion }
         val latency = withTimeoutOrNull(timeoutMs.toLong()) {
             probeNode(route.leaf, group.config.testUrl, timeoutMs)
         }
@@ -710,11 +721,6 @@ internal class GroupRuntimeController(
     }
 
     private fun saveSample(group: Group, candidate: Candidate, sample: Sample) {
-        if (sample.delayMs == null) {
-            val reply = group.replies[candidate.replyKey()]
-            // Internally started checks have exact ordering; timestamp-only ties favor real traffic.
-            if (reply != null && (sample.replyVersion?.let { reply.version > it } ?: (reply.at >= sample.startedAt))) return
-        }
         if (sample.startedAt >= (group.samples[candidate.member]?.startedAt ?: Long.MIN_VALUE)) {
             group.samples[candidate.member] = sample
         }
@@ -788,7 +794,7 @@ internal class GroupRuntimeController(
                 route,
                 groups.mapValues { (_, group) -> group to group.urlGeneration },
                 nowElapsedRealtimeMs(),
-                replyVersion,
+                dialVersion,
             )
         }
         val result = probeNode(attempt.route.leaf, url, timeoutMs)
@@ -803,7 +809,7 @@ internal class GroupRuntimeController(
                     val measured = group.members.mapNotNull(::candidate)
                         .filter { it.route.leaf == current.leaf && it.route.front == current.front }
                     val completedAt = nowElapsedRealtimeMs()
-                    measured.forEach { saveSample(group, it, Sample(it.route, attempt.startedAt, completedAt, result, attempt.replyVersion)) }
+                    measured.forEach { saveSample(group, it, Sample(it.route, attempt.startedAt, completedAt, result, attempt.dialVersion)) }
                     if (measured.isNotEmpty() && group.config.strategy == GroupStrategy.URL_TEST) {
                         updateUrlSelection(group, clearManual = false)
                     }
@@ -852,8 +858,12 @@ internal class GroupRuntimeController(
 
     private fun primary(group: Group): Candidate? = group.members.firstNotNullOfOrNull(::candidate)
 
-    private fun isAlive(group: Group, candidate: Candidate): Boolean =
-        group.samples[candidate.member]?.takeIf { currentRoute(it.route) == candidate.route }?.let { it.delayMs != null } ?: true
+    private fun isAlive(group: Group, candidate: Candidate): Boolean {
+        val sample = group.samples[candidate.member] ?: return true
+        if (sample.delayMs != null || currentRoute(sample.route) != candidate.route) return true
+        // Routing can use a newer answered dial while the health URL retains its measured result.
+        return group.answeredDials[candidate.replyKey()]?.follows(sample) == true
+    }
 
     private fun isDemoted(group: Group, candidate: Candidate, now: Long = nowElapsedRealtimeMs()): Boolean =
         group.failures[candidate.member]?.takeIf { ownsFailure(group, it) }
@@ -922,17 +932,7 @@ internal class GroupRuntimeController(
         } else GroupMemberRef(tag, isGroup = true)
         val routes = routes(member, emptySet()).distinctBy { it.leaf }
         plans[tag]?.takeIf { it.routes == routes }?.let { return it }
-        val credits = routes.associate { route ->
-            val keys = routeMembers(route, fallbackOnly = false).map { (group, candidate) -> group to candidate.replyKey() }
-            route.leaf to (route to keys)
-        }
-        return Plan(tag, routes, ++nextGeneration) credit@{ leaf ->
-            val (route, keys) = credits[leaf] ?: return@credit
-            if (keys.isEmpty()) return@credit
-            synchronized(lock) {
-                if (hasCurrentOwners(route)) recordReply(keys, nowElapsedRealtimeMs())
-            }
-        }.also { plans[tag] = it }
+        return Plan(tag, routes, ++nextGeneration).also { plans[tag] = it }
     }
 
     private fun Plan.forDestination(host: String, now: Long): Plan {
@@ -943,9 +943,9 @@ internal class GroupRuntimeController(
         return copy(routes = routes.map { if (it.leaf in BUILTIN_GROUP_TARGET_TAGS) it else proxies.next().first })
     }
 
-    private fun eventRoute(groupTag: String, owner: Any?, leaf: String): Route? {
-        if (owner !is Plan || owner.tag != groupTag) return null
-        val route = owner.routes.firstOrNull { it.leaf == leaf } ?: return null
+    private fun DialAttempt.eventRoute(groupTag: String, leaf: String): Route? {
+        if (plan.tag != groupTag) return null
+        val route = plan.routes.firstOrNull { it.leaf == leaf } ?: return null
         return currentRoute(route)
     }
 

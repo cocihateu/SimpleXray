@@ -57,11 +57,9 @@ internal data class FailoverPlan(
     val stallTimeoutsMs: Map<String, Int> = emptyMap(),
     val owner: Any? = null,
     val hostRetryCandidates: List<String>? = null,
-) {
-    internal interface ReplyEvidence {
-        fun creditReply(leaf: String)
-    }
-}
+)
+
+internal enum class FallbackWait { REQUEST, POSSIBLE_REPLY, IDLE }
 
 /** Routes TCP/UDP exchanges through ordered group candidates and observes payload responses. */
 internal class FallbackRelayServer(
@@ -73,7 +71,7 @@ internal class FallbackRelayServer(
     private val resolvePlan: (String, String) -> FailoverPlan,
     private val onCandidateFailed: suspend (String, String, Any?, String, Boolean, Boolean) -> Unit,
     private val onCandidateConnected: (String, String, Any?, String) -> Unit,
-    private val onStalledUpload: suspend (String, String, Any?, String, Boolean, Boolean, (() -> Unit) -> Boolean) -> Boolean,
+    private val onStalledUpload: suspend (String, String, Any?, String, Boolean, FallbackWait, (() -> Unit) -> Boolean) -> Boolean,
     private val awaitReady: suspend () -> Unit = {},
     private val nowElapsedRealtimeMs: () -> Long = SystemClock::elapsedRealtime,
 ) : Closeable {
@@ -259,7 +257,6 @@ internal class FallbackRelayServer(
                     entry = entry,
                     timeoutMs = plan.stallTimeoutsMs[leaf] ?: plan.stallTimeoutMs,
                     enabled = observe,
-                    creditReply = { (plan.owner as? FailoverPlan.ReplyEvidence)?.creditReply(leaf) },
                     isOpen = { isActive && closed == false && entry.closed.get() == false },
                     retry = { forHost ->
                         retryForHost.set(forHost)
@@ -270,8 +267,8 @@ internal class FallbackRelayServer(
                         socket.close()
                     },
                     nowElapsedRealtimeMs = nowElapsedRealtimeMs,
-                ) { host, strong, pending, applyIfWaiting ->
-                    onStalledUpload(spec.groupTag, leaf, plan.owner, host, strong, pending, applyIfWaiting)
+                ) { host, strong, wait, applyIfWaiting ->
+                    onStalledUpload(spec.groupTag, leaf, plan.owner, host, strong, wait, applyIfWaiting)
                 }
                 try {
                     connectNode(socket, leaf, 1, target, timeout)
@@ -483,7 +480,6 @@ internal class FallbackRelayServer(
                     entry = entry,
                     timeoutMs = plan.stallTimeoutsMs[leaf] ?: plan.stallTimeoutMs,
                     enabled = observe,
-                    creditReply = { (plan.owner as? FailoverPlan.ReplyEvidence)?.creditReply(leaf) },
                     isOpen = { isActive && closed == false && entry.closed.get() == false },
                     retry = { forHost ->
                         retryForHost.set(forHost)
@@ -495,8 +491,8 @@ internal class FallbackRelayServer(
                         remote?.close()
                     },
                     nowElapsedRealtimeMs = nowElapsedRealtimeMs,
-                ) { host, strong, pending, applyIfWaiting ->
-                    onStalledUpload(entry.groupTag, leaf, plan.owner, host, strong, pending, applyIfWaiting)
+                ) { host, strong, wait, applyIfWaiting ->
+                    onStalledUpload(entry.groupTag, leaf, plan.owner, host, strong, wait, applyIfWaiting)
                 }
                 try {
                     val uotVersion = nodeUotVersions[leaf] ?: 0
@@ -757,12 +753,11 @@ internal class FallbackRelayServer(
         private val entry: RelayConnectionEntry,
         timeoutMs: Int,
         private val enabled: Boolean,
-        private val creditReply: () -> Unit,
         private val isOpen: () -> Boolean,
         private val retry: (Boolean) -> Unit,
         private val closeBlockedWrite: (String?) -> Unit,
         private val nowElapsedRealtimeMs: () -> Long,
-        private val confirm: suspend (String, Boolean, Boolean, (() -> Unit) -> Boolean) -> Boolean,
+        private val confirm: suspend (String, Boolean, FallbackWait, (() -> Unit) -> Boolean) -> Boolean,
     ) : RelayConnectionEntry.Attempt {
         private class Observation(
             val target: Destination, var due: Long, val latestDue: Long = due, val possibleReply: Boolean = false,
@@ -872,7 +867,10 @@ internal class FallbackRelayServer(
                 answered?.check?.cancel()
                 val first = !flight.established && flight.establish()
                 lastProgress = nowElapsedRealtimeMs()
-                if (!datagrams && !first && answered == null && idle?.let { lastProgress >= it.due } == true) {
+                // The peer can reach the expired ACK window before its timer moves it to idle.
+                val afterIdle = if (answered == null) idle?.let { lastProgress >= it.due } == true
+                    else answered.possibleReply && answered.sent && lastProgress >= answered.due
+                if (!datagrams && !first && afterIdle) {
                     idleReplyUntil = lastProgress + window
                 } else if (answered != null) {
                     idleReplyUntil = 0L
@@ -889,8 +887,6 @@ internal class FallbackRelayServer(
                     return target.host
                 }
             }
-            // Credit intervening bytes outside the entry lock; the full host callback stays periodic.
-            creditReply()
             return null
         }
 
@@ -937,34 +933,49 @@ internal class FallbackRelayServer(
                 return
             }
             var next = writeDue
-            fun visit(observation: Observation, responsePending: Boolean) {
-                if (!datagrams && responsePending && observation.due <= now && writing == observation.target) {
-                    observation.advanceResponse(writeDue)
-                }
-                if (observation.due <= now) {
-                    observation.expired = true
-                    if (observation.check == null) startCheck(observation, responsePending)
-                    if (!responsePending) return
-                    observation.due = now + FallbackPolicy.WEAK_CHECK_GAP_MS
-                }
-                next = minOf(next, observation.due)
-            }
             if (drain == null) {
-                pending.values.forEach { visit(it, true) }
-                idle?.takeUnless { it.expired }?.let { visit(it, false) }
+                val exchanges = pending.values.iterator()
+                while (exchanges.hasNext()) {
+                    val observation = exchanges.next()
+                    if (!datagrams && observation.due <= now && writing == observation.target) {
+                        observation.advanceResponse(writeDue)
+                    }
+                    if (observation.due <= now) {
+                        observation.expired = true
+                        if (observation.possibleReply) {
+                            // One host signal for this exchange; cleanup now follows the serving member's health.
+                            exchanges.remove()
+                            idle = observation
+                            startCheck(observation, FallbackWait.POSSIBLE_REPLY)
+                            continue
+                        }
+                        if (observation.check == null) startCheck(observation, FallbackWait.REQUEST)
+                        observation.due = now + FallbackPolicy.WEAK_CHECK_GAP_MS
+                    }
+                    next = minOf(next, observation.due)
+                }
+                idle?.takeUnless { it.expired }?.let { observation ->
+                    if (observation.due > now) {
+                        next = minOf(next, observation.due)
+                    } else {
+                        observation.expired = true
+                        startCheck(observation, FallbackWait.IDLE)
+                    }
+                }
             }
             arm(next)
         }
 
-        private fun startCheck(observation: Observation, responsePending: Boolean) {
-            val strong = !datagrams && responsePending && !observation.possibleReply && quiet()
+        private fun startCheck(observation: Observation, wait: FallbackWait) {
+            val responsePending = wait == FallbackWait.REQUEST
+            val strong = !datagrams && responsePending && quiet()
             observation.check = scope.launch(Dispatchers.Default) {
                 val self = coroutineContext[Job]
                 fun current() = open && drain == null && isOpen() && observation.check === self &&
                     (if (responsePending) pending[observation.target] === observation else idle === observation)
                 try {
                     var resumed = false
-                    suspend fun report(asStrong: Boolean) = confirm(observation.target.host, asStrong, responsePending) { signal ->
+                    suspend fun report(asStrong: Boolean) = confirm(observation.target.host, asStrong, wait) { signal ->
                         synchronized(entry) {
                             if (!current()) false else if (asStrong && !quiet()) {
                                 resumed = true
