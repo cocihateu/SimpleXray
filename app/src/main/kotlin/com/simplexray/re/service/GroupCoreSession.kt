@@ -147,17 +147,17 @@ internal class GroupCoreSession(
             nodeUsers = config.users,
             nodePassword = config.password,
             nodeUotVersions = config.workspace.allNodes().associate { it.tag to it.udpOverTcpVersion },
-            resolvePlan = { groupTag ->
-                controller?.buildFailoverPlan(groupTag) ?: FailoverPlan(null, emptyList(), 3_000)
+            resolvePlan = { groupTag, host ->
+                controller?.buildFailoverPlan(groupTag, host) ?: FailoverPlan(null, emptyList(), 3_000)
             },
-            onCandidateFailed = { groupTag, failedLeaf, owner, host, strong ->
-                controller?.onCandidateFailed(groupTag, failedLeaf, owner, host, strong)
+            onCandidateFailed = { groupTag, failedLeaf, owner, host, strong, destinationFailure ->
+                controller?.onCandidateFailed(groupTag, failedLeaf, owner, host, strong, destinationFailure)
             },
             onCandidateConnected = { groupTag, leaf, owner, host ->
                 controller?.onCandidateConnected(groupTag, leaf, owner, host)
             },
-            onStalledUpload = { groupTag, leaf, owner, host, strong, applyIfWaiting ->
-                controller?.onStalledUpload(groupTag, leaf, owner, host, strong, applyIfWaiting) ?: false
+            onStalledUpload = { groupTag, leaf, owner, host, strong, responsePending, applyIfWaiting ->
+                controller?.onStalledUpload(groupTag, leaf, owner, host, strong, responsePending, applyIfWaiting) ?: false
             },
             awaitReady = { standbyReady.await() },
         )

@@ -37,30 +37,50 @@ internal class RelayConnectionEntry(
     @Volatile var leafTag = ""
         private set
     private var groupPath = emptySet<String>()
+    private var attempt: Attempt? = null
+    private var progress = 0L
     @Volatile var destinationHost = ""
     @Volatile var destinationIp = ""
     @Volatile var destinationPort = 0
     @Volatile var ruleId = "default"
 
-    val targetHost: String get() = destinationHost.ifEmpty { destinationIp }.lowercase()
-
-    @Synchronized fun select(leaf: String, path: Set<String>) {
-        leafTag = leaf
-        groupPath = path
+    interface Attempt {
+        fun isStalled(): Boolean
+        fun retire()
     }
 
-    @Synchronized fun sample(group: String, member: GroupMemberRef): Long? {
+    @Synchronized fun select(leaf: String, path: Set<String>, selected: Attempt? = null) {
+        leafTag = leaf
+        groupPath = path
+        attempt = selected
+    }
+
+    class Sample(val attempt: Attempt, val progress: Long)
+
+    @Synchronized fun sample(group: String, member: GroupMemberRef): Sample? {
         val matchesMember = if (member.isGroup) member.tag in groupPath else leafTag == member.tag
-        return if (closed.get() == false && matchesMember && (group == groupTag || group in groupPath))
-            downloadBytes.get() else null
+        if (closed.get() || !matchesMember || (group != groupTag && group !in groupPath)) return null
+        return attempt?.takeIf { it.isStalled() }?.let { Sample(it, progress) }
+    }
+
+    @Synchronized fun recordUpload(size: Int) {
+        uploadBytes.addAndGet(size.toLong())
+        progress++
+    }
+
+    @Synchronized fun recordForwarded() {
+        progress++
     }
 
     @Synchronized fun recordDownload(size: Int) {
         downloadBytes.addAndGet(size.toLong())
+        progress++
     }
 
-    @Synchronized fun closeIfStalled(group: String, member: GroupMemberRef, bytes: Long) {
-        if (sample(group, member) == bytes) close()
+    @Synchronized fun closeIfStalled(sample: Sample) {
+        if (!closed.get() && attempt === sample.attempt && progress == sample.progress && sample.attempt.isStalled()) {
+            sample.attempt.retire()
+        }
     }
 
     fun close() {

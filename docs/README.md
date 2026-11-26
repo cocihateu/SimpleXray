@@ -85,11 +85,11 @@ Settings → Rules → Rule resources manages the bundled `geoip.dat`/`geosite.d
 
 Manual groups retain saved selections. URL-test groups run initial measurements asynchronously after session readiness and repeat them on their configured schedule. Proxies and group-node pages provide explicit HTTP measurements; Dashboard refresh is only an exit-information lookup.
 
-Fallback uses real traffic, comparative health checks and strong failures from multiple destination hosts. Three distinct destinations with TCP stalls or strong I/O failures within 60 seconds can demote a member even while its health URL responds. UDP silence contributes a weak signal for comparative checking. Demotion applies a 30-second to 5-minute cooldown; strong signals arriving during a check are retained for a later check. Local SOCKS setup follows candidate priority, while response observation leaves slow streams open for policy verification. Nested checks resolve child alternatives first and consume completed evidence ahead of subsequent queued checks. Every switch to a backup starts the configured recovery interval, including health-order changes. See [fallback behavior](./configuration.md#fallback-and-recovery).
+Fallback can use a backup for a single affected host while keeping the primary for other traffic. UDP silence can change that host's route while remaining weak evidence for group-wide decisions. Comparative health checks or three strong failures on distinct hosts within 60 seconds can demote a member. See [fallback and recovery](./configuration.md#fallback-and-recovery).
 
-Established streams remain tied to their current transport. After demotion, a two-second received-byte observation keeps active downloads running and closes stalled connections so applications can reconnect. Initial exchanges retain bounded replay. Health-URL results and real destination outcomes jointly inform fallback decisions.
+Cleanup preserves active transfers and healthy idle sessions. Before the first reply the relay can move a bounded first flight to another upstream; established streams reconnect through the application.
 
-HTTP latency is the request-write-to-response-headers RTT of one HEAD request through a node, not a raw TCP handshake time. The timeout also covers setup. The native UI and zashboard share the measurement implementation.
+HTTP latency covers one proxied HEAD exchange through response headers, including connection setup. The native UI and zashboard share the measurement implementation.
 
 ## TUN, DNS, and Logs
 
