@@ -153,8 +153,8 @@ internal class GroupCoreSession(
             onCandidateFailed = { groupTag, failedLeaf, owner, host, strong ->
                 controller?.onCandidateFailed(groupTag, failedLeaf, owner, host, strong)
             },
-            onCandidateConnected = { groupTag, leaf, owner ->
-                controller?.onCandidateConnected(groupTag, leaf, owner)
+            onCandidateConnected = { groupTag, leaf, owner, host ->
+                controller?.onCandidateConnected(groupTag, leaf, owner, host)
             },
             onStalledUpload = { groupTag, leaf, owner, host, strong, applyIfWaiting ->
                 controller?.onStalledUpload(groupTag, leaf, owner, host, strong, applyIfWaiting) ?: false

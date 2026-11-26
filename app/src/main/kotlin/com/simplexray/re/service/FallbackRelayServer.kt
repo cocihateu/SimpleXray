@@ -28,6 +28,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.LinkedBlockingQueue
@@ -54,7 +55,7 @@ internal data class FailoverPlan(
     val owner: Any? = null,
 )
 
-/** Routes initial TCP/UDP exchanges through ordered group candidates. */
+/** Routes TCP/UDP exchanges through ordered group candidates and observes payload responses. */
 internal class FallbackRelayServer(
     private val specs: List<FallbackRelaySpec>,
     private val nodeEntryPort: Int,
@@ -63,7 +64,7 @@ internal class FallbackRelayServer(
     private val nodeUotVersions: Map<String, Int>,
     private val resolvePlan: (String) -> FailoverPlan,
     private val onCandidateFailed: suspend (String, String, Any?, String, Boolean) -> Unit,
-    private val onCandidateConnected: (String, String, Any?) -> Unit,
+    private val onCandidateConnected: (String, String, Any?, String) -> Unit,
     private val onStalledUpload: suspend (String, String, Any?, String, Boolean, (() -> Unit) -> Boolean) -> Boolean,
     private val awaitReady: suspend () -> Unit = {},
     private val nowElapsedRealtimeMs: () -> Long = SystemClock::elapsedRealtime,
@@ -233,6 +234,7 @@ internal class FallbackRelayServer(
                 val timeout = plan.failoverTimeoutMs.coerceAtLeast(1)
                 val deadline = deadlineJob(socket, nowElapsedRealtimeMs() + timeout)
                 var setupComplete = false
+                var receiveEnded = false
                 var sender: Job? = null
                 val retryRequested = AtomicBoolean(false)
                 val ioFailure = AtomicReference<IOException?>()
@@ -240,13 +242,18 @@ internal class FallbackRelayServer(
                     scope = this@coroutineScope,
                     timeoutMs = plan.stallTimeoutsMs[leaf] ?: plan.stallTimeoutMs,
                     enabled = plan.watchResponse && leaf !in BUILTIN_GROUP_TARGET_TAGS,
-                    isOpen = { closed == false && entry.closed.get() == false && socket.isClosed == false },
+                    isOpen = { isActive && closed == false && entry.closed.get() == false },
                     retry = {
+                        retryRequested.set(true)
+                        if (flight.established) entry.close() else socket.close()
+                    },
+                    closeBlockedWrite = {
                         retryRequested.set(true)
                         socket.close()
                     },
-                ) { applyIfWaiting ->
-                    onStalledUpload(spec.groupTag, leaf, plan.owner, entry.targetHost, true, applyIfWaiting)
+                    nowElapsedRealtimeMs = nowElapsedRealtimeMs,
+                ) { strong, applyIfWaiting ->
+                    onStalledUpload(spec.groupTag, leaf, plan.owner, entry.targetHost, strong, applyIfWaiting)
                 }
                 try {
                     connectNode(socket, leaf, 1, target, timeout)
@@ -264,14 +271,22 @@ internal class FallbackRelayServer(
                         }
                         accepted = true
                     }
-                    // Snapshot before reading server-first bytes can clear retained data.
+                    // Retain replay before server-first bytes can clear the initial flight.
                     val replay = flight.replay().toMutableList()
                     sender = launch(relayIo) {
                         try {
                             val output = socket.getOutputStream()
                             fun send(chunk: ByteArray) {
-                                output.write(chunk)
-                                if (chunk.isNotEmpty() && flight.established == false) responseWait.wrote()
+                                responseWait.write {
+                                    try {
+                                        output.write(chunk)
+                                    } catch (e: IOException) {
+                                        if (isActive && socket.isClosed == false) ioFailure.updateAndGet { previous ->
+                                            if (previous == null || FallbackPolicy.isStrongFailure(e)) e else previous
+                                        }
+                                        throw e
+                                    }
+                                }
                             }
                             replay.forEach(::send)
                             replay.clear()
@@ -284,8 +299,8 @@ internal class FallbackRelayServer(
                                     }
                                     continue
                                 }
-                                // No suspension between dequeue and retention. Teardown joins this
-                                // sender before another attempt snapshots the complete initial flight.
+                                // Retain each dequeued chunk before sending. Teardown joins this
+                                // sender before another attempt reads the complete initial flight.
                                 flight.retain(chunk)
                                 send(chunk)
                             }
@@ -299,36 +314,37 @@ internal class FallbackRelayServer(
                         val count = socket.getInputStream().read(buffer)
                         if (count < 0) {
                             if (flight.established == false) throw EOFException("Upstream closed before response")
+                            receiveEnded = true
                             break
                         }
                         if (count == 0) continue
                         // Pin on observation, BEFORE writing to the client (which may partly fail).
-                        if (flight.established == false) {
-                            if (responseWait.responded() == false) throw IOException("Initial exchange selected for retry")
-                            flight.establish()
-                            onCandidateConnected(spec.groupTag, leaf, plan.owner)
-                        }
+                        if (responseWait.responded() == false) throw IOException("Exchange selected for retry")
+                        flight.establish()
+                        onCandidateConnected(spec.groupTag, leaf, plan.owner, entry.targetHost)
                         entry.recordDownload(count)
                         try { client.getOutputStream().write(buffer, 0, count) } catch (e: IOException) {
                             entry.close()
                             throw e
                         }
                     }
-                    break
                 } catch (e: IOException) {
                     if (setupComplete && socket.isClosed == false) ioFailure.compareAndSet(null, e)
                 } finally {
                     deadline.cancel()
-                    responseWait.finish()
+                    responseWait.finish(preservePendingWrite = receiveEnded)
                     release(socket)
                     withContext(NonCancellable) { sender?.cancelAndJoin() }
                     currentUpstream.compareAndSet(socket, null)
                     entry.select("", emptySet())
                 }
-                if (isActive && flight.established == false && retryRequested.get() == false &&
+                if (isActive && retryRequested.get() == false &&
                     closed == false && entry.closed.get() == false
                 ) ioFailure.get()?.let { error ->
-                    onCandidateFailed(spec.groupTag, leaf, plan.owner, entry.targetHost, FallbackPolicy.isStrongFailure(error))
+                    val strong = FallbackPolicy.isStrongFailure(error)
+                    if (strong || flight.established == false) {
+                        onCandidateFailed(spec.groupTag, leaf, plan.owner, entry.targetHost, strong)
+                    }
                 }
             }
             if (accepted == false && entry.closed.get() == false) reply(client.getOutputStream(), 1)
@@ -413,6 +429,9 @@ internal class FallbackRelayServer(
                 var remote: RelayDatagramTransport? = null
                 var sender: Job? = null
                 var remoteControlReader: Job? = null
+                var receiveEnded = false
+                var receiveTimeout: SocketTimeoutException? = null
+                var idleReadTimeout = false
                 val retryRequested = AtomicBoolean(false)
                 val outstandingHost = AtomicReference<String?>(null)
                 val ioFailure = AtomicReference<Pair<IOException, String>?>()
@@ -421,12 +440,17 @@ internal class FallbackRelayServer(
                     scope = this@coroutineScope,
                     timeoutMs = plan.stallTimeoutsMs[leaf] ?: plan.stallTimeoutMs,
                     enabled = plan.watchResponse && leaf !in BUILTIN_GROUP_TARGET_TAGS,
-                    isOpen = { closed == false && entry.closed.get() == false && control.isClosed == false },
+                    isOpen = { isActive && closed == false && entry.closed.get() == false },
                     retry = {
+                        retryRequested.set(true)
+                        if (flight.established) entry.close() else remote?.close()
+                    },
+                    closeBlockedWrite = {
                         retryRequested.set(true)
                         remote?.close()
                     },
-                ) { applyIfWaiting ->
+                    nowElapsedRealtimeMs = nowElapsedRealtimeMs,
+                ) { _, applyIfWaiting ->
                     // Datagram silence supplies weak evidence while preserving route-change retries.
                     onStalledUpload(spec.groupTag, leaf, plan.owner, exchangeHost(), false, applyIfWaiting)
                 }
@@ -461,20 +485,45 @@ internal class FallbackRelayServer(
                             while (control.getInputStream().read() >= 0) { /* Upstream association lifetime. */ }
                             throw EOFException("Upstream association ended")
                         } catch (e: IOException) {
-                            if (isActive && control.isClosed == false) ioFailure.compareAndSet(null, e to exchangeHost())
+                            if (isActive && control.isClosed == false &&
+                                (flight.established == false || FallbackPolicy.isStrongFailure(e))
+                            ) ioFailure.compareAndSet(null, e to exchangeHost())
                         } finally { upstream.close() }
                     }
                     val replay = flight.replay().toMutableList()
                     sender = launch(relayIo) {
-                        fun send(data: ByteArray): Boolean {
+                        suspend fun send(data: ByteArray): Boolean {
+                            val host = datagramTarget(data).host
+                            var preserveOutstanding = false
+                            fun transmit() {
+                                try {
+                                    upstream.send(data)
+                                } catch (e: IOException) {
+                                    if (isActive && closed == false && entry.closed.get() == false &&
+                                        retryRequested.get() == false && control.isClosed == false
+                                    ) {
+                                        preserveOutstanding = responseWait.awaitingResponse { exchangeHost() != host }
+                                        if (preserveOutstanding == false) ioFailure.updateAndGet { previous ->
+                                            if (previous == null || FallbackPolicy.isStrongFailure(e)) e to host else previous
+                                        }
+                                    }
+                                    throw e
+                                }
+                            }
                             try {
-                                upstream.send(data)
-                                if (flight.established == false && data.size > parseSocksDatagram(data).payloadOffset) {
-                                    responseWait.wrote { outstandingHost.set(datagramTarget(data).host) }
+                                if (data.size > parseSocksDatagram(data).payloadOffset) {
+                                    responseWait.write({ outstandingHost.set(datagramTarget(data).host) }) {
+                                        transmit()
+                                    }
+                                } else {
+                                    transmit()
                                 }
                                 return true
                             } catch (e: IOException) {
-                                if (isActive && control.isClosed == false) ioFailure.compareAndSet(null, e to datagramTarget(data).host)
+                                if (preserveOutstanding) {
+                                    onCandidateFailed(spec.groupTag, leaf, plan.owner, host, FallbackPolicy.isStrongFailure(e))
+                                    return true
+                                }
                                 upstream.close()
                                 return false
                             }
@@ -488,25 +537,39 @@ internal class FallbackRelayServer(
                         }
                     }
                     while (isActive && entry.closed.get() == false) {
-                        val data = upstream.receive()
-                        val clientEndpoint = endpoint.get() ?: continue
-                        if (flight.established == false) {
-                            if (responseWait.responded() == false) throw IOException("Initial exchange selected for retry")
-                            flight.establish()
-                            onCandidateConnected(spec.groupTag, leaf, plan.owner)
+                        val data = try {
+                            upstream.receive()
+                        } catch (e: SocketTimeoutException) {
+                            receiveTimeout = e
+                            if (responseWait.awaitingResponse()) throw e
+                            idleReadTimeout = true
+                            break
                         }
+                        val clientEndpoint = endpoint.get() ?: continue
+                        val responseHost = datagramTarget(data).host
+                        if (responseWait.responded(
+                                matchesOutstanding = { outstandingHost.get()?.let { it == responseHost } ?: true },
+                                onResponse = { outstandingHost.set(responseHost) },
+                            ) == false
+                        ) {
+                            throw IOException("Exchange selected for retry")
+                        }
+                        flight.establish()
+                        onCandidateConnected(spec.groupTag, leaf, plan.owner, responseHost)
                         entry.recordDownload(data.size)
                         try { local.send(DatagramPacket(data, data.size, clientEndpoint)) } catch (e: IOException) {
                             entry.close()
                             throw e
                         }
                     }
-                    break
                 } catch (e: IOException) {
-                    if (remote != null && control.isClosed == false) ioFailure.compareAndSet(null, e to exchangeHost())
+                    receiveEnded = flight.established && e is EOFException
+                    if (remote != null && control.isClosed == false && receiveEnded == false) {
+                        ioFailure.compareAndSet(null, e to exchangeHost())
+                    }
                 } finally {
                     deadline.cancel()
-                    responseWait.finish()
+                    responseWait.finish(preservePendingWrite = receiveEnded)
                     currentUdp.getAndSet(null)?.let(::release)
                     release(control)
                     withContext(NonCancellable) {
@@ -516,11 +579,15 @@ internal class FallbackRelayServer(
                     currentControl.compareAndSet(control, null)
                     entry.select("", emptySet())
                 }
-                if (isActive && flight.established == false && retryRequested.get() == false &&
+                if (isActive && retryRequested.get() == false &&
                     closed == false && entry.closed.get() == false
                 ) ioFailure.get()?.let { (error, host) ->
-                    if (host.isNotEmpty()) onCandidateFailed(spec.groupTag, leaf, plan.owner, host, FallbackPolicy.isStrongFailure(error))
+                    val strong = error !== receiveTimeout && FallbackPolicy.isStrongFailure(error)
+                    if (host.isNotEmpty() && (strong || error === receiveTimeout || flight.established == false)) {
+                        onCandidateFailed(spec.groupTag, leaf, plan.owner, host, strong)
+                    }
                 }
+                if (idleReadTimeout) break
             }
         } finally {
             entry.close()
@@ -647,27 +714,81 @@ internal class FallbackRelayServer(
         }
     }
 
-    /** Reports one initial-response stall while policy decides whether to retry the exchange. */
+    /** Observes pending responses, active writes, and one weak idle interval after progress. */
     internal class UploadResponseWait(
         private val scope: CoroutineScope,
         private val timeoutMs: Int,
         private val enabled: Boolean,
         private val isOpen: () -> Boolean,
         private val retry: () -> Unit,
+        private val closeBlockedWrite: () -> Unit = retry,
         private val waitFor: suspend (Long) -> Unit = { delay(it) },
-        private val confirm: suspend ((() -> Unit) -> Boolean) -> Boolean,
+        private val nowElapsedRealtimeMs: () -> Long = SystemClock::elapsedRealtime,
+        private val confirm: suspend (Boolean, (() -> Unit) -> Boolean) -> Boolean,
     ) {
-        // Retain the observation job so later writes share the initial stall report.
+        private enum class Observation { RESPONSE, WRITE, IDLE }
+
+        // Later writes share the current deadline until a response begins the next cycle.
         private var waiting: Job? = null
+        private var observation: Observation? = null
         private var open = true
+        private var pendingWrite: (() -> Unit)? = null
+        private var writeExpired = false
+        private var receiveEnded = false
+        private var idleDeadlineAt: Long? = null
+        private var onIdleOutstanding: () -> Unit = {}
+
+        fun write(onOutstanding: () -> Unit = {}, send: () -> Unit) {
+            synchronized(this) {
+                pendingWrite = onOutstanding
+                wrote(onOutstanding)
+            }
+            var completed = false
+            try {
+                send()
+                completed = true
+            } finally {
+                synchronized(this) {
+                    pendingWrite = null
+                    if (writeExpired == false && (receiveEnded || (completed && observation == Observation.WRITE))) {
+                        waiting?.cancel()
+                        waiting = null
+                        observation = null
+                        if (receiveEnded == false) observeIdle()
+                    }
+                }
+            }
+        }
 
         @Synchronized fun wrote(onOutstanding: () -> Unit = {}) {
-            if (enabled == false || open == false || waiting != null || isOpen() == false) return
+            if (waiting != null && observation != Observation.IDLE) return
+            observe(Observation.RESPONSE, onOutstanding)
+        }
+
+        private fun observeIdle() {
+            idleDeadlineAt?.let { observe(Observation.IDLE, onIdleOutstanding, it) }
+        }
+
+        private fun observe(
+            kind: Observation,
+            onOutstanding: () -> Unit,
+            deadlineAt: Long = nowElapsedRealtimeMs() + timeoutMs.toLong().coerceAtLeast(1L),
+        ) {
+            if (enabled == false || open == false || isOpen() == false) return
+            waiting?.cancel()
             onOutstanding()
+            observation = kind
             waiting = scope.launch(Dispatchers.Default, start = CoroutineStart.LAZY) {
                 val current = coroutineContext[Job]
-                waitFor(timeoutMs.toLong().coerceAtLeast(1L))
-                val shouldRetry = confirm { signal ->
+                waitFor((deadlineAt - nowElapsedRealtimeMs()).coerceAtLeast(0L))
+                synchronized(this@UploadResponseWait) {
+                    if (open == false || waiting !== current || isOpen() == false) return@launch
+                    if (pendingWrite != null) {
+                        writeExpired = true
+                        closeBlockedWrite()
+                    }
+                }
+                val shouldRetry = confirm(kind != Observation.IDLE) { signal ->
                     synchronized(this@UploadResponseWait) {
                         if (open && waiting === current && isOpen()) {
                             signal()
@@ -687,23 +808,44 @@ internal class FallbackRelayServer(
             waiting?.start()
         }
 
-        @Synchronized fun responded(): Boolean {
+        @Synchronized fun responded(
+            matchesOutstanding: () -> Boolean = { true },
+            onResponse: () -> Unit = {},
+        ): Boolean {
             if (open == false) return false
-            close()
+            if (waiting != null && observation != Observation.IDLE &&
+                matchesOutstanding() == false
+            ) return true
+            onResponse()
+            waiting?.cancel()
+            waiting = null
+            writeExpired = false
+            idleDeadlineAt = nowElapsedRealtimeMs() + timeoutMs.toLong().coerceAtLeast(1L)
+            onIdleOutstanding = onResponse
+            // A response gives the write still in progress a fresh response interval.
+            val write = pendingWrite
+            if (write != null) observe(Observation.WRITE, write, requireNotNull(idleDeadlineAt))
+            else observeIdle()
             return true
         }
+
+        @Synchronized fun awaitingResponse(matchesOutstanding: () -> Boolean = { true }): Boolean =
+            open && waiting != null && observation != Observation.IDLE && matchesOutstanding()
 
         @Synchronized fun close() {
             open = false
             waiting?.cancel()
         }
 
-        suspend fun finish() {
+        suspend fun finish(preservePendingWrite: Boolean = false) {
             val observation = synchronized(this) {
-                close()
+                receiveEnded = preservePendingWrite && pendingWrite != null
+                // A deadline-closed write still awaits the health result before initial replay.
+                if (writeExpired == false && receiveEnded == false) close()
                 waiting
             }
             if (observation != null) withContext(NonCancellable) { observation.join() }
+            close()
         }
     }
 
