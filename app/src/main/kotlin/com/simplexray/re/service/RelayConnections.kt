@@ -65,7 +65,8 @@ internal class RelayConnectionEntry(
 
     @Synchronized fun recordUpload(size: Int) {
         uploadBytes.addAndGet(size.toLong())
-        progress++
+        // Queued TCP bytes count as traffic; exchange progress comes from the relay's upstream I/O.
+        if (network == "udp") progress++
     }
 
     @Synchronized fun recordForwarded() {

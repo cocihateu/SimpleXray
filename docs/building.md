@@ -147,10 +147,10 @@ Output: **`app/build/outputs/apk/debug/LucX-arm64-v8a.apk`**. This is a persiste
 
 ### Direct Gradle builds
 
-With the environment above, manual debug/test and release commands are:
+With the environment above, build the debug or release APK directly:
 
 ```powershell
-.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug "-Porg.gradle.java.installations.paths=$toolchainRoot\jdk-25,$toolchainRoot\jdk-21"
+.\gradlew.bat :app:assembleDebug "-Porg.gradle.java.installations.paths=$toolchainRoot\jdk-25,$toolchainRoot\jdk-21"
 .\gradlew.bat :app:assembleRelease "-Porg.gradle.java.installations.paths=$toolchainRoot\jdk-25,$toolchainRoot\jdk-21"
 ```
 
@@ -162,7 +162,13 @@ The release build enables R8 and resource shrinking; the configured persistent s
 
 ## 5. Verification
 
-In addition to Gradle unit tests:
+The JVM unit task is separate from APK assembly. Some LucX test sources still reference older APIs and need updating for this optional task:
+
+```powershell
+.\gradlew.bat :app:testDebugUnitTest "-Porg.gradle.java.installations.paths=$toolchainRoot\jdk-25,$toolchainRoot\jdk-21"
+```
+
+Other checks:
 
 ```powershell
 python -m unittest discover -s tools/tests -v

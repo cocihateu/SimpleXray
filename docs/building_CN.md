@@ -147,10 +147,10 @@ Windows 构建辅助脚本从 `$env:LOCALAPPDATA\SimpleXrayBuild\signing` 读取
 
 ### 直接使用 Gradle
 
-在上述环境中，手动调试/测试与 release 构建命令为：
+在上述环境中，分别使用以下命令直接构建 debug 或 release APK：
 
 ```powershell
-.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug "-Porg.gradle.java.installations.paths=$toolchainRoot\jdk-25,$toolchainRoot\jdk-21"
+.\gradlew.bat :app:assembleDebug "-Porg.gradle.java.installations.paths=$toolchainRoot\jdk-25,$toolchainRoot\jdk-21"
 .\gradlew.bat :app:assembleRelease "-Porg.gradle.java.installations.paths=$toolchainRoot\jdk-25,$toolchainRoot\jdk-21"
 ```
 
@@ -162,7 +162,13 @@ Release 开启 R8 与资源压缩；配置的持久签名启用 V3/V4、关闭 V
 
 ## 5. 验证
 
-除 Gradle 单元测试外，还可运行：
+JVM 单元测试是独立于 APK 打包的可选任务。LucX 的部分测试源码仍引用旧版 API，需更新后才能完成此任务：
+
+```powershell
+.\gradlew.bat :app:testDebugUnitTest "-Porg.gradle.java.installations.paths=$toolchainRoot\jdk-25,$toolchainRoot\jdk-21"
+```
+
+其他检查命令：
 
 ```powershell
 python -m unittest discover -s tools/tests -v

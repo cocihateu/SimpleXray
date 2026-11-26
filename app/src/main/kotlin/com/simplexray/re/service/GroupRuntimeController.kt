@@ -149,21 +149,26 @@ internal class GroupRuntimeController(
 
     fun buildFailoverPlan(groupTag: String, host: String = ""): FailoverPlan = synchronized(lock) {
         synchronizeFallbackSelections()
-        val plan = plan(groupTag).forDestination(host.lowercase(), nowElapsedRealtimeMs())
-        val routes = plan.routes.take(FallbackPolicy.MAX_DIAL_ATTEMPTS)
+        val key = host.lowercase()
+        val now = nowElapsedRealtimeMs()
+        val plan = plan(groupTag).forDestination(key, now)
+        val ordinary = plan.routes.take(FallbackPolicy.MAX_DIAL_ATTEMPTS)
+        val hostRetries = plan.hostRetryRoutes(key, now).toList()
+        val dialRoutes = (ordinary + hostRetries).distinctBy { it.leaf }
         val fallback = plan.route?.steps?.asReversed()?.firstOrNull {
             it.owner.config.strategy == GroupStrategy.FALLBACK
         }?.owner
         FailoverPlan(
             primaryLeaf = plan.route?.leaf,
-            candidates = routes.map { it.leaf },
+            candidates = ordinary.map { it.leaf },
+            hostRetryCandidates = hostRetries.map { it.leaf },
             failoverTimeoutMs = fallback?.let(::fallbackTimeout) ?: 3_000,
             watchResponse = fallback != null,
             generation = plan.generation,
             owner = plan,
             stallTimeoutMs = FallbackPolicy.stallTimeoutMs(plan.route?.let(::routeLatency)),
-            stallTimeoutsMs = routes.associate { it.leaf to FallbackPolicy.stallTimeoutMs(routeLatency(it)) },
-            groupPaths = routes.associate { it.leaf to it.steps.map { step -> step.owner.config.tag }.toSet() },
+            stallTimeoutsMs = dialRoutes.associate { it.leaf to FallbackPolicy.stallTimeoutMs(routeLatency(it)) },
+            groupPaths = dialRoutes.associate { it.leaf to it.steps.map { step -> step.owner.config.tag }.toSet() },
         )
     }
 
@@ -219,7 +224,6 @@ internal class GroupRuntimeController(
         applyIfWaiting: (() -> Unit) -> Boolean,
     ): Boolean {
         val key = host.lowercase()
-        var wasPreferred = false
         var checks = emptyList<Job>()
         var completed: Job? = null
         while (true) {
@@ -232,7 +236,6 @@ internal class GroupRuntimeController(
                     }
                     val finished = completed
                     if (finished == null) {
-                        wasPreferred = plan(groupTag).route?.leaf == leaf
                         checks = reportSuspect(route, key, strong && responsePending, destinationFailure = responsePending)
                     } else if (finished.isCancelled) {
                         checks = (checks + routeMembers(route).mapNotNull { (group, candidate) ->
@@ -246,13 +249,12 @@ internal class GroupRuntimeController(
                     val current = plan(groupTag)
                     val now = nowElapsedRealtimeMs()
                     val preferred = current.route
-                    val replacement = current.forDestination(key, now).route
-                    if (replacement != null && replacement.leaf != leaf) {
-                        val globalChange = preferred != null && preferred.leaf != leaf &&
-                            (wasPreferred || impaired(route, now))
-                        retry = globalChange || (responsePending && affected(route, key, now) &&
-                            destinationRank(replacement, key, now) == 0)
-                    }
+                    // Idle transfers follow their serving route's health; host evidence applies to pending responses.
+                    val servingImpaired = preferred != null && preferred.leaf != leaf && impaired(route, now)
+                    retry = if (responsePending) {
+                        (servingImpaired || affected(route, key, now)) &&
+                            current.hostRetryRoutes(key, now).any { it.leaf != leaf }
+                    } else servingImpaired
                 }
                 if (claimed == false || retry) return claimed && retry
                 checks = checks.filter { it !== completed }
@@ -332,6 +334,9 @@ internal class GroupRuntimeController(
         route.leaf in BUILTIN_GROUP_TARGET_TAGS || impaired(route, now) -> 1
         else -> 0
     }
+
+    private fun Plan.hostRetryRoutes(host: String, now: Long): Sequence<Route> =
+        routes.asSequence().filter { destinationRank(it, host, now) == 0 }
 
     private fun reportSuspect(route: Route, host: String, strong: Boolean, destinationFailure: Boolean): List<Job> {
         val members = routeMembers(route)
@@ -887,9 +892,10 @@ internal class GroupRuntimeController(
 
     private fun Plan.forDestination(host: String, now: Long): Plan {
         if (host.isBlank() || routes.none { affected(it, host, now) }) return this
-        // Rank expanded leaf paths before applying the dial limit. Equal ranks retain the group's order.
-        val ranked = routes.map { it to destinationRank(it, host, now) }.sortedBy { it.second }.map { it.first }
-        return copy(routes = ranked)
+        // Stable-rank real leaves before the dial limit, keeping built-ins in their ordinary slots.
+        val proxies = routes.filter { it.leaf !in BUILTIN_GROUP_TARGET_TAGS }
+            .map { it to destinationRank(it, host, now) }.sortedBy { it.second }.iterator()
+        return copy(routes = routes.map { if (it.leaf in BUILTIN_GROUP_TARGET_TAGS) it else proxies.next().first })
     }
 
     private fun eventRoute(groupTag: String, owner: Any?, leaf: String): Route? {

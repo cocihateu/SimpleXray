@@ -85,9 +85,9 @@ LucX 是 [SimpleXray](https://github.com/lhear/SimpleXray) 的个人分支，围
 
 手动选择组保留已保存的选择。自动测速组在会话就绪后异步执行首次测量，并按配置周期复测。代理页和分组节点页提供主动 HTTP 测速；仪表盘刷新仅查询出口信息。
 
-主备回落可以只为受影响的目标选用备用，其余流量沿用原首选。UDP 回包超时可以改变该目标的选路，对整组仍算弱信号。主备对照测活或 60 秒内 3 个独立目标的强失败可以触发整组降权。详见[主备回落与恢复](./configuration_CN.md#主备回落与恢复)。
+界面显示分组默认首选。即使多个目标共用本地 UDP 端点，单个目标也可切换到备用成员，其余目标继续使用各自的健康上游。本成员测活失败而另一成员成功，或 60 秒内有 3 个独立目标出现强失败，可触发整组降权。详见[主备回落与恢复](./configuration_CN.md#主备回落与恢复)。
 
-清理保留活跃传输和健康的空闲连接。首个响应前，中继可更换上游并重放缓存的首批数据；已建立的连接由应用重新连接。
+清理保留仍有进度的传输和健康的空闲连接。首个回包前，若首批数据总量在 256 KiB 以内，中继可更换上游并完整重放；路径失效后，已建立的连接由应用重连。
 
 HTTP 延迟涵盖一次经节点发起的 HEAD 交换，从连接准备到收到响应头。原生 UI 与 zashboard 共用测量实现。
 
@@ -138,7 +138,7 @@ Telegram 等客户端可能在上游传输失效后继续复用到 `127.0.0.1:<s
 
 LucX 分支固定构建版本 **1.0.0-68**，版本码为 **10001068**；版本定义集中在 `app/build.gradle.kts`。辅助脚本生成持久签名的 debug APK，产物为 **`app/build/outputs/apk/debug/LucX-arm64-v8a.apk`**。工具链和签名凭据按构建文档预先准备，升级继续使用既有签名密钥。
 
-环境准备完毕后，JVM 测试与直接 Gradle 构建可在 Windows 使用 `gradlew.bat :app:testDebugUnitTest :app:assembleDebug`，Unix 使用 `./gradlew :app:testDebugUnitTest :app:assembleDebug`。VPN/回落等设备相关行为仍需真机验证。
+环境准备完毕后，在 Windows 使用 `gradlew.bat :app:assembleDebug`，在 Unix 使用 `./gradlew :app:assembleDebug` 构建调试版 APK。`:app:testDebugUnitTest` 是独立的可选 JVM 任务，其测试源码仍引用旧版 API。VPN/回落等设备相关行为仍需真机验证。
 
 ## 文档
 

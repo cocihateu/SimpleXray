@@ -263,7 +263,8 @@ fun GroupSettingsScreen(
             Card {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (strategy == GroupStrategy.FALLBACK) {
-                        Text("响应等待触发主备测活，确认降权后关闭停滞连接。健康慢请求继续等待响应，切换备用后定时检查主节点")
+                        Text("某个目标访问受阻时，即使测活地址可达，也会优先为该目标尝试其他可用代理节点。其他目标沿用组内默认顺序。")
+                        Text("当前节点测活失败而其他节点成功，或 60 秒内有 3 个目标出现 TCP 响应超时、连接重置等故障时，会降低当前节点的优先级。切换备用后定时检查主节点，健康的空闲连接继续使用原节点。")
                         GroupSecondsField("连接建立超时 · 秒", timeout) { timeout = it }
                         GroupSecondsField("主节点恢复检查间隔 · 秒", recovery) { recovery = it }
                     } else if (strategy == GroupStrategy.URL_TEST) {

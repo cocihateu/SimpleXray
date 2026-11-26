@@ -85,9 +85,9 @@ Settings → Rules → Rule resources manages the bundled `geoip.dat`/`geosite.d
 
 Manual groups retain saved selections. URL-test groups run initial measurements asynchronously after session readiness and repeat them on their configured schedule. Proxies and group-node pages provide explicit HTTP measurements; Dashboard refresh is only an exit-information lookup.
 
-Fallback can use a backup for a single affected host while keeping the primary for other traffic. UDP silence can change that host's route while remaining weak evidence for group-wide decisions. Comparative health checks or three strong failures on distinct hosts within 60 seconds can demote a member. See [fallback and recovery](./configuration.md#fallback-and-recovery).
+The displayed fallback member is the group default. Even when destinations share a local UDP endpoint, one can switch to a backup while the others keep their healthy upstreams. A failed health check while a peer succeeds, or strong failures on three distinct hosts within 60 seconds, can demote a member for the group. See [fallback and recovery](./configuration.md#fallback-and-recovery).
 
-Cleanup preserves active transfers and healthy idle sessions. Before the first reply the relay can move a bounded first flight to another upstream; established streams reconnect through the application.
+Cleanup preserves transfers making progress and healthy idle sessions. Before the first reply the relay can replay a first flight of at most 256 KiB on another upstream; an established stream on a failed path needs the application to reconnect.
 
 HTTP latency covers one proxied HEAD exchange through response headers, including connection setup. The native UI and zashboard share the measurement implementation.
 
@@ -138,7 +138,7 @@ Before assembling, prepare `third_party/xray-prebuilt/arm64-v8a/libxray.so`, bui
 
 The LucX branch builds **1.0.0-68**, version code **10001068**, as defined in `app/build.gradle.kts`. The helper produces a persistently signed debug APK at **`app/build/outputs/apk/debug/LucX-arm64-v8a.apk`**. Prepare the toolchain and private signing credentials as described in the build guide, and reuse the existing signing key for upgrades.
 
-For JVM tests and a direct Gradle build in a configured environment, use `gradlew.bat :app:testDebugUnitTest :app:assembleDebug` on Windows, or `./gradlew :app:testDebugUnitTest :app:assembleDebug` on Unix. Device-dependent VPN/fallback behavior still requires real-device verification.
+To build the debug APK directly, use `gradlew.bat :app:assembleDebug` on Windows or `./gradlew :app:assembleDebug` on Unix in the configured environment. The separate, optional `:app:testDebugUnitTest` task uses test sources that still reference older APIs. Device-dependent VPN/fallback behavior still requires real-device verification.
 
 ## Documentation
 
