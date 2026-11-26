@@ -57,7 +57,11 @@ internal data class FailoverPlan(
     val stallTimeoutsMs: Map<String, Int> = emptyMap(),
     val owner: Any? = null,
     val hostRetryCandidates: List<String>? = null,
-)
+) {
+    internal interface ReplyEvidence {
+        fun creditReply(leaf: String)
+    }
+}
 
 /** Routes TCP/UDP exchanges through ordered group candidates and observes payload responses. */
 internal class FallbackRelayServer(
@@ -255,6 +259,7 @@ internal class FallbackRelayServer(
                     entry = entry,
                     timeoutMs = plan.stallTimeoutsMs[leaf] ?: plan.stallTimeoutMs,
                     enabled = observe,
+                    creditReply = { (plan.owner as? FailoverPlan.ReplyEvidence)?.creditReply(leaf) },
                     isOpen = { isActive && closed == false && entry.closed.get() == false },
                     retry = { forHost ->
                         retryForHost.set(forHost)
@@ -265,8 +270,8 @@ internal class FallbackRelayServer(
                         socket.close()
                     },
                     nowElapsedRealtimeMs = nowElapsedRealtimeMs,
-                ) { host, pending, applyIfWaiting ->
-                    onStalledUpload(spec.groupTag, leaf, plan.owner, host, pending, pending, applyIfWaiting)
+                ) { host, strong, pending, applyIfWaiting ->
+                    onStalledUpload(spec.groupTag, leaf, plan.owner, host, strong, pending, applyIfWaiting)
                 }
                 try {
                     connectNode(socket, leaf, 1, target, timeout)
@@ -374,11 +379,10 @@ internal class FallbackRelayServer(
         }
     }
 
-    private class UdpLane(client: Socket, groupTag: String, now: Long, onClose: () -> Unit) {
+    private class UdpLane(client: Socket, groupTag: String, onClose: () -> Unit) {
         val incoming = Channel<ByteArray>(8)
         val currentControl = AtomicReference<Socket?>(null)
         val currentUdp = AtomicReference<RelayDatagramTransport?>(null)
-        @Volatile var lastActivity = now
         val entry = RelayConnectionEntry("udp", client.inetAddress.hostAddress.orEmpty(), client.port, groupTag) {
             incoming.cancel()
             runCatching { currentUdp.get()?.close() }
@@ -390,10 +394,10 @@ internal class FallbackRelayServer(
     private suspend fun handleUdp(spec: FallbackRelaySpec, client: Socket, requested: SocksAddress, ruleId: String) = coroutineScope {
         val local = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
         track(local)
-        val lanes = mutableMapOf<Destination?, UdpLane>()
+        val lanes = ConcurrentHashMap<Destination, UdpLane>()
+        val associationKey = requested.destination()
         var isolated: Boolean? = null
         var endpoint = if (requested.port == 0) null else InetSocketAddress(client.inetAddress, requested.port)
-        var sweepAt = nowElapsedRealtimeMs() + UDP_LANE_IDLE_MS
         client.soTimeout = 0
         try {
             reply(client.getOutputStream(), 0, local.localPort)
@@ -409,16 +413,8 @@ internal class FallbackRelayServer(
             val buffer = ByteArray(65_535)
             val packet = DatagramPacket(buffer, buffer.size)
             while (isActive && !closed) {
-                val now = nowElapsedRealtimeMs()
-                if (isolated == true && now >= sweepAt) {
-                    lanes.values.removeAll { lane ->
-                        if (now - lane.lastActivity >= UDP_LANE_IDLE_MS) lane.entry.close()
-                        lane.entry.closed.get()
-                    }
-                    sweepAt = now + UDP_LANE_IDLE_MS
-                }
                 packet.length = buffer.size
-                try { local.receive(packet) } catch (_: SocketTimeoutException) { continue }
+                local.receive(packet)
                 if (!packet.address.isLoopbackAddress || packet.address != client.inetAddress) continue
                 val source = InetSocketAddress(packet.address, packet.port)
                 if (endpoint != null && endpoint != source) continue
@@ -427,13 +423,10 @@ internal class FallbackRelayServer(
                 endpoint = source
                 val address = datagramTarget(data)
                 val target = address.destination()
-                val separate = isolated ?: resolvePlan(spec.groupTag, target.host).watchResponse.also {
-                    isolated = it
-                    if (it) local.soTimeout = UDP_LANE_IDLE_MS
-                }
-                val key = if (separate) target else null
+                val separate = isolated ?: resolvePlan(spec.groupTag, target.host).watchResponse.also { isolated = it }
+                val key = if (separate) target else associationKey
                 val active = lanes[key]?.takeUnless { it.entry.closed.get() }
-                val lane = active ?: UdpLane(client, spec.groupTag, nowElapsedRealtimeMs()) {
+                val lane = active ?: UdpLane(client, spec.groupTag) {
                     if (!separate) local.close()
                 }.also { created ->
                     address.describe(created.entry)
@@ -447,9 +440,9 @@ internal class FallbackRelayServer(
                     }.invokeOnCompletion {
                         created.entry.close()
                         unregister(created.entry)
+                        lanes.remove(key, created)
                     }
                 }
-                lane.lastActivity = nowElapsedRealtimeMs()
                 lane.entry.recordUpload(data.size)
                 // Isolate backpressure between destinations; a shared upstream retains ordinary queue ordering.
                 if (separate) lane.incoming.trySend(data) else lane.incoming.send(data)
@@ -490,6 +483,7 @@ internal class FallbackRelayServer(
                     entry = entry,
                     timeoutMs = plan.stallTimeoutsMs[leaf] ?: plan.stallTimeoutMs,
                     enabled = observe,
+                    creditReply = { (plan.owner as? FailoverPlan.ReplyEvidence)?.creditReply(leaf) },
                     isOpen = { isActive && closed == false && entry.closed.get() == false },
                     retry = { forHost ->
                         retryForHost.set(forHost)
@@ -501,8 +495,8 @@ internal class FallbackRelayServer(
                         remote?.close()
                     },
                     nowElapsedRealtimeMs = nowElapsedRealtimeMs,
-                ) { host, pending, applyIfWaiting ->
-                    onStalledUpload(entry.groupTag, leaf, plan.owner, host, false, pending, applyIfWaiting)
+                ) { host, strong, pending, applyIfWaiting ->
+                    onStalledUpload(entry.groupTag, leaf, plan.owner, host, strong, pending, applyIfWaiting)
                 }
                 try {
                     val uotVersion = nodeUotVersions[leaf] ?: 0
@@ -579,7 +573,6 @@ internal class FallbackRelayServer(
                             // The observer owns response and idle decisions; a receive timeout leaves both armed.
                             continue
                         }
-                        lane.lastActivity = nowElapsedRealtimeMs()
                         responseWait.responded(datagramTarget(data).destination(), data.size, flight)?.let { host ->
                             onCandidateConnected(entry.groupTag, leaf, plan.owner, host)
                         }
@@ -764,13 +757,16 @@ internal class FallbackRelayServer(
         private val entry: RelayConnectionEntry,
         timeoutMs: Int,
         private val enabled: Boolean,
+        private val creditReply: () -> Unit,
         private val isOpen: () -> Boolean,
         private val retry: (Boolean) -> Unit,
         private val closeBlockedWrite: (String?) -> Unit,
         private val nowElapsedRealtimeMs: () -> Long,
-        private val confirm: suspend (String, Boolean, (() -> Unit) -> Boolean) -> Boolean,
+        private val confirm: suspend (String, Boolean, Boolean, (() -> Unit) -> Boolean) -> Boolean,
     ) : RelayConnectionEntry.Attempt {
-        private class Observation(val target: Destination, var due: Long, val latestDue: Long = due) {
+        private class Observation(
+            val target: Destination, var due: Long, val latestDue: Long = due, val possibleReply: Boolean = false,
+        ) {
             var check: Job? = null
             var expired = false
             var sent = false
@@ -782,8 +778,8 @@ internal class FallbackRelayServer(
                 due = deadline
             }
 
-            fun extendResponse(now: Long, window: Long) {
-                if (!expired && now < due) due = minOf(now + window, latestDue)
+            fun advanceResponse(deadline: Long) {
+                if (!expired) due = minOf(deadline, latestDue)
             }
         }
 
@@ -817,16 +813,17 @@ internal class FallbackRelayServer(
                     else if (domainByPort[target.port] != target) domainByPort[target.port] = null
                 }
                 val now = nowElapsedRealtimeMs()
-                // One prompt TCP write may answer traffic initiated by the idle peer.
-                val solicitsReply = expectsReply && (datagrams || now >= idleReplyUntil)
+                // A prompt answer to an idle peer still opens a destination observation.
+                val answersPush = !datagrams && now < idleReplyUntil
                 idleReplyUntil = 0L
                 writing = target
                 writingPayload = expectsReply
                 writeDue = now + window
                 idle?.check?.cancel()
                 idle = null
-                val exchange = if (enabled && solicitsReply) {
-                    pending.getOrPut(target) { Observation(target, writeDue, writeDue + window) }
+                val exchange = if (enabled && expectsReply) {
+                    if (pending[target]?.possibleReply == true && !answersPush) pending.remove(target)?.check?.cancel()
+                    pending.getOrPut(target) { Observation(target, writeDue, writeDue + window, possibleReply = answersPush) }
                 } else null
                 arm(writeDue)
                 exchange
@@ -841,15 +838,14 @@ internal class FallbackRelayServer(
                     writeDue = Long.MAX_VALUE
                     if (sent) {
                         lastProgress = nowElapsedRealtimeMs()
-                        // Repeated TCP writes on the same exchange share its progress sample and deadline cap.
-                        if (datagrams || exchange?.sent != true) entry.recordForwarded()
-                        if ((!datagrams || expectsReply) && exchange?.sent != true) markMeaningfulProgress()
+                        entry.recordForwarded()
+                        if (!datagrams || (expectsReply && exchange?.sent != true)) markMeaningfulProgress()
                     }
                     if (open && exchange != null && pending[target] === exchange) {
                         if (sent) {
                             exchange.sent = true
                             if (!datagrams) {
-                                exchange.extendResponse(lastProgress, window)
+                                exchange.advanceResponse(lastProgress + window)
                                 arm(exchange.due)
                             }
                         } else if (!exchange.sent) {
@@ -863,33 +859,39 @@ internal class FallbackRelayServer(
             }
         }
 
-        fun responded(reply: Destination, size: Int, flight: FirstFlight): String? = synchronized(entry) {
-            if (!open) throw IOException("Exchange selected for retry")
-            val target = when {
-                !datagrams || !enabled || reply in pending || reply in numericTargets -> reply
-                reply.numeric -> domainByPort[reply.port]
-                domainByPort[reply.port] == reply -> reply
-                else -> null
+        fun responded(reply: Destination, size: Int, flight: FirstFlight): String? {
+            synchronized(entry) {
+                if (!open) throw IOException("Exchange selected for retry")
+                val target = when {
+                    !datagrams || !enabled || reply in pending || reply in numericTargets -> reply
+                    reply.numeric -> domainByPort[reply.port]
+                    domainByPort[reply.port] == reply -> reply
+                    else -> null
+                }
+                val answered = target?.let(pending::remove)
+                answered?.check?.cancel()
+                val first = !flight.established && flight.establish()
+                lastProgress = nowElapsedRealtimeMs()
+                if (!datagrams && !first && answered == null && idle?.let { lastProgress >= it.due } == true) {
+                    idleReplyUntil = lastProgress + window
+                } else if (answered != null) {
+                    idleReplyUntil = 0L
+                }
+                markMeaningfulProgress()
+                entry.recordDownload(size)
+                val previous = lastReply
+                val source = target ?: reply
+                lastReply = source
+                if (pending.isEmpty()) observeIdle(source)
+                if (target == null) return null
+                if (answered != null || first || previous != target || lastProgress - lastSuccessAt >= window) {
+                    lastSuccessAt = lastProgress
+                    return target.host
+                }
             }
-            val answered = target?.let(pending::remove)
-            answered?.check?.cancel()
-            val first = !flight.established && flight.establish()
-            lastProgress = nowElapsedRealtimeMs()
-            if (!datagrams && !first && answered == null && idle?.let { lastProgress >= it.due } == true) {
-                idleReplyUntil = lastProgress + window
-            } else if (answered != null) {
-                idleReplyUntil = 0L
-            }
-            markMeaningfulProgress()
-            entry.recordDownload(size)
-            val previous = lastReply
-            val source = target ?: reply
-            lastReply = source
-            if (pending.isEmpty()) observeIdle(source)
-            if (target != null && (answered != null || first || previous != target || lastProgress - lastSuccessAt >= window)) {
-                lastSuccessAt = lastProgress
-                target.host
-            } else null
+            // Credit intervening bytes outside the entry lock; the full host callback stays periodic.
+            creditReply()
+            return null
         }
 
         private fun observeIdle(target: Destination) {
@@ -936,6 +938,9 @@ internal class FallbackRelayServer(
             }
             var next = writeDue
             fun visit(observation: Observation, responsePending: Boolean) {
+                if (!datagrams && responsePending && observation.due <= now && writing == observation.target) {
+                    observation.advanceResponse(writeDue)
+                }
                 if (observation.due <= now) {
                     observation.expired = true
                     if (observation.check == null) startCheck(observation, responsePending)
@@ -952,20 +957,36 @@ internal class FallbackRelayServer(
         }
 
         private fun startCheck(observation: Observation, responsePending: Boolean) {
+            val strong = !datagrams && responsePending && !observation.possibleReply && quiet()
             observation.check = scope.launch(Dispatchers.Default) {
                 val self = coroutineContext[Job]
                 fun current() = open && drain == null && isOpen() && observation.check === self &&
                     (if (responsePending) pending[observation.target] === observation else idle === observation)
                 try {
-                    val replace = confirm(observation.target.host, responsePending) { signal ->
-                        synchronized(entry) { current().also { if (it) signal() } }
+                    var resumed = false
+                    suspend fun report(asStrong: Boolean) = confirm(observation.target.host, asStrong, responsePending) { signal ->
+                        synchronized(entry) {
+                            if (!current()) false else if (asStrong && !quiet()) {
+                                resumed = true
+                                false
+                            } else {
+                                signal()
+                                true
+                            }
+                        }
                     }
-                    if (replace) {
+                    val replace = report(strong)
+                    if (resumed) {
+                        report(false)
+                        return@launch
+                    }
+                    // A weak TCP exchange changes the next dial. Confirmed demotions have their own cleanup path.
+                    if (replace && (strong || datagrams || !responsePending)) {
                         // Idle streams and shared associations get a full progress sample before retirement.
                         val sample = synchronized(entry) { meaningfulProgress }
                         if (datagrams || !responsePending) delay(FallbackPolicy.CLOSE_SAMPLE_DELAY_MS)
                         synchronized(entry) {
-                            if (current() && sample == meaningfulProgress && canRetire(responsePending)) retire(responsePending)
+                            if (current() && sample == meaningfulProgress && quiet()) retire(responsePending)
                         }
                     }
                 } finally {
@@ -975,14 +996,13 @@ internal class FallbackRelayServer(
         }
 
         // Both demotion samples and retirement run under the entry lock used for byte progress.
-        private fun canRetire(responsePending: Boolean) = (!datagrams && responsePending) ||
-            (writing == null && nowElapsedRealtimeMs() - meaningfulProgressAt >= window)
+        private fun quiet() = writing == null && nowElapsedRealtimeMs() - meaningfulProgressAt >= window
 
-        private fun isIdle(): Boolean = open && drain == null && isOpen() && canRetire(false) &&
+        private fun isIdle(): Boolean = open && drain == null && isOpen() && quiet() &&
             idle?.let { nowElapsedRealtimeMs() >= it.due } == true
 
         override fun isStalled(): Boolean = isIdle() || (open && drain == null && isOpen() &&
-            pending.values.any { it.expired } && canRetire(true))
+            pending.values.any { it.expired } && quiet())
 
         override fun retire() = retire(false)
 
@@ -1030,6 +1050,5 @@ internal class FallbackRelayServer(
 
     private companion object {
         const val HANDSHAKE_TIMEOUT_MS = 5_000
-        const val UDP_LANE_IDLE_MS = 60_000
     }
 }
